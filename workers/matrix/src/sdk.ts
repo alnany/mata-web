@@ -144,6 +144,14 @@ export class MatrixCore {
     return this.requireSession().leaveRoom(roomId);
   }
 
+  async loadRoomMembers(roomId: RoomId) {
+    return this.requireSession().loadRoomMembers(roomId);
+  }
+
+  async kickFromRoom(roomId: RoomId, userId: UserId, reason: string | null) {
+    return this.requireSession().kickFromRoom(roomId, userId, reason);
+  }
+
   // --- Phase 5.2 encryption setup -------------------------------------------
 
   async getEncryptionStatus() {

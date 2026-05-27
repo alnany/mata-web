@@ -157,6 +157,14 @@ const handlers: Handlers = {
     await core.leaveRoom(req.roomId);
     return { kind: 'leaveRoom' };
   },
+  loadRoomMembers: async (req, core) => {
+    const members = await core.loadRoomMembers(req.roomId);
+    return { kind: 'loadRoomMembers', members };
+  },
+  kickFromRoom: async (req, core) => {
+    await core.kickFromRoom(req.roomId, req.userId, req.reason);
+    return { kind: 'kickFromRoom' };
+  },
   uploadMedia: async (req, core) => {
     const mxc = await core.uploadMedia(req.data, req.mime, req.filename);
     return { kind: 'uploadMedia', mxc };

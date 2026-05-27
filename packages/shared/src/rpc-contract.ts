@@ -27,6 +27,7 @@ import type {
   MxcUri,
   RoomDelta,
   RoomId,
+  RoomMember,
   RoomSummary,
   SasEmoji,
   TimelineEvent,
@@ -142,7 +143,20 @@ export type MainToWorkerRequest =
     }
   | { kind: 'inviteToRoom'; roomId: RoomId; userId: UserId }
   | { kind: 'joinRoom'; roomId: RoomId }
-  | { kind: 'leaveRoom'; roomId: RoomId };
+  | { kind: 'leaveRoom'; roomId: RoomId }
+  | {
+      /**
+       * Snapshot of the room's member list. Lazy-loads members from the
+       * server if the SDK hasn't yet (Element + matrix-js-sdk follow the
+       * "lazy load members" pattern for big rooms). Returns ALL
+       * memberships including 'invite' and 'leave' so the UI can show
+       * pending invitees and recently-left members; the panel filters
+       * by default.
+       */
+      kind: 'loadRoomMembers';
+      roomId: RoomId;
+    }
+  | { kind: 'kickFromRoom'; roomId: RoomId; userId: UserId; reason: string | null };
 
 export type MainToWorkerResponse =
   | { kind: 'ping'; pong: true }
@@ -177,7 +191,9 @@ export type MainToWorkerResponse =
   | { kind: 'createRoom'; roomId: RoomId }
   | { kind: 'inviteToRoom' }
   | { kind: 'joinRoom'; roomId: RoomId }
-  | { kind: 'leaveRoom' };
+  | { kind: 'leaveRoom' }
+  | { kind: 'loadRoomMembers'; members: RoomMember[] }
+  | { kind: 'kickFromRoom' };
 
 // Compile-time guarantee: request kind ↔ response kind 1:1.
 export type ResponseFor<K extends MainToWorkerRequest['kind']> = Extract<

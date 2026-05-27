@@ -130,6 +130,25 @@ export interface RoomRedactionEvent extends BaseEvent {
   reason: string | null;
 }
 
+/**
+ * Live member row for the room "people" panel. Combines membership +
+ * profile + power level + (for encrypted rooms) cross-signing trust
+ * status. `trust` is null in plain rooms — we don't pay the cost of
+ * walking the device list unless the room is encrypted.
+ *
+ * `powerLevel` is the canonical Matrix integer (default 0; mods 50;
+ * admins 100). UI uses thresholds for badging, but we keep the raw
+ * value so power-level edits round-trip cleanly.
+ */
+export interface RoomMember {
+  userId: UserId;
+  displayname: string | null;
+  avatarUrl: MxcUri | null;
+  membership: 'join' | 'invite' | 'leave' | 'ban' | 'knock';
+  powerLevel: number;
+  trust: 'verified' | 'unverified' | 'unknown' | null;
+}
+
 export interface ReactionAggregate {
   key: string;
   count: number;
