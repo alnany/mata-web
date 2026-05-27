@@ -27,6 +27,8 @@ export function LoginPage() {
         password: password(),
         deviceDisplayName: deriveDeviceName(),
       });
+      document.title = `LOGIN_OK: ${result.userId} dev=${result.deviceId}`;
+      console.log('[mata-login] success', result);
       setSession({
         phase: 'authenticated',
         userId: result.userId,
@@ -34,7 +36,13 @@ export function LoginPage() {
       });
       navigate('/', { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const raw = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error && err.stack ? err.stack.split('\n').slice(0, 3).join(' | ') : '';
+      const detail = raw || (err && typeof err === 'object' ? JSON.stringify(err) : '<empty error>');
+      // Surface the failure aggressively — visible AND machine-readable from title.
+      document.title = `LOGIN_ERR: ${detail}`;
+      console.error('[mata-login] failed', { err, raw, stack });
+      setError(`${detail}${stack ? ` // ${stack}` : ''}`);
     } finally {
       setSubmitting(false);
     }
