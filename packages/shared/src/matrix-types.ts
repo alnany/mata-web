@@ -108,7 +108,44 @@ export interface Device {
   displayName: string | null;
   lastSeenTs: number | null;
   lastSeenIp: string | null;
+  /** Whether this device is the one the user is logged in on right now. */
+  isCurrent: boolean;
+  /**
+   * Cross-signing trust state for the device.
+   *  - `unverified` — visible on /devices but not signed by this user's
+   *    self-signing key (default for fresh logins until verified).
+   *  - `verified`   — signed by this user's self-signing key.
+   *  - `blacklisted` — marked untrusted; messages will not be encrypted
+   *    for it (only reachable from explicit user action).
+   */
   verified: 'unverified' | 'verified' | 'blacklisted';
+}
+
+/**
+ * Snapshot of the user's encryption setup. Read with the
+ * `getEncryptionStatus` RPC and rendered in Settings → Encryption.
+ *
+ * The flags map to the three independent pieces of Matrix E2EE state:
+ *  - cross-signing — master/self-signing/user-signing keys exist locally
+ *    and are uploaded to the server (`/keys/device_signing/upload` done).
+ *  - secret storage — an SSSS default key exists on the server
+ *    (account-data `m.secret_storage.default_key`) and the private parts
+ *    of cross-signing + the backup key are stored under it.
+ *  - key backup — a server-side backup version is active and the local
+ *    device knows the backup decryption key (so megolm room keys are
+ *    being uploaded as they are created).
+ *
+ * `recoveryReady` is the user-facing "everything is wired up" flag — true
+ * only when all three are ready. UI uses this for the green check in the
+ * Encryption tab.
+ */
+export interface EncryptionStatus {
+  crossSigningReady: boolean;
+  secretStorageReady: boolean;
+  keyBackupEnabled: boolean;
+  keyBackupVersion: string | null;
+  /** Convenience: all three above are true. */
+  recoveryReady: boolean;
 }
 
 export interface VerificationRequest {

@@ -19,6 +19,7 @@ import type { SerializedError } from './errors.js';
 import type {
   Device,
   DeviceId,
+  EncryptionStatus,
   EventId,
   MessageBody,
   MxcUri,
@@ -68,7 +69,25 @@ export type MainToWorkerRequest =
   | { kind: 'listDevices' }
   | { kind: 'beginDeviceVerification'; userId: UserId; deviceId: DeviceId }
   | { kind: 'completeSasVerification'; transactionId: string; result: 'match' | 'mismatch' }
-  | { kind: 'enableKeyBackup'; passphrase: string }
+  | { kind: 'getEncryptionStatus' }
+  | {
+      /**
+       * Unified "set up secure backup" operation: bootstraps cross-signing
+       * keys (signs + uploads master/self-signing/user-signing), creates
+       * an SSSS default key derived from the supplied passphrase, then
+       * starts a server-side key backup encrypted with that SSSS key.
+       * Returns a base58 recovery key the user MUST store offline as the
+       * escape hatch if they forget the passphrase.
+       *
+       * `password` is the user's login password, required because the
+       * server gates `POST /keys/device_signing/upload` behind UIA. It
+       * is never persisted — only forwarded to the UIA callback for this
+       * single request chain.
+       */
+      kind: 'enableKeyBackup';
+      password: string;
+      passphrase: string;
+    }
   | { kind: 'restoreKeyBackup'; recoveryKey: string };
 
 export type MainToWorkerResponse =
@@ -96,6 +115,7 @@ export type MainToWorkerResponse =
   | { kind: 'listDevices'; devices: Device[] }
   | { kind: 'beginDeviceVerification'; transactionId: string }
   | { kind: 'completeSasVerification' }
+  | { kind: 'getEncryptionStatus'; status: EncryptionStatus }
   | { kind: 'enableKeyBackup'; recoveryKey: string }
   | { kind: 'restoreKeyBackup'; keysImported: number };
 
