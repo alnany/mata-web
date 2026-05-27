@@ -93,6 +93,28 @@ export class SdkSession {
     return this.client !== null;
   }
 
+  /**
+   * Stop and null any existing MatrixClient before a fresh boot. Critical
+   * on re-login: without this, the previous client keeps polling /sync
+   * and racing against the new client over the same IDB / device keys,
+   * which surfaces as the new boot's crypto-init hanging for 30s while
+   * the old client holds locks on the IndexedDB crypto store.
+   */
+  private async teardownExistingClient(): Promise<void> {
+    const c = this.client;
+    if (!c) return;
+    this.client = null;
+    this.currentUserId = null;
+    try {
+      c.stopClient();
+    } catch {
+      /* best-effort */
+    }
+    // Give the SDK a tick to settle pending /sync long-polls and IDB
+    // transactions before the next initRustCrypto opens the store.
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
   async login(input: LoginInput): Promise<LoggedIn> {
     const baseUrl = normalizeServerUrl(input.serverUrl);
     const probe = createClient({ baseUrl });
@@ -124,6 +146,10 @@ export class SdkSession {
       lastSeenAt: Date.now(),
     };
     await saveSession(record);
+    // Tear down any in-flight client from a previous login before we
+    // touch the crypto IDB. Without this, the old client's /sync loop
+    // keeps writing to the store we're about to wipe.
+    await this.teardownExistingClient();
     // Fresh login = new deviceId. Any pre-existing crypto IndexedDB
     // belongs to a previous device whose account-in-store will fail the
     // rust crypto-sdk's "account in store matches account in constructor"
@@ -531,14 +557,27 @@ export class SdkSession {
         // but anything past this is a real hang. We race with a rejected
         // promise so we get a deterministic surface to the UI rather than
         // an infinite "connecting".
+        // Track the last phase the crypto bootstrap reached so the
+        // timeout error names the actual stuck step, not a guess.
+        let lastPhase = 'pre-init';
+        let lastPhaseAt = Date.now();
+        const onCryptoPhase = (name: string, elapsed: number): void => {
+          lastPhase = name;
+          lastPhaseAt = Date.now();
+          this.emit({
+            kind: 'syncStatus',
+            status: 'connecting',
+            reason: `crypto: ${name} (+${elapsed}ms)`,
+          });
+        };
         await Promise.race([
-          initRustCrypto(client, record.pickleKeyRef, CRYPTO_DB_NAME),
+          initRustCrypto(client, record.pickleKeyRef, CRYPTO_DB_NAME, onCryptoPhase),
           new Promise<never>((_, reject) =>
             setTimeout(
               () =>
                 reject(
                   new Error(
-                    `crypto init exceeded 30s — likely hanging on device-key upload to ${record.homeserverBaseUrl}`,
+                    `crypto init exceeded 30s; stuck in phase "${lastPhase}" for ${Date.now() - lastPhaseAt}ms (homeserver: ${record.homeserverBaseUrl})`,
                   ),
                 ),
               30_000,

@@ -24,12 +24,25 @@ import type { MatrixClient } from 'matrix-js-sdk';
 import 'matrix-js-sdk/lib/rust-crypto';
 import '@matrix-org/matrix-sdk-crypto-wasm';
 
+export type CryptoBootstrapProgress = (phase: string, elapsedMs: number) => void;
+
 export async function initRustCrypto(
   client: MatrixClient,
   pickleKeyRef: string,
   _cryptoDbName: string,
+  onPhase: CryptoBootstrapProgress = () => {},
 ): Promise<void> {
+  // Granular phase reporting so the SyncBanner can pinpoint which step
+  // is hanging when the outer 30s race fires. Previously the only signal
+  // we had was "crypto init exceeded 30s" — that gave us a timeout but
+  // not the actual stuck phase.
+  const t0 = Date.now();
+  const phase = (name: string) => onPhase(name, Date.now() - t0);
+
+  phase('deriving pickle key');
   const pickleKey = await derivePickleKey(pickleKeyRef);
+
+  phase('calling client.initRustCrypto (wasm load + IDB open + OlmMachine init)');
   // matrix-js-sdk 34.x's initRustCrypto API is narrow: { useIndexedDB,
   // storageKey, storagePassword }. The IndexedDB database name is fixed
   // by the SDK (RUST_SDK_STORE_PREFIX); we used to pass cryptoDatabasePrefix
@@ -39,6 +52,8 @@ export async function initRustCrypto(
     useIndexedDB: true,
     storageKey: pickleKey,
   });
+  phase('client.initRustCrypto resolved');
+
   // Default device isolation = AllDevicesIsolatedMode (send to all known
   // device keys regardless of trust). That's what Element does and what
   // unblocks sends to encrypted rooms without verification. Cross-signing
