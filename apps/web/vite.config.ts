@@ -35,20 +35,21 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    // Cross-Origin isolation enables SharedArrayBuffer, which matrix-rust-sdk's
-    // WASM build will use for atomic operations across the worker boundary.
-    headers: {
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-      'Cross-Origin-Opener-Policy': 'same-origin',
-    },
+    // COEP=require-corp was added speculatively to enable SharedArrayBuffer
+    // for matrix-rust-sdk WASM threads, but matrix-sdk-crypto-wasm 9.x does
+    // not use SAB. The cost was huge: every cross-origin /_matrix/ fetch
+    // got blocked by the browser unless the homeserver emitted
+    // Cross-Origin-Resource-Policy on every response, which most homeservers
+    // (including conduwuit and matrix.org) do not. Result: silent sync
+    // hang — fetch() never resolves, no /_matrix/ requests appear in DevTools
+    // Network tab because the browser blocks them at the network layer
+    // before they fire on the wire. Removed. If we ever ship multi-threaded
+    // WASM crypto we'll need to either run a CORP-injecting proxy in front
+    // of the homeserver or use a registered service-worker shim.
   },
   preview: {
     port: 4173,
     strictPort: true,
-    headers: {
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-      'Cross-Origin-Opener-Policy': 'same-origin',
-    },
   },
   worker: {
     format: 'es',
