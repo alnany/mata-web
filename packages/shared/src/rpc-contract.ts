@@ -117,7 +117,32 @@ export type MainToWorkerRequest =
       password: string;
       passphrase: string;
     }
-  | { kind: 'restoreKeyBackup'; recoveryKey: string };
+  | { kind: 'restoreKeyBackup'; recoveryKey: string }
+  | {
+      /**
+       * Create a new room. `isDirect=true` is a 1:1 DM in Matrix terms;
+       * the spec doesn't gate any behavior on it, but Element + other
+       * clients use it for the "Direct messages" section.
+       *
+       * `encrypted` defaults to true — Mata is secure-by-default. Pass
+       * false explicitly to create a plain room (e.g. for a public
+       * lobby). Honoured by sending an initial `m.room.encryption` state
+       * event in `initial_state` during createRoom.
+       *
+       * `invite` is a list of user IDs to invite immediately. Public
+       * rooms are not supported in v1 — every room defaults to
+       * `private_chat` preset (invite-only).
+       */
+      kind: 'createRoom';
+      name: string;
+      topic: string | null;
+      isDirect: boolean;
+      encrypted: boolean;
+      invite: UserId[];
+    }
+  | { kind: 'inviteToRoom'; roomId: RoomId; userId: UserId }
+  | { kind: 'joinRoom'; roomId: RoomId }
+  | { kind: 'leaveRoom'; roomId: RoomId };
 
 export type MainToWorkerResponse =
   | { kind: 'ping'; pong: true }
@@ -148,7 +173,11 @@ export type MainToWorkerResponse =
   | { kind: 'completeSasVerification' }
   | { kind: 'getEncryptionStatus'; status: EncryptionStatus }
   | { kind: 'enableKeyBackup'; recoveryKey: string }
-  | { kind: 'restoreKeyBackup'; keysImported: number };
+  | { kind: 'restoreKeyBackup'; keysImported: number }
+  | { kind: 'createRoom'; roomId: RoomId }
+  | { kind: 'inviteToRoom' }
+  | { kind: 'joinRoom'; roomId: RoomId }
+  | { kind: 'leaveRoom' };
 
 // Compile-time guarantee: request kind ↔ response kind 1:1.
 export type ResponseFor<K extends MainToWorkerRequest['kind']> = Extract<

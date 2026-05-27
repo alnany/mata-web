@@ -13,6 +13,7 @@ import type {
   RoomId,
   RoomSummary,
   TimelineEvent,
+  UserId,
 } from '@mata/shared/matrix';
 import { authError } from '@mata/shared/errors';
 import type { WorkerEvent } from '@mata/shared/rpc';
@@ -125,6 +126,22 @@ export class MatrixCore {
 
   async loadMedia(args: Parameters<SdkSession['loadMedia']>[0]) {
     return this.requireSession().loadMedia(args);
+  }
+
+  async createRoom(args: Parameters<SdkSession['createRoom']>[0]) {
+    return this.requireSession().createRoom(args);
+  }
+
+  async inviteToRoom(roomId: RoomId, userId: UserId) {
+    return this.requireSession().inviteToRoom(roomId, userId);
+  }
+
+  async joinRoom(roomId: RoomId) {
+    return this.requireSession().joinRoom(roomId);
+  }
+
+  async leaveRoom(roomId: RoomId) {
+    return this.requireSession().leaveRoom(roomId);
   }
 
   // --- Phase 5.2 encryption setup -------------------------------------------

@@ -135,6 +135,28 @@ const handlers: Handlers = {
     });
     return { kind: 'loadMedia', data, mime };
   },
+  createRoom: async (req, core) => {
+    const roomId = await core.createRoom({
+      name: req.name,
+      topic: req.topic,
+      isDirect: req.isDirect,
+      encrypted: req.encrypted,
+      invite: req.invite,
+    });
+    return { kind: 'createRoom', roomId };
+  },
+  inviteToRoom: async (req, core) => {
+    await core.inviteToRoom(req.roomId, req.userId);
+    return { kind: 'inviteToRoom' };
+  },
+  joinRoom: async (req, core) => {
+    const roomId = await core.joinRoom(req.roomId);
+    return { kind: 'joinRoom', roomId };
+  },
+  leaveRoom: async (req, core) => {
+    await core.leaveRoom(req.roomId);
+    return { kind: 'leaveRoom' };
+  },
   uploadMedia: async (req, core) => {
     const mxc = await core.uploadMedia(req.data, req.mime, req.filename);
     return { kind: 'uploadMedia', mxc };
