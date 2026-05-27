@@ -11,6 +11,8 @@ import { initials, prettyName } from './message-bubble.js';
 export function RoomHeader(props: {
   room: RoomSummary;
   typingUserIds: string[];
+  onShowMembers?: () => void;
+  membersOpen?: boolean;
 }) {
   const [menuOpen, setMenuOpen] = createSignal(false);
   const [infoOpen, setInfoOpen] = createSignal(false);
@@ -42,6 +44,21 @@ export function RoomHeader(props: {
         </div>
         <div class="truncate text-[11px] text-neutral-500">{subtitle()}</div>
       </div>
+      <Show when={props.onShowMembers}>
+        <button
+          type="button"
+          onClick={props.onShowMembers}
+          class="rounded p-1.5 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+          classList={{
+            'bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100':
+              props.membersOpen,
+          }}
+          aria-label="Show members"
+          title="People in this room"
+        >
+          👥
+        </button>
+      </Show>
       <button
         type="button"
         onClick={() => setMenuOpen((v) => !v)}

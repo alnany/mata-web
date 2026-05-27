@@ -24,6 +24,7 @@ import { dayLabel, isSameDay } from '../lib/date-buckets.js';
 import { MessageBubble, type MessageActions } from '../components/message-bubble.js';
 import { Composer } from '../components/composer.js';
 import { RoomHeader } from '../components/room-header.js';
+import { MembersPanel } from '../components/members-panel.js';
 
 /**
  * Per-room state held by the parent so re-opening a previously-loaded
@@ -85,6 +86,7 @@ export function RoomView(props: {
   const [replyingTo, setReplyingTo] = createSignal<RoomMessageEvent | null>(null);
   const [editing, setEditing] = createSignal<RoomMessageEvent | null>(null);
   const [focusToken, setFocusToken] = createSignal(0);
+  const [membersOpen, setMembersOpen] = createSignal(false);
   const bumpFocus = () => setFocusToken((v) => v + 1);
 
   // ---- Initial history load ----------------------------------------------
@@ -546,8 +548,13 @@ export function RoomView(props: {
   });
 
   return (
-    <section class="grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-white dark:bg-neutral-950">
-      <RoomHeader room={props.room} typingUserIds={typingUsers()} />
+    <section class="relative grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-white dark:bg-neutral-950">
+      <RoomHeader
+        room={props.room}
+        typingUserIds={typingUsers()}
+        membersOpen={membersOpen()}
+        onShowMembers={() => setMembersOpen((v) => !v)}
+      />
 
       {/* Timeline */}
       <div
@@ -604,6 +611,12 @@ export function RoomView(props: {
         onTyping={sendTyping}
         onAttach={handleAttach}
         focusToken={focusToken}
+      />
+      <MembersPanel
+        room={props.room}
+        open={membersOpen()}
+        myUserId={me()}
+        onClose={() => setMembersOpen(false)}
       />
     </section>
   );
