@@ -140,6 +140,7 @@ export function HomePage() {
           <span class="text-sm font-semibold tracking-tight">Mata</span>
           <SyncPill state={syncState()} reason={syncReason()} />
         </header>
+        <SyncBanner state={syncState()} reason={syncReason()} />
 
         <div class="border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
           <div class="relative">
@@ -246,22 +247,39 @@ function SyncPill(props: { state: string; reason?: string }) {
     error: { color: 'bg-red-500', label: 'error' },
   };
   const m = map[props.state] ?? map.idle;
-  const showReason = () =>
-    props.reason &&
-    (props.state === 'connecting' ||
-      props.state === 'reconnecting' ||
-      props.state === 'error');
   return (
     <span
-      class="ml-auto inline-flex max-w-[60%] items-center gap-1 text-[10px] text-neutral-500"
+      class="ml-auto inline-flex items-center gap-1 text-[10px] text-neutral-500"
       title={props.reason || m.label}
     >
       <span class={`inline-block h-1.5 w-1.5 rounded-full ${m.color}`} />
-      <span class="truncate">
-        {m.label}
-        {showReason() ? ` · ${props.reason}` : ''}
-      </span>
+      {m.label}
     </span>
+  );
+}
+
+// Dedicated diagnostic banner — full-width under the sidebar header — so
+// stage hints / errors are readable instead of getting truncated in the
+// 130-ish-pixel slot the pill has. Only renders when there's something
+// worth showing.
+function SyncBanner(props: { state: string; reason?: string }) {
+  const visible = () =>
+    !!props.reason &&
+    props.state !== 'syncing' &&
+    props.state !== 'idle';
+  const tone = () =>
+    props.state === 'error'
+      ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300'
+      : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300';
+  return (
+    <Show when={visible()}>
+      <div
+        class={`flex items-start gap-2 border-b px-3 py-1.5 text-[11px] leading-snug ${tone()}`}
+      >
+        <span class="font-medium">{props.state}:</span>
+        <span class="break-words">{props.reason}</span>
+      </div>
+    </Show>
   );
 }
 
