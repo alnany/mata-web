@@ -251,7 +251,13 @@ export function RoomView(props: {
         produce((c: RoomCache) => {
           const known = new Set(c.events.map((ev) => ev.eventId));
           const older = res.events.filter((ev) => !known.has(ev.eventId));
-          c.events = [...older, ...c.events];
+          // unshift is a mutating array op that Solid's store proxy
+          // intercepts cleanly. The previous `c.events = [...older, ...c.events]`
+          // reassignment spread the already-proxied existing events into a
+          // new array, which triggered Solid 1.9's proxy-invariant check
+          // ("Symbol(solid-proxy) is read-only and non-configurable") because
+          // it tried to re-wrap targets that already had a cached proxy.
+          if (older.length > 0) c.events.unshift(...older);
           c.prevToken = res.prevToken;
           c.reachedStart = res.prevToken === null;
           c.paginating = false;
@@ -264,8 +270,12 @@ export function RoomView(props: {
         scrollerRef.scrollTop = prevTop + (newHeight - prevHeight);
       });
     } catch (err) {
+      // Mark this room's history as un-paginatable so onScroll stops
+      // re-triggering the same failure on every wheel event (the old
+      // behavior spammed 5+ identical toasts when the user opened a room).
       props.setCache(props.room.roomId, (c) => {
         c.paginating = false;
+        c.reachedStart = true;
       });
       showToast('error', `Could not load older messages: ${msgOf(err)}`);
     }

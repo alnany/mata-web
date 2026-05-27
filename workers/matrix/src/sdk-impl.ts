@@ -174,7 +174,33 @@ export class SdkSession {
     const c = this.requireClient();
     this.emit({ kind: 'sendStatus', txnId, status: 'sending' });
     try {
-      const result = await c.sendEvent(roomId, EventType.RoomMessage, encodeMessageBody(content), txnId);
+      // matrix-js-sdk can queue an outgoing event indefinitely if the room
+      // is encrypted and the megolm session isn't established (or crypto
+      // never finished bootstrapping). Without a hard ceiling the send
+      // bubble stayed "pending" forever with no signal to the user. 45s
+      // is generous enough for first-message megolm setup but short
+      // enough to surface a real hang.
+      const sendPromise = c.sendEvent(
+        roomId,
+        EventType.RoomMessage,
+        encodeMessageBody(content),
+        txnId,
+      );
+      const result = await Promise.race([
+        sendPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => {
+            const isEncrypted = c.isRoomEncrypted(roomId);
+            reject(
+              new Error(
+                isEncrypted
+                  ? 'send exceeded 45s — encrypted room, likely waiting on megolm session / device keys'
+                  : 'send exceeded 45s — homeserver did not respond',
+              ),
+            );
+          }, 45_000),
+        ),
+      ]);
       this.emit({ kind: 'sendStatus', txnId, status: 'sent', eventId: result.event_id as EventId });
     } catch (err) {
       this.emit({
@@ -363,6 +389,37 @@ export class SdkSession {
       });
       throw err;
     }
+    // Heartbeat poll on the SDK's internal sync state. ClientEvent.Sync
+    // only fires on transitions — if the SDK gets stuck in an
+    // intermediate state (e.g. waiting on /sync, processing a slow
+    // initial batch, gated on crypto), the pill stays at "starting sync"
+    // with no signal about what's actually happening. This loop surfaces
+    // the live SDK state into the banner so we can see exactly where it
+    // is — Prepared / Syncing turn the pill green; anything else is
+    // reported verbatim alongside the last /sync error if any.
+    const heartbeat = setInterval(() => {
+      const state = client.getSyncState();
+      if (state === 'PREPARED' || state === 'SYNCING') return;
+      const data = client.getSyncStateData();
+      const dataErr =
+        data && typeof data === 'object' && 'error' in data && data.error
+          ? ` (last error: ${describe((data as { error: unknown }).error)})`
+          : '';
+      this.emit({
+        kind: 'syncStatus',
+        status: 'connecting',
+        reason: `sdk sync state: ${state ?? 'null'}${dataErr}`,
+      });
+    }, 4_000);
+    // Stop the heartbeat once the SDK reaches a live state — there's no
+    // need to keep flooding the pill with redundant status updates.
+    const onSyncLive = (state: SyncState) => {
+      if (state === SyncState.Prepared || state === SyncState.Syncing) {
+        clearInterval(heartbeat);
+        client.off(ClientEvent.Sync, onSyncLive);
+      }
+    };
+    client.on(ClientEvent.Sync, onSyncLive);
   }
 
   private wireListeners(client: MatrixClient): void {
