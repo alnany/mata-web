@@ -132,7 +132,26 @@ export function installBridge(scope: DedicatedWorkerGlobalScope): BridgeContext 
   // failures (CORS, DNS, 429, 5xx) — so the pill sits at "connecting"
   // forever while every /sync is failing in the background. We don't
   // change behavior, just announce the first non-200 we see per endpoint.
+  //
+  // The interceptor ALSO traces success paths: it emits "first contact"
+  // when the very first /_matrix/ request fires, and "ok" for each
+  // distinct endpoint family on first 2xx. This exists because Firefox
+  // does not surface Web Worker fetches in the main-thread Network panel
+  // by default — without these traces, the user can't tell whether the
+  // SDK is hanging before HTTP (no traces appear) or during/after HTTP
+  // (traces appear but sync never reaches PREPARED).
   const seenFailures = new Set<string>();
+  const seenOk = new Set<string>();
+  let firstMatrixContactAt: number | null = null;
+  const endpointFamily = (url: string): string =>
+    url
+      .replace(/^.*\/_matrix\//, '/_matrix/')
+      .split('?')[0]
+      // Collapse opaque ids (txn ids, event ids, room ids, user ids,
+      // sync tokens) so the banner shows the endpoint shape, not 500
+      // lines of "PUT /rooms/!aaa:x/send/m.room.message/m1234567"
+      .replace(/\/(?:\$|!|@)[^/]+/g, '/{id}')
+      .replace(/\/m\d{10,}/g, '/{txn}');
   const origFetch = scope.fetch.bind(scope);
   scope.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url =
@@ -144,24 +163,47 @@ export function installBridge(scope: DedicatedWorkerGlobalScope): BridgeContext 
     // Only instrument matrix-client endpoints, not every fetch in the
     // worker (wasm streaming, etc.).
     const isMatrix = url.includes('/_matrix/');
+    const method = (init?.method ?? 'GET').toUpperCase();
+    if (isMatrix && firstMatrixContactAt === null) {
+      firstMatrixContactAt = Date.now();
+      emit({
+        kind: 'syncStatus',
+        status: 'connecting',
+        reason: `first /_matrix/ request: ${method} ${endpointFamily(url)}`,
+      });
+    }
+    const startedAt = isMatrix ? Date.now() : 0;
     try {
       const res = await origFetch(input, init);
-      if (isMatrix && !res.ok) {
-        const endpoint = url.replace(/^.*\/_matrix\//, '/_matrix/').split('?')[0];
-        const key = `${res.status}:${endpoint}`;
-        if (!seenFailures.has(key)) {
-          seenFailures.add(key);
-          emit({
-            kind: 'syncStatus',
-            status: 'reconnecting',
-            reason: `http ${res.status} on ${endpoint}`,
-          });
+      if (isMatrix) {
+        const family = endpointFamily(url);
+        if (!res.ok) {
+          const key = `${res.status}:${family}`;
+          if (!seenFailures.has(key)) {
+            seenFailures.add(key);
+            emit({
+              kind: 'syncStatus',
+              status: 'reconnecting',
+              reason: `http ${res.status} on ${family}`,
+            });
+          }
+        } else {
+          const key = `ok:${method}:${family}`;
+          if (!seenOk.has(key)) {
+            seenOk.add(key);
+            const ms = Date.now() - startedAt;
+            emit({
+              kind: 'syncStatus',
+              status: 'connecting',
+              reason: `ok ${method} ${family} (${ms}ms)`,
+            });
+          }
         }
       }
       return res;
     } catch (err) {
       if (isMatrix) {
-        const endpoint = url.replace(/^.*\/_matrix\//, '/_matrix/').split('?')[0];
+        const family = endpointFamily(url);
         const msg = err instanceof Error ? err.message : String(err);
         // Network-level failures (CORS, DNS, offline, TLS) hit this
         // branch. TypeError "Failed to fetch" is browser-speak for CORS
@@ -170,13 +212,13 @@ export function installBridge(scope: DedicatedWorkerGlobalScope): BridgeContext 
         const hint = msg.includes('Failed to fetch')
           ? `${msg} (likely CORS or DNS — the homeserver must allow ${scope.location.origin} as Origin)`
           : msg;
-        const key = `neterr:${endpoint}`;
+        const key = `neterr:${family}`;
         if (!seenFailures.has(key)) {
           seenFailures.add(key);
           emit({
             kind: 'syncStatus',
             status: 'error',
-            reason: `network on ${endpoint}: ${hint}`,
+            reason: `network on ${family}: ${hint}`,
           });
         }
       }
