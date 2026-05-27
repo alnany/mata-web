@@ -99,6 +99,7 @@ export type MainToWorkerRequest =
   | { kind: 'listDevices' }
   | { kind: 'beginDeviceVerification'; userId: UserId; deviceId: DeviceId }
   | { kind: 'completeSasVerification'; transactionId: string; result: 'match' | 'mismatch' }
+  | { kind: 'cancelVerification'; transactionId: string }
   | { kind: 'getEncryptionStatus' }
   | {
       /**
@@ -185,6 +186,7 @@ export type MainToWorkerResponse =
   | { kind: 'listDevices'; devices: Device[] }
   | { kind: 'beginDeviceVerification'; transactionId: string }
   | { kind: 'completeSasVerification' }
+  | { kind: 'cancelVerification' }
   | { kind: 'getEncryptionStatus'; status: EncryptionStatus }
   | { kind: 'enableKeyBackup'; recoveryKey: string }
   | { kind: 'restoreKeyBackup'; keysImported: number }
