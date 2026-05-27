@@ -98,8 +98,14 @@ export class SdkSession {
     const probe = createClient({ baseUrl });
     let response: Awaited<ReturnType<MatrixClient['login']>>;
     try {
+      // Use the Matrix spec ≥ r0.4 user identifier form. Passing { user } directly
+      // sends the legacy top-level `user` field, which conduwuit (and most modern
+      // homeservers) reject with M_INVALID_USERNAME.
       response = await probe.login('m.login.password', {
-        user: input.user,
+        identifier: {
+          type: 'm.id.user',
+          user: input.user,
+        },
         password: input.password,
         initial_device_display_name: input.deviceDisplayName,
       });
