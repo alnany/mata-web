@@ -5,6 +5,8 @@ import { createMatrixBridge } from './bridge/worker-client.js';
 import { BridgeContext } from './bridge/context.js';
 import { session, setSession } from './stores/session.js';
 import { ToastRoot } from './components/toast-root.js';
+import { VerificationModal } from './components/verification-modal.js';
+import { attachVerificationStore } from './stores/verification.js';
 // Side-effect: bootstrap the theme classes on <html> at app load.
 import './stores/theme.js';
 import type { MatrixBridge } from '@mata/shared/rpc';
@@ -19,6 +21,11 @@ export function App(props: ParentProps) {
       const pong = await b.request({ kind: 'ping' });
       if (!pong.pong) throw new Error('Worker did not pong');
       setBridge(b);
+      // Verification store listens globally — incoming SAS requests
+      // from a paired device should pop the modal even if the user
+      // never opened a Verify button in this tab.
+      const detachVerify = attachVerificationStore(b);
+      onCleanup(detachVerify);
 
       // Try to restore an existing session. The result drives routing.
       setSession({ phase: 'restoring' });
@@ -58,6 +65,12 @@ export function App(props: ParentProps) {
         </Match>
       </Switch>
       <ToastRoot />
+      <Show when={bridge() && bootError() === null}>
+        {/* biome-ignore lint/style/noNonNullAssertion: guarded by Show */}
+        <BridgeContext.Provider value={bridge()!}>
+          <VerificationModal />
+        </BridgeContext.Provider>
+      </Show>
     </>
   );
 }

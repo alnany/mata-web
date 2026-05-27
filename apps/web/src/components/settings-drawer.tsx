@@ -6,6 +6,7 @@ import { withToast } from '../stores/toast.js';
 import { useNavigate } from '@solidjs/router';
 import type { Device } from '@mata/shared/matrix';
 import { EncryptionPanel } from './encryption-panel.js';
+import { startVerification } from '../stores/verification.js';
 
 /**
  * Settings drawer — slides in from the left over the app shell.
@@ -243,26 +244,60 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
                     fallback={<div class="text-sm text-neutral-500">No other devices.</div>}
                   >
                     <For each={devices()}>
-                      {(d) => (
-                        <div class="rounded-lg border border-neutral-200 p-3 dark:border-neutral-800">
-                          <div class="flex items-baseline justify-between gap-2">
-                            <span class="truncate text-sm font-medium">
-                              {d.displayName || d.deviceId}
-                            </span>
-                            <Show when={d.verified === 'verified'}>
-                              <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400">
-                                verified
+                      {(d) => {
+                        const m = me();
+                        const isThis = m && d.deviceId === m.deviceId;
+                        const canVerify =
+                          !!m && !isThis && d.verified !== 'verified';
+                        return (
+                          <div class="rounded-lg border border-neutral-200 p-3 dark:border-neutral-800">
+                            <div class="flex items-baseline justify-between gap-2">
+                              <span class="truncate text-sm font-medium">
+                                {d.displayName || d.deviceId}
                               </span>
+                              <div class="flex items-center gap-1.5">
+                                <Show when={isThis}>
+                                  <span class="rounded bg-mata-50 px-1.5 py-0.5 text-[10px] font-medium text-mata-700 dark:bg-mata-900/40 dark:text-mata-300">
+                                    this device
+                                  </span>
+                                </Show>
+                                <Show when={d.verified === 'verified'}>
+                                  <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400">
+                                    verified
+                                  </span>
+                                </Show>
+                                <Show when={d.verified === 'unverified'}>
+                                  <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+                                    not verified
+                                  </span>
+                                </Show>
+                              </div>
+                            </div>
+                            <div class="mt-1 font-mono text-[10px] text-neutral-500">{d.deviceId}</div>
+                            <Show when={d.lastSeenTs}>
+                              <div class="text-[11px] text-neutral-500">
+                                last seen {new Date(d.lastSeenTs as number).toLocaleString()}
+                              </div>
+                            </Show>
+                            <Show when={canVerify}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!m) return;
+                                  void startVerification(
+                                    bridge,
+                                    m.userId,
+                                    d.deviceId,
+                                  );
+                                }}
+                                class="mt-2 rounded-md border border-mata-300 bg-mata-50 px-2.5 py-1 text-[11px] font-medium text-mata-700 hover:bg-mata-100 dark:border-mata-800 dark:bg-mata-950/40 dark:text-mata-300 dark:hover:bg-mata-950/60"
+                              >
+                                Verify with emojis
+                              </button>
                             </Show>
                           </div>
-                          <div class="mt-1 font-mono text-[10px] text-neutral-500">{d.deviceId}</div>
-                          <Show when={d.lastSeenTs}>
-                            <div class="text-[11px] text-neutral-500">
-                              last seen {new Date(d.lastSeenTs as number).toLocaleString()}
-                            </div>
-                          </Show>
-                        </div>
-                      )}
+                        );
+                      }}
                     </For>
                   </Show>
                 </Show>
