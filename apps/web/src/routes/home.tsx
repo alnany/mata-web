@@ -1,4 +1,4 @@
-import { createResource, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import { useNavigate } from '@solidjs/router';
 import { useBridge } from '../bridge/context.js';
@@ -48,9 +48,14 @@ export function HomePage() {
   const refetchRooms = async () => {
     try {
       const res = await bridge.request({ kind: 'loadRoomList' });
-      const sorted = sortRooms(res.rooms);
-      setRooms(sorted);
-      void writeRoomList(sorted);
+      // Stable-reference merge: <For> in Solid keys by reference. If we
+      // hand it a brand-new RoomSummary object on every sync, every row
+      // re-mounts — that's the visible flashing. Preserve identity for
+      // rooms whose fields are unchanged.
+      const prev = rooms() ?? [];
+      const merged = mergeRooms(prev, res.rooms);
+      setRooms(merged);
+      void writeRoomList(merged);
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
       showToast('error', `Failed to load rooms: ${m}`);
@@ -77,11 +82,17 @@ export function HomePage() {
     setActiveId(room.roomId);
   };
 
-  const activeRoom = (): RoomSummary | null => {
+  /**
+   * Stable reference: only changes when the underlying roomId changes.
+   * Without this memo, every sync delta rebuilt the RoomSummary object
+   * and propagated through to RoomView, even when the room's data was
+   * actually unchanged. The visible flash on click came from here.
+   */
+  const activeRoom = createMemo<RoomSummary | null>(() => {
     const id = activeId();
     if (!id) return null;
     return (rooms() ?? []).find((r) => r.roomId === id) ?? null;
-  };
+  });
 
   // -------- Filtered room list ------------------------------------------
   const filteredRooms = (): RoomSummary[] => {
@@ -190,13 +201,24 @@ export function HomePage() {
             </section>
           }
         >
-          {(room) => (
-            <RoomView
-              room={room()}
-              cache={caches[room().roomId] ?? createRoomCache(room().roomId)}
-              setCache={updateCache}
-            />
-          )}
+          {(room) => {
+            // Ensure the cache exists before RoomView reads it. Without
+            // this guard, `caches[id] ?? createRoomCache(id)` produced a
+            // transient `loaded:false` cache on every reactive read,
+            // resetting RoomView's loaded state and dropping the
+            // pending-send bubble during a sync delta — which is why
+            // sends felt broken.
+            if (!caches[room().roomId]) {
+              setCaches(room().roomId, createRoomCache(room().roomId));
+            }
+            return (
+              <RoomView
+                room={room()}
+                cache={caches[room().roomId]}
+                setCache={updateCache}
+              />
+            );
+          }}
         </Show>
       </div>
 
@@ -276,4 +298,34 @@ function RoomRow(props: { room: RoomSummary; active: boolean; onSelect: () => vo
 
 function sortRooms(list: RoomSummary[]): RoomSummary[] {
   return [...list].sort((a, b) => b.lastActivityTs - a.lastActivityTs);
+}
+
+/**
+ * Merge a fresh RoomSummary[] from the worker with the previously rendered
+ * list, preserving object identity for rooms whose fields are unchanged.
+ *
+ * <For> in Solid keys by reference. Returning a new object for every row
+ * on every sync causes every list item to re-mount — the visible flash.
+ */
+function mergeRooms(prev: RoomSummary[], next: RoomSummary[]): RoomSummary[] {
+  const byId = new Map(prev.map((r) => [r.roomId, r]));
+  const out = next.map((nr) => {
+    const old = byId.get(nr.roomId);
+    return old && shallowRoomEqual(old, nr) ? old : nr;
+  });
+  return sortRooms(out);
+}
+
+function shallowRoomEqual(a: RoomSummary, b: RoomSummary): boolean {
+  return (
+    a.roomId === b.roomId &&
+    a.name === b.name &&
+    a.topic === b.topic &&
+    a.type === b.type &&
+    a.isEncrypted === b.isEncrypted &&
+    a.unreadCount === b.unreadCount &&
+    a.highlightCount === b.highlightCount &&
+    a.lastActivityTs === b.lastActivityTs &&
+    a.lastEventPreview === b.lastEventPreview
+  );
 }
