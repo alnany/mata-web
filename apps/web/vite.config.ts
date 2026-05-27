@@ -24,6 +24,13 @@ export default defineConfig({
     // dead-code-eliminated because `crypto-bootstrap.ts` is only reached
     // via a guarded dynamic import in `sdk-impl.ts`.
     ENABLE_E2EE: JSON.stringify(ENABLE_E2EE),
+    // matrix-js-sdk has Node-isms — references to `global` and a few
+    // `process.env.*` lookups. The browser/worker globals are `globalThis`
+    // and an empty env object. Without these aliases, login fails with
+    // "global is not defined" the moment the SDK's lazy modules load.
+    global: 'globalThis',
+    'process.env.NODE_DEBUG': 'undefined',
+    'process.env.DEBUG': 'undefined',
   },
   server: {
     port: 5173,
