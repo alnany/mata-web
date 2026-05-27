@@ -281,20 +281,6 @@ export function RoomView(props: {
     const text = draft().trim();
     if (!text) return;
 
-    // Pre-flight: end-to-end encrypted rooms require the rust-crypto WASM
-    // module, which is staged behind MATA_ENABLE_E2EE for Phase 5. Without
-    // it, matrix-js-sdk throws "This room is configured to use encryption,
-    // but your client does not support encryption." mid-send. Surface that
-    // up-front so the user isn't staring at a vanishing pending bubble.
-    if (props.room.isEncrypted && !editing()) {
-      showToast(
-        'error',
-        'This room is end-to-end encrypted. E2EE lands in Phase 5 — for now, try an unencrypted room.',
-        6000,
-      );
-      return;
-    }
-
     if (editing()) {
       const target = editing();
       if (!target) return;
