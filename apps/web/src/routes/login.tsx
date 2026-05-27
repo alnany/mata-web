@@ -5,6 +5,39 @@ import { setSession } from '../stores/session.js';
 
 const DEFAULT_HOMESERVER = 'https://matrix.org';
 
+// Persistent visible diagnostic banner — overlays bottom of viewport.
+// Survives Solid re-renders and SessionRouter navigations because it's
+// attached directly to document.body, not part of the component tree.
+function paintDiag(msg: string) {
+  try {
+    let el = document.getElementById('mata-login-diag');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'mata-login-diag';
+      el.setAttribute('role', 'status');
+      el.setAttribute('aria-live', 'assertive');
+      el.style.cssText = [
+        'position:fixed',
+        'bottom:0',
+        'left:0',
+        'right:0',
+        'z-index:99999',
+        'background:#111',
+        'color:#fff',
+        'font:12px/1.4 ui-monospace,Menlo,monospace',
+        'padding:8px 12px',
+        'border-top:2px solid #ff0',
+        'white-space:pre-wrap',
+        'word-break:break-all',
+      ].join(';');
+      document.body.appendChild(el);
+    }
+    el.textContent = `[${new Date().toISOString()}] ${msg}`;
+  } catch {
+    /* noop */
+  }
+}
+
 export function LoginPage() {
   const bridge = useBridge();
   const navigate = useNavigate();
@@ -19,6 +52,7 @@ export function LoginPage() {
     if (submitting()) return;
     setError(null);
     setSubmitting(true);
+    paintDiag(`onSubmit fired hs=${homeserver()} user=${username()}`);
     try {
       const result = await bridge.request({
         kind: 'login',
@@ -29,6 +63,7 @@ export function LoginPage() {
       });
       document.title = `LOGIN_OK: ${result.userId} dev=${result.deviceId}`;
       console.log('[mata-login] success', result);
+      paintDiag(`LOGIN_OK: ${result.userId} device=${result.deviceId}`);
       setSession({
         phase: 'authenticated',
         userId: result.userId,
@@ -42,6 +77,7 @@ export function LoginPage() {
       // Surface the failure aggressively — visible AND machine-readable from title.
       document.title = `LOGIN_ERR: ${detail}`;
       console.error('[mata-login] failed', { err, raw, stack });
+      paintDiag(`LOGIN_ERR: ${detail}${stack ? ' // ' + stack : ''}`);
       setError(`${detail}${stack ? ` // ${stack}` : ''}`);
     } finally {
       setSubmitting(false);
