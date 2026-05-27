@@ -124,6 +124,14 @@ export class SdkSession {
       lastSeenAt: Date.now(),
     };
     await saveSession(record);
+    // Fresh login = new deviceId. Any pre-existing crypto IndexedDB
+    // belongs to a previous device whose account-in-store will fail the
+    // rust crypto-sdk's "account in store matches account in constructor"
+    // check ("expected @user:host:OLD_DEVICE, got @user:host:NEW_DEVICE")
+    // and the entire bootClient crashes inside initRustCrypto before any
+    // sync starts. We have no recoverable state from the old device
+    // without its keys, so wipe the crypto IDBs before booting.
+    await wipeStaleCryptoStores(this.emit.bind(this));
     await this.bootClient(record);
     return { userId: record.userId, deviceId: record.deviceId };
   }
@@ -770,6 +778,87 @@ function normalizeServerUrl(input: string): string {
   let s = input.trim();
   if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
   return s.replace(/\/+$/, '');
+}
+
+/**
+ * Wipe IndexedDB databases that hold rust-crypto-sdk state from a
+ * previous device login.
+ *
+ * matrix-js-sdk's rust-crypto pipeline opens an IDB store named with the
+ * `RUST_SDK_STORE_PREFIX` constant ("matrix-js-sdk"); matrix-sdk-crypto-wasm
+ * creates one or more child databases under that prefix. When a user logs
+ * in fresh, the server allocates a NEW deviceId. The OlmMachine then
+ * compares the account it finds in the existing store (which still
+ * belongs to the previous device) against the constructor's
+ * (userId, deviceId) pair, finds a mismatch, and throws:
+ *
+ *    the account in the store doesn't match the account in the
+ *    constructor: expected @user:host:OLD_DEVICE, got @user:host:NEW_DEVICE
+ *
+ * The original device's keys are unrecoverable without that device's
+ * pickle key anyway, so the only safe move is to discard the stale
+ * crypto state and let bootClient initialise a fresh store for the new
+ * device. This is the same recovery path Element-web takes when its
+ * "clear storage" button is pressed.
+ *
+ * `indexedDB.databases()` is available in modern Chromium/Safari/Firefox
+ * (and is exposed inside DedicatedWorkerGlobalScope). When unavailable
+ * (e.g. older browsers, polyfilled jsdom tests) we fall back to deleting
+ * known names from the SDK.
+ */
+async function wipeStaleCryptoStores(
+  emit: (event: WorkerEvent) => void,
+): Promise<void> {
+  const PREFIX = 'matrix-js-sdk';
+  const wiped: string[] = [];
+  try {
+    const idb = (globalThis as { indexedDB?: IDBFactory }).indexedDB;
+    if (!idb) return;
+    let names: string[] = [];
+    if (typeof (idb as { databases?: unknown }).databases === 'function') {
+      const list = (await idb.databases()) as Array<{ name?: string }>;
+      names = list
+        .map((d) => d.name ?? '')
+        .filter((n) => n && n.startsWith(PREFIX));
+    } else {
+      // Fallback: delete the well-known names matrix-js-sdk + rust-crypto
+      // historically create. deleteDatabase is a no-op if the DB does
+      // not exist, so listing extras here is harmless.
+      names = [
+        `${PREFIX}::matrix-sdk-crypto`,
+        `${PREFIX}::matrix-sdk-crypto-meta`,
+        `${PREFIX}:crypto`,
+        `${PREFIX}:riot-web-sync`,
+      ];
+    }
+    for (const name of names) {
+      await new Promise<void>((resolve) => {
+        const req = idb.deleteDatabase(name);
+        req.onsuccess = () => {
+          wiped.push(name);
+          resolve();
+        };
+        req.onerror = () => resolve();
+        req.onblocked = () => resolve();
+      });
+    }
+  } catch (err) {
+    // Best-effort: if wiping fails, bootClient will surface the real
+    // bootstrap error and the user can fall back to a manual reset.
+    emit({
+      kind: 'syncStatus',
+      status: 'error',
+      reason: `crypto store wipe failed: ${(err as Error)?.message ?? String(err)}`,
+    });
+    return;
+  }
+  if (wiped.length > 0) {
+    emit({
+      kind: 'syncStatus',
+      status: 'connecting',
+      reason: `wiped ${wiped.length} stale crypto store(s): ${wiped.join(', ')}`,
+    });
+  }
 }
 
 function mapLoginError(err: unknown): Error {
