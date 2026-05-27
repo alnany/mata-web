@@ -768,16 +768,20 @@ function normalizeServerUrl(input: string): string {
 
 function mapLoginError(err: unknown): Error {
   const msg = describe(err);
-  if (/M_FORBIDDEN|invalid.*username|invalid.*password|incorrect/i.test(msg)) {
-    return authError('Invalid username or password');
+  // DIAG: include raw error in message so we can surface what conduwuit / SDK actually returned.
+  // The regex classifier was over-matching on transport-layer errors that happen to include
+  // strings like "incorrect" or similar.  Once we have the real msg the classifier comes back.
+  const detail = msg.slice(0, 500);
+  if (/M_FORBIDDEN|invalid.*username|invalid.*password/i.test(msg)) {
+    return authError(`Invalid username or password [raw: ${detail}]`);
   }
   if (/M_LIMIT_EXCEEDED|rate.?limit/i.test(msg)) {
-    return authError('Too many attempts — wait a moment and try again');
+    return authError(`Too many attempts — wait a moment and try again [raw: ${detail}]`);
   }
   if (/M_USER_DEACTIVATED/i.test(msg)) {
-    return authError('This account has been deactivated');
+    return authError(`This account has been deactivated [raw: ${detail}]`);
   }
-  return authError(`Sign-in failed: ${msg}`);
+  return authError(`Sign-in failed: ${detail}`);
 }
 
 function classifyRoom(room: Room): 'dm' | 'room' | 'space' {
