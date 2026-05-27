@@ -2,6 +2,7 @@ import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-j
 import { createStore, produce } from 'solid-js/store';
 import { useNavigate } from '@solidjs/router';
 import { useBridge } from '../bridge/context.js';
+import { bridgeDiag } from '../bridge/worker-client.js';
 import { session, setSession } from '../stores/session.js';
 import { showToast } from '../stores/toast.js';
 import type { RoomId, RoomSummary } from '@mata/shared/matrix';
@@ -35,6 +36,16 @@ export function HomePage() {
   type SyncLogEntry = { at: number; state: string; reason: string };
   const [syncLog, setSyncLog] = createSignal<SyncLogEntry[]>([]);
   const SYNC_LOG_MAX = 30;
+  // Diagnostic tick that re-reads bridgeDiag counters every 500ms. The
+  // bridgeDiag object is mutated by the bridge message handler regardless
+  // of whether any handler is attached, so this surfaces the raw
+  // worker→main message flow even if the syncStatus subscription path is
+  // broken. Stays in the DOM as a single line we can read via the
+  // browser tool's read_page_text.
+  const [diagTick, setDiagTick] = createSignal(0);
+  const diagInterval = window.setInterval(() => setDiagTick((n) => n + 1), 500);
+  onCleanup(() => window.clearInterval(diagInterval));
+
   onCleanup(
     bridge.on('syncStatus', (e) => {
       setSyncState(e.status);
@@ -168,6 +179,7 @@ export function HomePage() {
           reason={syncReason()}
           log={syncLog()}
         />
+        <BridgeDiagBanner ticks={diagTick()} />
 
         <div class="border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
           <div class="relative">
@@ -427,5 +439,33 @@ function shallowRoomEqual(a: RoomSummary, b: RoomSummary): boolean {
     a.highlightCount === b.highlightCount &&
     a.lastActivityTs === b.lastActivityTs &&
     a.lastEventPreview === b.lastEventPreview
+  );
+}
+
+/**
+ * Permanently visible diagnostic strip surfacing the raw bridge counters.
+ *
+ * Phase 5 sync-hang investigation: the SyncBanner only updates when a
+ * `syncStatus` handler fires. If no handler fires at all (latch empty +
+ * subscription too late or worker→main channel silent), the banner stays
+ * frozen with no signal as to whether the worker even sent anything. This
+ * strip reads bridgeDiag (mutated by the bridge's message handler
+ * regardless of any subscriber) every 500ms via the `ticks` prop, so the
+ * user can SEE whether envelopes are arriving, which kinds, and whether
+ * syncStatus is in the latched set.
+ *
+ * Once Phase 5 is closed out cleanly this strip can be removed, but it's
+ * cheap and useful while we still don't have a reliable observability
+ * surface for the worker pipeline.
+ */
+function BridgeDiagBanner(props: { ticks: number }) {
+  // The `ticks` prop forces re-render every 500ms even though we read the
+  // raw module state (which is plain JS, not a Solid signal).
+  return (
+    <div class="border-b border-neutral-200 bg-neutral-50 px-3 py-1 text-[10px] font-mono uppercase tracking-tight text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
+      <span data-tick={props.ticks}>
+        bridge · env={bridgeDiag.envelopes} · resp={bridgeDiag.responses} · evt={bridgeDiag.events} · err={bridgeDiag.errors} · latched=[{bridgeDiag.latchKinds.join(',') || '-'}] · last={bridgeDiag.lastEvent?.kind ?? '-'}@{bridgeDiag.lastEvent ? Math.floor((Date.now() - bridgeDiag.lastEvent.at) / 1000) + 's' : '-'} · kinds={Object.entries(bridgeDiag.byKind).map(([k, v]) => `${k}:${v}`).join(' ') || '-'}
+      </span>
+    </div>
   );
 }
