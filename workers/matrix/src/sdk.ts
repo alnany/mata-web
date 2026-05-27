@@ -34,6 +34,20 @@ export class MatrixCore {
     return this.session?.isLoggedIn() ?? false;
   }
 
+  /**
+   * Diagnostic channel from main → user-visible sync log.
+   *
+   * The user views progress through the syncStatus event stream rendered
+   * in their banner/log panel. From the main thread we cannot append to
+   * that stream directly; we fire `diagLog` over the RPC and the worker
+   * re-emits the note as a syncStatus. Used to instrument the send
+   * pipeline (composer → bridge → SDK) without forcing the user to open
+   * DevTools / Console.
+   */
+  diagLog(note: string): void {
+    this.emit({ kind: 'syncStatus', status: 'connecting', reason: note });
+  }
+
   async login(input: LoginInput): Promise<LoggedIn> {
     const impl = await this.ensureImpl();
     if (!this.session) this.session = new impl.SdkSession(this.emit);

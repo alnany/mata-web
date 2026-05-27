@@ -211,8 +211,53 @@ export class SdkSession {
   }
 
   async sendMessage(roomId: RoomId, content: MessageBody, txnId: string): Promise<void> {
+    // INSTRUMENTATION (send-pipeline trace).
+    // Phase markers emitted as syncStatus 'connecting' (visible in the
+    // user's sync log) so we can localize where an "invisible" send
+    // dies — between matrix-js-sdk queue insertion, encrypt setup,
+    // megolm session, and HTTP PUT, any one can swallow the call with
+    // no UI feedback. Marker phases (CORE-level):
+    //   1) entered       — function reached, client OK
+    //   2) checked-room  — knows whether room exists and is encrypted
+    //   3) emit-sending  — local sendStatus 'sending' fired
+    //   4) before-send   — about to call c.sendEvent
+    //   5) sdk-returned  — c.sendEvent's promise resolved (HTTP succeeded)
+    //   6) emit-sent     — local sendStatus 'sent' fired
+    // The 45s race timeout already produces its own marker. If a marker
+    // is the LAST thing seen in the trace, the next phase is where it
+    // hung.
+    const short = txnId.slice(-6);
+    const tag = (phase: string, extra = ''): void => {
+      this.emit({
+        kind: 'syncStatus',
+        status: 'connecting',
+        reason: `send-CORE[${short}] ${phase}${extra ? ': ' + extra : ''}`,
+      });
+    };
+
+    tag('entered');
     const c = this.requireClient();
+
+    // Probe room state before doing anything else. If room is null,
+    // matrix-js-sdk's sendEvent will throw immediately with an opaque
+    // message; surfacing it here makes the trigger obvious.
+    const room = c.getRoom(roomId);
+    const isEncrypted = (() => {
+      try {
+        return c.isRoomEncrypted(roomId);
+      } catch {
+        return false;
+      }
+    })();
+    const memberCount = room ? room.getJoinedMemberCount() : -1;
+    tag(
+      'checked-room',
+      `roomKnown=${room !== null} encrypted=${isEncrypted} joinedMembers=${memberCount}`,
+    );
+
     this.emit({ kind: 'sendStatus', txnId, status: 'sending' });
+    tag('emit-sending');
+
     try {
       // matrix-js-sdk can queue an outgoing event indefinitely if the room
       // is encrypted and the megolm session isn't established (or crypto
@@ -220,6 +265,7 @@ export class SdkSession {
       // bubble stayed "pending" forever with no signal to the user. 45s
       // is generous enough for first-message megolm setup but short
       // enough to surface a real hang.
+      tag('before-send', 'calling c.sendEvent now');
       const sendPromise = c.sendEvent(
         roomId,
         EventType.RoomMessage,
@@ -230,7 +276,7 @@ export class SdkSession {
         sendPromise,
         new Promise<never>((_, reject) =>
           setTimeout(() => {
-            const isEncrypted = c.isRoomEncrypted(roomId);
+            tag('timeout-fired', `45s elapsed — encrypted=${isEncrypted}`);
             reject(
               new Error(
                 isEncrypted
@@ -241,8 +287,11 @@ export class SdkSession {
           }, 45_000),
         ),
       ]);
+      tag('sdk-returned', `event_id=${(result.event_id as string).slice(0, 24)}`);
       this.emit({ kind: 'sendStatus', txnId, status: 'sent', eventId: result.event_id as EventId });
+      tag('emit-sent');
     } catch (err) {
+      tag('caught', describe(err).slice(0, 160));
       this.emit({
         kind: 'sendStatus',
         txnId,

@@ -37,6 +37,7 @@ import type {
 
 export type MainToWorkerRequest =
   | { kind: 'ping' }
+  | { kind: 'diagLog'; note: string }
   | {
       kind: 'login';
       serverUrl: string;
@@ -72,6 +73,7 @@ export type MainToWorkerRequest =
 
 export type MainToWorkerResponse =
   | { kind: 'ping'; pong: true }
+  | { kind: 'diagLog'; ok: true }
   | { kind: 'login'; userId: UserId; deviceId: DeviceId }
   | { kind: 'restoreSession'; restored: boolean; userId: UserId | null; deviceId: DeviceId | null }
   | { kind: 'logout' }

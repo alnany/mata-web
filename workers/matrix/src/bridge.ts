@@ -37,6 +37,11 @@ function notImplemented(kind: string): never {
 const handlers: Handlers = {
   ping: async () => ({ kind: 'ping', pong: true }),
 
+  diagLog: async (req, core) => {
+    core.diagLog(req.note);
+    return { kind: 'diagLog', ok: true };
+  },
+
   login: async (req, core) => {
     const { userId, deviceId } = await core.login({
       serverUrl: req.serverUrl,
@@ -71,8 +76,26 @@ const handlers: Handlers = {
     return { kind: 'loadRoomHistory', events, prevToken };
   },
   sendMessage: async (req, core) => {
-    await core.sendMessage(req.roomId, req.content, req.txnId);
-    return { kind: 'sendMessage', queued: true };
+    // INSTRUMENTATION (send-pipeline trace).
+    // The user reports "no bubble, non-responsive" when sending: no
+    // `/send` PUT, no error toast, no optimistic bubble. We can't see
+    // browser console output, so each phase emits to the visible sync
+    // log. Three phase markers from the bridge layer:
+    //   - "send-RPC: handler entered" — RPC reached the worker
+    //   - "send-RPC: core returned ok" — core.sendMessage resolved
+    //   - "send-RPC: core threw <err>" — core.sendMessage rejected
+    // The deepest markers ("send-CORE: ...") live in sdk-impl.ts and
+    // narrow it down further once we see which CORE phase is last.
+    core.diagLog(`send-RPC: handler entered txn=${req.txnId.slice(-6)} room=${req.roomId.slice(0, 24)}`);
+    try {
+      await core.sendMessage(req.roomId, req.content, req.txnId);
+      core.diagLog(`send-RPC: core returned ok txn=${req.txnId.slice(-6)}`);
+      return { kind: 'sendMessage', queued: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      core.diagLog(`send-RPC: core threw txn=${req.txnId.slice(-6)} err=${msg.slice(0, 160)}`);
+      throw err;
+    }
   },
   editMessage: async (req, core) => {
     await core.editMessage(req.roomId, req.eventId, req.content, req.txnId);

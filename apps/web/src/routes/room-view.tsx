@@ -287,9 +287,39 @@ export function RoomView(props: {
   };
 
   // ---- Composer submission -----------------------------------------------
+  // INSTRUMENTATION (send-pipeline trace, UI half).
+  // Send pipeline lives across three boundaries: composer (this file),
+  // RPC bridge, and worker SDK. When the user reported "no bubble,
+  // non-responsive" with no /send PUT and refused console access, we
+  // routed phase markers from each boundary into the visible sync log
+  // (via worker.diagLog RPC). UI-side markers ('send-UI[txn]'):
+  //   1) submit-entered      — submit() ran at all (keyboard/button worked)
+  //   2) edit-branch         — early-exit because we're editing
+  //   3) empty-or-noop       — early-exit because draft was empty
+  //   4) before-cache-push   — about to mutate pending bubbles
+  //   5) cache-pushed        — optimistic bubble in store
+  //   6) before-rpc          — about to fire bridge.request
+  //   7) rpc-dispatched      — bridge.request returned its promise
+  //   8) rpc-resolved        — promise resolved (worker said OK)
+  //   9) rpc-rejected        — promise rejected (error path)
+  //  10) sync-threw          — synchronous error during setup
+  // If marker 1 never appears, the keyboard/submit handler is the bug.
+  // If 6 appears but no worker 'send-RPC: handler entered' follows, the
+  // bridge is the bug. Etc.
+  const diag = (msg: string): void => {
+    // Fire-and-forget. We don't await; we don't surface failures here
+    // either, because the diagnostic must NOT add new failure modes to
+    // the very flow it's instrumenting.
+    void bridge.request({ kind: 'diagLog', note: msg }).catch(() => {});
+  };
+
   const submit = () => {
     const text = draft().trim();
-    if (!text) return;
+    diag(`send-UI: submit-entered chars=${text.length} editing=${editing() !== null}`);
+    if (!text) {
+      diag('send-UI: empty-or-noop — exit');
+      return;
+    }
 
     if (editing()) {
       const target = editing();
@@ -313,24 +343,50 @@ export function RoomView(props: {
     const replyTarget = replyingTo();
     const body: MessageBody = { msgtype: 'm.text', body: text, formattedBody: null };
     const txnId = mkTxn();
+    const shortTxn = txnId.slice(-6);
 
-    props.setCache(
-      props.room.roomId,
-      produce((c: RoomCache) => {
-        c.pending.push({ txnId, body: text, status: 'sending' });
-      }),
-    );
-    setDraft('');
-    setReplyingTo(null);
-    requestAnimationFrame(() => scrollToBottom('smooth'));
+    // Synchronous setup (cache mutation, draft clear) MUST be guarded.
+    // Earlier "silent send failure" bug (L2 fix log) was exactly this:
+    // setCache threw because the room cache wasn't initialized, and
+    // because nothing wrapped the throw, the composer cleared and no
+    // bubble appeared. We don't want to be blind to that class of bug
+    // again — surface it as a toast AND a diag line.
+    try {
+      diag(`send-UI[${shortTxn}]: before-cache-push room=${props.room.roomId.slice(0, 24)}`);
+      props.setCache(
+        props.room.roomId,
+        produce((c: RoomCache) => {
+          c.pending.push({ txnId, body: text, status: 'sending' });
+        }),
+      );
+      diag(`send-UI[${shortTxn}]: cache-pushed pendingCount=${props.cache.pending.length}`);
+      setDraft('');
+      setReplyingTo(null);
+      requestAnimationFrame(() => scrollToBottom('smooth'));
+    } catch (err) {
+      diag(`send-UI[${shortTxn}]: sync-threw err=${msgOf(err).slice(0, 160)}`);
+      showToast('error', `Send setup failed: ${msgOf(err)}`);
+      return;
+    }
 
     // The worker enriches the wire-format with the m.relates_to → in_reply_to
     // reference when we pass it; for v1, we send the plain body. Reply
     // metadata wiring through the RPC contract is a Phase 4B improvement;
     // the reply context is preserved here as a UI hint until then.
-    void bridge
-      .request({ kind: 'sendMessage', roomId: props.room.roomId, content: body, txnId })
+    diag(`send-UI[${shortTxn}]: before-rpc dispatching bridge.request`);
+    const sendCall = bridge.request({
+      kind: 'sendMessage',
+      roomId: props.room.roomId,
+      content: body,
+      txnId,
+    });
+    diag(`send-UI[${shortTxn}]: rpc-dispatched awaiting worker`);
+    void sendCall
+      .then(() => {
+        diag(`send-UI[${shortTxn}]: rpc-resolved`);
+      })
       .catch((err) => {
+        diag(`send-UI[${shortTxn}]: rpc-rejected err=${msgOf(err).slice(0, 160)}`);
         props.setCache(
           props.room.roomId,
           produce((c: RoomCache) => {
