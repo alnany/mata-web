@@ -123,11 +123,24 @@ const handlers: Handlers = {
   },
   subscribeRoom: async () => ({ kind: 'subscribeRoom' }),
   unsubscribeRoom: async () => ({ kind: 'unsubscribeRoom' }),
-  listDevices: async () => ({ kind: 'listDevices', devices: [] }),
+  listDevices: async (_req, core) => {
+    const devices = await core.listDevices();
+    return { kind: 'listDevices', devices };
+  },
   beginDeviceVerification: async () => notImplemented('beginDeviceVerification'),
   completeSasVerification: async () => notImplemented('completeSasVerification'),
-  enableKeyBackup: async () => notImplemented('enableKeyBackup'),
-  restoreKeyBackup: async () => notImplemented('restoreKeyBackup'),
+  getEncryptionStatus: async (_req, core) => {
+    const status = await core.getEncryptionStatus();
+    return { kind: 'getEncryptionStatus', status };
+  },
+  enableKeyBackup: async (req, core) => {
+    const { recoveryKey } = await core.enableKeyBackup(req.password, req.passphrase);
+    return { kind: 'enableKeyBackup', recoveryKey };
+  },
+  restoreKeyBackup: async (req, core) => {
+    const { keysImported } = await core.restoreKeyBackup(req.recoveryKey);
+    return { kind: 'restoreKeyBackup', keysImported };
+  },
 };
 
 function serializeError(err: unknown): SerializedError {

@@ -119,6 +119,24 @@ export class MatrixCore {
     return this.requireSession().uploadMedia(data, mime, filename);
   }
 
+  // --- Phase 5.2 encryption setup -------------------------------------------
+
+  async getEncryptionStatus() {
+    return this.requireSession().getEncryptionStatus();
+  }
+
+  async listDevices() {
+    return this.requireSession().listDevices();
+  }
+
+  async enableKeyBackup(password: string, passphrase: string) {
+    return this.requireSession().enableKeyBackup(password, passphrase);
+  }
+
+  async restoreKeyBackup(recoveryKey: string) {
+    return this.requireSession().restoreKeyBackup(recoveryKey);
+  }
+
   private requireSession(): SdkSession {
     if (!this.session) throw authError('Not logged in');
     return this.session;
