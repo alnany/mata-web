@@ -40,12 +40,14 @@ export class MatrixCore {
    * The user views progress through the syncStatus event stream rendered
    * in their banner/log panel. From the main thread we cannot append to
    * that stream directly; we fire `diagLog` over the RPC and the worker
-   * re-emits the note as a syncStatus. Used to instrument the send
-   * pipeline (composer → bridge → SDK) without forcing the user to open
-   * DevTools / Console.
+   * re-emits the note as a `diagNote` event — that flavor of event lands
+   * in the same log feed but does NOT touch the sync-state pill. (Older
+   * versions re-emitted as `syncStatus: 'connecting'`, which was correct
+   * for the visible log but flipped the pill back to amber on every
+   * phase marker even after sync reached `syncing`.)
    */
   diagLog(note: string): void {
-    this.emit({ kind: 'syncStatus', status: 'connecting', reason: note });
+    this.emit({ kind: 'diagNote', note });
   }
 
   async login(input: LoginInput): Promise<LoggedIn> {

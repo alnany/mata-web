@@ -69,6 +69,29 @@ export function HomePage() {
     }),
   );
 
+  // `diagNote` is the noise-only diagnostic feed (send-pipeline phase
+  // markers, watchdog beacons, etc.). It lands in the same syncLog
+  // panel the user sees but explicitly does NOT touch the sync-state
+  // pill — otherwise every send / decrypt cycle would drag the pill
+  // back to "connecting" forever even after sync reached `syncing`.
+  // Logged with state='diag' so the row renders distinct from real
+  // state transitions.
+  onCleanup(
+    bridge.on('diagNote', (e) => {
+      const reason = e.note;
+      setSyncLog((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.state === 'diag' && last.reason === reason) {
+          return prev;
+        }
+        const next = [...prev, { at: Date.now(), state: 'diag', reason }];
+        return next.length > SYNC_LOG_MAX
+          ? next.slice(next.length - SYNC_LOG_MAX)
+          : next;
+      });
+    }),
+  );
+
   onMount(async () => {
     if (session().phase === 'anonymous') {
       navigate('/login', { replace: true });

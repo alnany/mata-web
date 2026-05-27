@@ -140,6 +140,17 @@ export type WorkerEvent =
       reason?: string;
     }
   | {
+      /**
+       * Diagnostic note from the worker. Lives in the syncLog feed but
+       * does NOT change the sync-state pill. Used for instrumentation
+       * markers (send phases, decrypt phases, watchdog beacons) so the
+       * pill keeps tracking real SDK SyncState transitions instead of
+       * flipping to `connecting` on every phase emit.
+       */
+      kind: 'diagNote';
+      note: string;
+    }
+  | {
       kind: 'syncUpdate';
       deltas: RoomDelta[];
       /** Opaque pagination token returned by the homeserver. */

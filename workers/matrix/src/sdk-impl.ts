@@ -213,26 +213,25 @@ export class SdkSession {
 
   async sendMessage(roomId: RoomId, content: MessageBody, txnId: string): Promise<void> {
     // INSTRUMENTATION (send-pipeline trace).
-    // Phase markers emitted as syncStatus 'connecting' (visible in the
-    // user's sync log) so we can localize where an "invisible" send
-    // dies — between matrix-js-sdk queue insertion, encrypt setup,
-    // megolm session, and HTTP PUT, any one can swallow the call with
-    // no UI feedback. Marker phases (CORE-level):
+    // Phase markers go through the `diagNote` event channel — they land
+    // in the user's sync log feed but do NOT touch the sync-state pill.
+    // (Older versions used syncStatus:'connecting' for this, which made
+    // the pill flip back to amber on every send/decrypt phase even after
+    // sync reached `syncing`. The "kept saying connecting" symptom.)
+    // Marker phases (CORE-level):
     //   1) entered       — function reached, client OK
     //   2) checked-room  — knows whether room exists and is encrypted
     //   3) emit-sending  — local sendStatus 'sending' fired
     //   4) before-send   — about to call c.sendEvent
     //   5) sdk-returned  — c.sendEvent's promise resolved (HTTP succeeded)
     //   6) emit-sent     — local sendStatus 'sent' fired
-    // The 45s race timeout already produces its own marker. If a marker
-    // is the LAST thing seen in the trace, the next phase is where it
-    // hung.
+    // If a marker is the LAST thing seen in the trace, the next phase
+    // is where it hung.
     const short = txnId.slice(-6);
     const tag = (phase: string, extra = ''): void => {
       this.emit({
-        kind: 'syncStatus',
-        status: 'connecting',
-        reason: `send-CORE[${short}] ${phase}${extra ? ': ' + extra : ''}`,
+        kind: 'diagNote',
+        note: `send-CORE[${short}] ${phase}${extra ? ': ' + extra : ''}`,
       });
     };
 
@@ -788,9 +787,8 @@ export class SdkSession {
                 setTimeout(() => {
                   if (finished) return;
                   this.emit({
-                    kind: 'syncStatus',
-                    status: 'connecting',
-                    reason: `crypto.onSyncCompleted call #${callId} still running at ${label} (first-sync catchup may be heavy; not releasing the loop)`,
+                    kind: 'diagNote',
+                    note: `crypto.onSyncCompleted call #${callId} still running at ${label} (first-sync catchup may be heavy; not releasing the loop)`,
                   });
                 }, ms),
               );
@@ -806,9 +804,8 @@ export class SdkSession {
               const dur = Date.now() - startedAt;
               if (dur > 2_000) {
                 this.emit({
-                  kind: 'syncStatus',
-                  status: 'connecting',
-                  reason: `crypto.onSyncCompleted call #${callId} completed in ${dur}ms`,
+                  kind: 'diagNote',
+                  note: `crypto.onSyncCompleted call #${callId} completed in ${dur}ms`,
                 });
               }
             } catch (err) {
@@ -823,9 +820,8 @@ export class SdkSession {
             }
           };
           this.emit({
-            kind: 'syncStatus',
-            status: 'connecting',
-            reason: 'watchdog: crypto.onSyncCompleted instrumented (observe-only, no release)',
+            kind: 'diagNote',
+            note: 'watchdog: crypto.onSyncCompleted instrumented (observe-only, no release)',
           });
         }
       } catch (err) {
