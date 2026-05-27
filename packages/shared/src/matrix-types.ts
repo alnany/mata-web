@@ -38,11 +38,44 @@ export type MessageBody =
   | { msgtype: 'm.text'; body: string; formattedBody: string | null }
   | { msgtype: 'm.emote'; body: string }
   | { msgtype: 'm.notice'; body: string }
-  | { msgtype: 'm.image'; body: string; url: MxcUri; info: MediaInfo }
-  | { msgtype: 'm.video'; body: string; url: MxcUri; info: MediaInfo }
-  | { msgtype: 'm.audio'; body: string; url: MxcUri; info: MediaInfo }
-  | { msgtype: 'm.file'; body: string; url: MxcUri; info: MediaInfo }
+  | MediaMessageBody
   | { msgtype: 'm.location'; body: string; geoUri: string };
+
+/**
+ * m.image / m.video / m.audio / m.file content. Exactly one of `url`
+ * (plain rooms) or `file` (encrypted rooms) is meaningful — `url` is
+ * the mxc URI for plain media; `file` carries the AES-CTR key + IV +
+ * ciphertext hash for encrypted media. For convenience we declare both
+ * as optional so the same shape covers both rooms; readers should
+ * prefer `file` when present.
+ */
+export type MediaMessageBody = {
+  msgtype: 'm.image' | 'm.video' | 'm.audio' | 'm.file';
+  body: string;
+  info: MediaInfo;
+  url?: MxcUri;
+  file?: EncryptedFile;
+};
+
+/**
+ * EncryptedFile per Matrix spec v1.11 — JWK-formatted 256-bit AES key,
+ * 128-bit IV, SHA-256 ciphertext hash. The same shape is what we send
+ * and what we receive; the AES key lives in event content so anyone
+ * with megolm room keys can recover the file.
+ */
+export interface EncryptedFile {
+  v: 'v2';
+  url: MxcUri;
+  key: {
+    kty: 'oct';
+    alg: 'A256CTR';
+    key_ops: ['encrypt', 'decrypt'];
+    k: string;
+    ext: true;
+  };
+  iv: string;
+  hashes: { sha256: string };
+}
 
 export interface MediaInfo {
   mimetype: string;

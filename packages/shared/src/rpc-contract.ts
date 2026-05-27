@@ -19,8 +19,10 @@ import type { SerializedError } from './errors.js';
 import type {
   Device,
   DeviceId,
+  EncryptedFile,
   EncryptionStatus,
   EventId,
+  MediaInfo,
   MessageBody,
   MxcUri,
   RoomDelta,
@@ -64,6 +66,33 @@ export type MainToWorkerRequest =
   | { kind: 'sendTyping'; roomId: RoomId; timeoutMs: number }
   | { kind: 'sendReadReceipt'; roomId: RoomId; eventId: EventId }
   | { kind: 'uploadMedia'; data: ArrayBuffer; mime: string; filename: string }
+  | {
+      /**
+       * Send a file/image/video/audio as one atomic operation. In
+       * encrypted rooms the worker AES-CTR encrypts the data before
+       * upload and packs the JWK + IV + hash into the event content's
+       * `file:` field. In plain rooms it uploads as-is and uses `url:`.
+       * `info.mimetype` drives the msgtype (m.image / m.video / etc).
+       */
+      kind: 'sendFileMessage';
+      roomId: RoomId;
+      data: ArrayBuffer;
+      filename: string;
+      info: MediaInfo;
+      txnId: string;
+    }
+  | {
+      /**
+       * Download (and if encrypted, decrypt) a media attachment. Returns
+       * raw bytes — caller wraps them in a Blob + URL.createObjectURL on
+       * the main thread so the rendered `<img>` / `<video>` element
+       * owns the URL lifecycle.
+       */
+      kind: 'loadMedia';
+      mxc: MxcUri;
+      encryptedFile: EncryptedFile | null;
+      mime: string;
+    }
   | { kind: 'subscribeRoom'; roomId: RoomId }
   | { kind: 'unsubscribeRoom'; roomId: RoomId }
   | { kind: 'listDevices' }
@@ -110,6 +139,8 @@ export type MainToWorkerResponse =
   | { kind: 'sendTyping' }
   | { kind: 'sendReadReceipt' }
   | { kind: 'uploadMedia'; mxc: MxcUri }
+  | { kind: 'sendFileMessage'; eventId: EventId }
+  | { kind: 'loadMedia'; data: ArrayBuffer; mime: string }
   | { kind: 'subscribeRoom' }
   | { kind: 'unsubscribeRoom' }
   | { kind: 'listDevices'; devices: Device[] }
