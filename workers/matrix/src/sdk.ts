@@ -119,6 +119,14 @@ export class MatrixCore {
     return this.requireSession().uploadMedia(data, mime, filename);
   }
 
+  async sendFileMessage(args: Parameters<SdkSession['sendFileMessage']>[0]) {
+    return this.requireSession().sendFileMessage(args);
+  }
+
+  async loadMedia(args: Parameters<SdkSession['loadMedia']>[0]) {
+    return this.requireSession().loadMedia(args);
+  }
+
   // --- Phase 5.2 encryption setup -------------------------------------------
 
   async getEncryptionStatus() {

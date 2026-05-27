@@ -117,6 +117,24 @@ const handlers: Handlers = {
     await core.sendReadReceipt(req.roomId, req.eventId);
     return { kind: 'sendReadReceipt' };
   },
+  sendFileMessage: async (req, core) => {
+    const { eventId } = await core.sendFileMessage({
+      roomId: req.roomId,
+      data: req.data,
+      filename: req.filename,
+      info: req.info,
+      txnId: req.txnId,
+    });
+    return { kind: 'sendFileMessage', eventId };
+  },
+  loadMedia: async (req, core) => {
+    const { data, mime } = await core.loadMedia({
+      mxc: req.mxc,
+      encryptedFile: req.encryptedFile,
+      mime: req.mime,
+    });
+    return { kind: 'loadMedia', data, mime };
+  },
   uploadMedia: async (req, core) => {
     const mxc = await core.uploadMedia(req.data, req.mime, req.filename);
     return { kind: 'uploadMedia', mxc };

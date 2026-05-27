@@ -383,6 +383,37 @@ export class SdkSession {
   }
 
   // ---------------------------------------------------------------------------
+  // Phase 6 — file / image attachments
+  //
+  // sendFileMessage: encrypt-then-upload (encrypted rooms) / upload-then-send
+  // (plain rooms) in one call. loadMedia: download + AES-CTR decrypt for
+  // received attachments. Both delegate to ./attachments.ts so the crypto
+  // primitives live next to the spec, not next to the room-message send.
+  // ---------------------------------------------------------------------------
+
+  async sendFileMessage(args: {
+    roomId: RoomId;
+    data: ArrayBuffer;
+    filename: string;
+    info: import('@mata/shared/matrix').MediaInfo;
+    txnId: string;
+  }) {
+    const c = this.requireClient();
+    const { sendFileMessage } = await import('./attachments.js');
+    return sendFileMessage(c, args);
+  }
+
+  async loadMedia(args: {
+    mxc: MxcUri;
+    encryptedFile: import('@mata/shared/matrix').EncryptedFile | null;
+    mime: string;
+  }) {
+    const c = this.requireClient();
+    const { loadMedia } = await import('./attachments.js');
+    return loadMedia(c, args);
+  }
+
+  // ---------------------------------------------------------------------------
   // Phase 5.2 — encryption setup (cross-signing + SSSS + key backup)
   //
   // Implementation lives in `./encryption.ts` so the bulk of the
