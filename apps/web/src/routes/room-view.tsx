@@ -8,7 +8,6 @@ import {
   onMount,
   Show,
 } from 'solid-js';
-import { produce } from 'solid-js/store';
 import { useBridge } from '../bridge/context.js';
 import { session } from '../stores/session.js';
 import { showToast } from '../stores/toast.js';
@@ -145,15 +144,12 @@ export function RoomView(props: {
   const unsubSync = bridge.on('syncUpdate', (e) => {
     const delta = e.deltas.find((d) => d.roomId === props.room.roomId);
     if (!delta || delta.newEvents.length === 0) return;
-    props.setCache(
-      props.room.roomId,
-      produce((c: RoomCache) => {
-        const known = new Set(c.events.map((ev) => ev.eventId));
-        for (const ev of delta.newEvents) {
-          if (!known.has(ev.eventId)) c.events.push(ev);
-        }
-      }),
-    );
+    props.setCache(props.room.roomId, (c: RoomCache) => {
+      const known = new Set(c.events.map((ev) => ev.eventId));
+      for (const ev of delta.newEvents) {
+        if (!known.has(ev.eventId)) c.events.push(ev);
+      }
+    });
     if (stickToBottom()) {
       requestAnimationFrame(() => scrollToBottom('smooth'));
     }
@@ -175,20 +171,17 @@ export function RoomView(props: {
 
   // ---- Send-confirmation handling ----------------------------------------
   const unsubSend = bridge.on('sendStatus', (e) => {
-    props.setCache(
-      props.room.roomId,
-      produce((c: RoomCache) => {
-        const idx = c.pending.findIndex((p) => p.txnId === e.txnId);
-        if (idx < 0) return;
-        if (e.status === 'sent') {
-          c.pending.splice(idx, 1);
-        } else if (e.status === 'failed') {
-          c.pending[idx].status = 'failed';
-          c.pending[idx].errorReason = e.error?.message ?? 'send failed';
-          showToast('error', `Send failed: ${c.pending[idx].errorReason}`);
-        }
-      }),
-    );
+    props.setCache(props.room.roomId, (c: RoomCache) => {
+      const idx = c.pending.findIndex((p) => p.txnId === e.txnId);
+      if (idx < 0) return;
+      if (e.status === 'sent') {
+        c.pending.splice(idx, 1);
+      } else if (e.status === 'failed') {
+        c.pending[idx].status = 'failed';
+        c.pending[idx].errorReason = e.error?.message ?? 'send failed';
+        showToast('error', `Send failed: ${c.pending[idx].errorReason}`);
+      }
+    });
   });
   onCleanup(unsubSend);
 
@@ -246,23 +239,23 @@ export function RoomView(props: {
         fromToken: token,
         limit: PAGE_SIZE,
       });
-      props.setCache(
-        props.room.roomId,
-        produce((c: RoomCache) => {
-          const known = new Set(c.events.map((ev) => ev.eventId));
-          const older = res.events.filter((ev) => !known.has(ev.eventId));
-          // unshift is a mutating array op that Solid's store proxy
-          // intercepts cleanly. The previous `c.events = [...older, ...c.events]`
-          // reassignment spread the already-proxied existing events into a
-          // new array, which triggered Solid 1.9's proxy-invariant check
-          // ("Symbol(solid-proxy) is read-only and non-configurable") because
-          // it tried to re-wrap targets that already had a cached proxy.
-          if (older.length > 0) c.events.unshift(...older);
-          c.prevToken = res.prevToken;
-          c.reachedStart = res.prevToken === null;
-          c.paginating = false;
-        }),
-      );
+      props.setCache(props.room.roomId, (c: RoomCache) => {
+        const known = new Set(c.events.map((ev) => ev.eventId));
+        const older = res.events.filter((ev) => !known.has(ev.eventId));
+        // unshift is a mutating array op that Solid's store proxy
+        // intercepts cleanly. The previous `c.events = [...older, ...c.events]`
+        // reassignment spread the already-proxied existing events into a
+        // new array, which triggered Solid 1.9's proxy-invariant check
+        // ("Symbol(solid-proxy) is read-only and non-configurable") because
+        // it tried to re-wrap targets that already had a cached proxy.
+        // (Updater is also no longer wrapped in `produce(...)` — the parent
+        // updateCache already wraps; double-wrapping created the same
+        // invariant violation by colliding setter markers across layers.)
+        if (older.length > 0) c.events.unshift(...older);
+        c.prevToken = res.prevToken;
+        c.reachedStart = res.prevToken === null;
+        c.paginating = false;
+      });
       // Preserve scroll position after older messages prepended.
       requestAnimationFrame(() => {
         if (!scrollerRef) return;
@@ -353,12 +346,18 @@ export function RoomView(props: {
     // again — surface it as a toast AND a diag line.
     try {
       diag(`send-UI[${shortTxn}]: before-cache-push room=${props.room.roomId.slice(0, 24)}`);
-      props.setCache(
-        props.room.roomId,
-        produce((c: RoomCache) => {
-          c.pending.push({ txnId, body: text, status: 'sending' });
-        }),
-      );
+      // updateCache (parent) already wraps in `produce(...)`. Passing a
+      // bare callback is REQUIRED — wrapping again with produce() here
+      // returns a Solid setter-marked function that, when invoked inside
+      // the outer produce, mutates state through the proxy setter
+      // protocol and trips the "Symbol(solid-proxy) is read-only and
+      // non-configurable" Proxy invariant. That was the bug behind the
+      // initial "silent send failure" — composer disabled, no bubble, no
+      // /send PUT — caught only after end-to-end instrumentation routed
+      // the throw into the visible sync log.
+      props.setCache(props.room.roomId, (c: RoomCache) => {
+        c.pending.push({ txnId, body: text, status: 'sending' });
+      });
       diag(`send-UI[${shortTxn}]: cache-pushed pendingCount=${props.cache.pending.length}`);
       setDraft('');
       setReplyingTo(null);
@@ -387,16 +386,13 @@ export function RoomView(props: {
       })
       .catch((err) => {
         diag(`send-UI[${shortTxn}]: rpc-rejected err=${msgOf(err).slice(0, 160)}`);
-        props.setCache(
-          props.room.roomId,
-          produce((c: RoomCache) => {
-            const p = c.pending.find((x) => x.txnId === txnId);
-            if (p) {
-              p.status = 'failed';
-              p.errorReason = msgOf(err);
-            }
-          }),
-        );
+        props.setCache(props.room.roomId, (c: RoomCache) => {
+          const p = c.pending.find((x) => x.txnId === txnId);
+          if (p) {
+            p.status = 'failed';
+            p.errorReason = msgOf(err);
+          }
+        });
         showToast('error', `Send failed: ${msgOf(err)}`);
       });
 
