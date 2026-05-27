@@ -13,6 +13,7 @@ import type {
   RoomId,
   RoomSummary,
   TimelineEvent,
+  DeviceId,
   UserId,
 } from '@mata/shared/matrix';
 import { authError } from '@mata/shared/errors';
@@ -150,6 +151,18 @@ export class MatrixCore {
 
   async kickFromRoom(roomId: RoomId, userId: UserId, reason: string | null) {
     return this.requireSession().kickFromRoom(roomId, userId, reason);
+  }
+
+  async beginDeviceVerification(userId: UserId, deviceId: DeviceId) {
+    return this.requireSession().beginDeviceVerification(userId, deviceId);
+  }
+
+  async completeSasVerification(transactionId: string, result: 'match' | 'mismatch') {
+    return this.requireSession().completeSasVerification(transactionId, result);
+  }
+
+  async cancelVerification(transactionId: string) {
+    return this.requireSession().cancelVerification(transactionId);
   }
 
   // --- Phase 5.2 encryption setup -------------------------------------------

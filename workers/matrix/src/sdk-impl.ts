@@ -49,6 +49,7 @@ import type {
 } from '@mata/shared/matrix';
 import { authError, networkError, syncError } from '@mata/shared/errors';
 import type { WorkerEvent } from '@mata/shared/rpc';
+import { VerificationService } from './verification.js';
 import {
   type SessionRecord,
   saveSession,
@@ -95,8 +96,21 @@ export class SdkSession {
    */
   readonly secretStorageKeyCache: Map<string, Uint8Array> = new Map();
 
+  /**
+   * SAS verification state machine. Lazy-instantiated because it
+   * captures `this.emit` + a getter into the live client; the
+   * VerificationService doesn't run until a client is booted, but the
+   * field has to exist from construction so `verify()` RPCs can be
+   * dispatched the moment a client appears.
+   */
+  readonly verification: VerificationService;
+
   constructor(emit: Emit) {
     this.emit = emit;
+    this.verification = new VerificationService({
+      client: () => this.client,
+      emit: (ev) => this.emit(ev),
+    });
   }
 
   isLoggedIn(): boolean {
@@ -550,6 +564,36 @@ export class SdkSession {
   }
 
   // ---------------------------------------------------------------------------
+  // SAS verification. Thin pass-through to VerificationService; we keep
+  // SdkSession as the single bridge target so the RPC dispatcher in
+  // bridge.ts doesn't have to know about service objects.
+  // ---------------------------------------------------------------------------
+
+  async beginDeviceVerification(
+    userId: UserId,
+    deviceId: DeviceId,
+  ): Promise<{ transactionId: string }> {
+    // Forces the client to exist first; the service does its own
+    // null-check but we want the more specific "Not logged in" error
+    // from requireClient surfaced consistently.
+    this.requireClient();
+    return this.verification.begin(userId, deviceId);
+  }
+
+  async completeSasVerification(
+    transactionId: string,
+    result: 'match' | 'mismatch',
+  ): Promise<void> {
+    this.requireClient();
+    await this.verification.complete(transactionId, result);
+  }
+
+  async cancelVerification(transactionId: string): Promise<void> {
+    this.requireClient();
+    await this.verification.cancel(transactionId);
+  }
+
+  // ---------------------------------------------------------------------------
   // Phase 6 — file / image attachments
   //
   // sendFileMessage: encrypt-then-upload (encrypted rooms) / upload-then-send
@@ -989,6 +1033,10 @@ export class SdkSession {
     const startClientAt = Date.now();
     try {
       await client.startClient(opts);
+      // Hook the verification service to incoming requests. Safe to
+      // call before /sync returns first batch — it only attaches a
+      // listener, doesn't query anything.
+      this.verification.attachIncomingListener();
     } catch (err) {
       this.emit({
         kind: 'syncStatus',

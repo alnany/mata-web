@@ -175,8 +175,18 @@ const handlers: Handlers = {
     const devices = await core.listDevices();
     return { kind: 'listDevices', devices };
   },
-  beginDeviceVerification: async () => notImplemented('beginDeviceVerification'),
-  completeSasVerification: async () => notImplemented('completeSasVerification'),
+  beginDeviceVerification: async (req, core) => {
+    const { transactionId } = await core.beginDeviceVerification(req.userId, req.deviceId);
+    return { kind: 'beginDeviceVerification', transactionId };
+  },
+  completeSasVerification: async (req, core) => {
+    await core.completeSasVerification(req.transactionId, req.result);
+    return { kind: 'completeSasVerification' };
+  },
+  cancelVerification: async (req, core) => {
+    await core.cancelVerification(req.transactionId);
+    return { kind: 'cancelVerification' };
+  },
   getEncryptionStatus: async (_req, core) => {
     const status = await core.getEncryptionStatus();
     return { kind: 'getEncryptionStatus', status };
