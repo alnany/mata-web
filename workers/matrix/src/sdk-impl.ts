@@ -383,6 +383,97 @@ export class SdkSession {
   }
 
   // ---------------------------------------------------------------------------
+  // Phase 7 — room lifecycle: create / invite / join / leave.
+  //
+  // createRoom defaults to `private_chat` preset (invite-only, history
+  // visible to members from join). For encrypted=true we add the
+  // `m.room.encryption` state event in `initial_state` so the
+  // megolm session bootstraps on creation, before any plaintext is
+  // ever sent — this matters because some clients race to send a
+  // greeting and Mata must never leak plaintext into an
+  // accidentally-unencrypted room.
+  //
+  // DM detection: Matrix uses `m.direct` account-data to mark a room
+  // as a DM with a specific user. We set `is_direct: true` on the
+  // createRoom call AND push the {targetUserId: [roomId]} pair into
+  // `m.direct` so other clients see the room in their DM list.
+  // ---------------------------------------------------------------------------
+
+  async createRoom(args: {
+    name: string;
+    topic: string | null;
+    isDirect: boolean;
+    encrypted: boolean;
+    invite: UserId[];
+  }): Promise<RoomId> {
+    const c = this.requireClient();
+    const initialState: Array<{
+      type: string;
+      state_key?: string;
+      content: Record<string, unknown>;
+    }> = [];
+    if (args.encrypted) {
+      // Spec: https://spec.matrix.org/v1.11/client-server-api/#mroomencryption
+      initialState.push({
+        type: 'm.room.encryption',
+        state_key: '',
+        content: { algorithm: 'm.megolm.v1.aes-sha2' },
+      });
+    }
+    // Import enums lazily so the worker bundle doesn't pay for them
+    // unless someone actually creates a room.
+    const { Preset, Visibility } = await import('matrix-js-sdk');
+    const createOpts: Parameters<typeof c.createRoom>[0] = {
+      preset: Preset.PrivateChat,
+      visibility: Visibility.Private,
+      is_direct: args.isDirect,
+      invite: args.invite,
+      initial_state: initialState as never,
+    };
+    if (args.name) createOpts.name = args.name;
+    if (args.topic) createOpts.topic = args.topic;
+    const res = await c.createRoom(createOpts);
+    const roomId = res.room_id as RoomId;
+
+    // For DMs, write the m.direct account-data entry so other clients
+    // bucket the room correctly. Best-effort: a failure here doesn't
+    // poison the createRoom success — the room exists either way.
+    if (args.isDirect && args.invite[0]) {
+      const target = args.invite[0];
+      try {
+        const existing =
+          ((await c.getAccountDataFromServer('m.direct')) as
+            | Record<string, string[]>
+            | null) ?? {};
+        const list = existing[target] ?? [];
+        if (!list.includes(roomId)) {
+          existing[target] = [...list, roomId];
+          await c.setAccountData('m.direct', existing);
+        }
+      } catch (err) {
+        console.warn('[mata] m.direct update failed', err);
+      }
+    }
+    return roomId;
+  }
+
+  async inviteToRoom(roomId: RoomId, userId: UserId): Promise<void> {
+    const c = this.requireClient();
+    await c.invite(roomId, userId);
+  }
+
+  async joinRoom(roomId: RoomId): Promise<RoomId> {
+    const c = this.requireClient();
+    const r = await c.joinRoom(roomId);
+    return (r.roomId ?? roomId) as RoomId;
+  }
+
+  async leaveRoom(roomId: RoomId): Promise<void> {
+    const c = this.requireClient();
+    await c.leave(roomId);
+  }
+
+  // ---------------------------------------------------------------------------
   // Phase 6 — file / image attachments
   //
   // sendFileMessage: encrypt-then-upload (encrypted rooms) / upload-then-send
