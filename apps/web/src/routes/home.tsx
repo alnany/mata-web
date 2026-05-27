@@ -1,25 +1,25 @@
-import { createResource, For, onCleanup, onMount, Show } from 'solid-js';
+import { createResource, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createStore, produce } from 'solid-js/store';
 import { useNavigate } from '@solidjs/router';
 import { useBridge } from '../bridge/context.js';
 import { session, setSession } from '../stores/session.js';
-import type { RoomSummary } from '@mata/shared/matrix';
+import type { RoomId, RoomSummary } from '@mata/shared/matrix';
+import { RoomView, createRoomCache, type RoomCache } from './room-view.js';
 
 export function HomePage() {
   const bridge = useBridge();
   const navigate = useNavigate();
+
   const [rooms, { refetch }] = createResource<RoomSummary[]>(async () => {
     const res = await bridge.request({ kind: 'loadRoomList' });
     return [...res.rooms].sort((a, b) => b.lastActivityTs - a.lastActivityTs);
   });
 
-  // Refresh on sync deltas. Phase 2 will apply them in-place; for now we
-  // just re-list to validate the bridge end-to-end.
+  // Refresh room list on sync deltas (in-place updates land in Phase 4).
   const unsubscribe = bridge.on('syncUpdate', () => {
     refetch();
   });
   onCleanup(unsubscribe);
-
-  // Refresh once when sync first becomes "syncing".
   const unsubscribeStatus = bridge.on('syncStatus', (e) => {
     if (e.status === 'syncing') refetch();
   });
@@ -30,6 +30,34 @@ export function HomePage() {
       navigate('/login', { replace: true });
     }
   });
+
+  // -------- Active room + per-room cache (silky-switch) --------------------
+  const [activeId, setActiveId] = createSignal<RoomId | null>(null);
+  // A Solid store of caches keyed by roomId. Reactivity is fine-grained so
+  // unrelated rooms never re-render when one changes.
+  const [caches, setCaches] = createStore<Record<string, RoomCache>>({});
+
+  const updateCache = (roomId: RoomId, updater: (c: RoomCache) => void) => {
+    setCaches(
+      produce((state: Record<string, RoomCache>) => {
+        if (!state[roomId]) state[roomId] = createRoomCache(roomId);
+        updater(state[roomId]);
+      }),
+    );
+  };
+
+  const openRoom = (room: RoomSummary) => {
+    if (!caches[room.roomId]) {
+      setCaches(room.roomId, createRoomCache(room.roomId));
+    }
+    setActiveId(room.roomId);
+  };
+
+  const activeRoom = (): RoomSummary | null => {
+    const id = activeId();
+    if (!id) return null;
+    return (rooms() ?? []).find((r) => r.roomId === id) ?? null;
+  };
 
   const logout = async () => {
     try {
@@ -64,35 +92,76 @@ export function HomePage() {
           }
         >
           <ul class="flex-1 overflow-y-auto">
-            <For each={rooms() as RoomSummary[]}>{(room) => <RoomRow room={room} />}</For>
+            <For each={rooms() as RoomSummary[]}>
+              {(room) => (
+                <RoomRow
+                  room={room}
+                  active={activeId() === room.roomId}
+                  onSelect={() => openRoom(room)}
+                />
+              )}
+            </For>
           </ul>
         </Show>
       </aside>
-      <section class="flex h-full items-center justify-center p-12 text-sm text-neutral-500">
-        <div class="text-center">
-          <p>Select a room to open it.</p>
-          <p class="mt-2 text-xs">Timeline rendering lands in Phase 2.</p>
-        </div>
-      </section>
+
+      <Show
+        when={activeRoom()}
+        fallback={
+          <section class="flex h-full items-center justify-center p-12 text-sm text-neutral-500">
+            <div class="text-center">
+              <p>Select a room to open it.</p>
+              <p class="mt-2 text-xs">Click any chat on the left.</p>
+            </div>
+          </section>
+        }
+      >
+        {(room) => (
+          <RoomView
+            // Keying on roomId forces a full RoomView remount per room. That
+            // gives us a clean lifecycle for subscriptions but the per-room
+            // cache (events, prevToken, pending) is held by the parent — so
+            // re-opening a previously-loaded room repaints instantly.
+            room={room()}
+            cache={caches[room().roomId] ?? createRoomCache(room().roomId)}
+            setCache={updateCache}
+          />
+        )}
+      </Show>
     </div>
   );
 }
 
-function RoomRow(props: { room: RoomSummary }) {
+function RoomRow(props: { room: RoomSummary; active: boolean; onSelect: () => void }) {
   const r = props.room;
   return (
-    <li class="row-vis border-b border-neutral-100 px-4 py-3 hover:bg-neutral-100 dark:border-neutral-900 dark:hover:bg-neutral-900">
-      <div class="flex items-baseline justify-between gap-2">
-        <span class="truncate text-sm font-medium">{r.name}</span>
-        <Show when={r.unreadCount > 0}>
-          <span class="rounded-full bg-mata-500 px-2 py-0.5 text-[10px] font-semibold text-white">
-            {r.unreadCount}
-          </span>
-        </Show>
-      </div>
-      <p class="mt-0.5 truncate text-xs text-neutral-500 dark:text-neutral-400">
-        {r.lastEventPreview ?? <em>No messages yet</em>}
-      </p>
+    <li>
+      <button
+        type="button"
+        onClick={props.onSelect}
+        class={`row-vis flex w-full items-start gap-3 border-b border-neutral-100 px-4 py-3 text-left transition-colors dark:border-neutral-900 ${
+          props.active
+            ? 'bg-mata-500/10 hover:bg-mata-500/15 dark:bg-mata-500/15'
+            : 'hover:bg-neutral-100 dark:hover:bg-neutral-900'
+        }`}
+      >
+        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral-200 text-sm font-semibold text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+          {r.name.slice(0, 1).toUpperCase()}
+        </div>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-baseline justify-between gap-2">
+            <span class="truncate text-sm font-medium">{r.name}</span>
+            <Show when={r.unreadCount > 0}>
+              <span class="rounded-full bg-mata-500 px-2 py-0.5 text-[10px] font-semibold text-white">
+                {r.unreadCount}
+              </span>
+            </Show>
+          </div>
+          <p class="mt-0.5 truncate text-xs text-neutral-500 dark:text-neutral-400">
+            {r.lastEventPreview ?? <em>No messages yet</em>}
+          </p>
+        </div>
+      </button>
     </li>
   );
 }
