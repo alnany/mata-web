@@ -690,6 +690,87 @@ export class SdkSession {
       status: 'connecting',
       reason: `client.startClient returned (${Date.now() - startClientAt}ms) — awaiting /sync`,
     });
+    // WATCHDOG: instrument crypto.onSyncCompleted.
+    //
+    // User-reported symptom: /sync returns 200 with valid data, but the
+    // SDK never transitions out of `null` syncState. The /sync URL in
+    // the user's network tab came back, our fetch tracer logged it, and
+    // then the SDK went silent — no /keys/upload, no /keys/query, no
+    // state transition. That's matrix-js-sdk's processSyncResponse()
+    // hanging on an internal await. The most likely await is the rust
+    // crypto bridge's `onSyncCompleted(syncData)` — it calls
+    // OlmMachine.receive_sync_changes in wasm, which can deadlock on
+    // restoration with stale device-tracking state (known issue in
+    // matrix-sdk-crypto-wasm <= 9.0.0; bumped to 9.1.0 but keeping the
+    // watchdog as belt-and-suspenders).
+    //
+    // The patch races onSyncCompleted against a 10s timeout. If the
+    // wasm call returns normally, behavior is unchanged. If it hangs,
+    // we resolve the Promise ourselves so processSyncResponse can
+    // continue to updateSyncState(SYNCING) and the UI unblocks. The
+    // user loses crypto post-processing for that one sync cycle, but
+    // sync itself recovers — which is exactly the right tradeoff for
+    // an interactive client (a broken pill is worse than a sync that
+    // skipped one device-list update).
+    if (ENABLE_E2EE) {
+      try {
+        type CryptoApiLike = {
+          onSyncCompleted?: (data: unknown) => Promise<void> | void;
+        };
+        const crypto = (client.getCrypto?.() as CryptoApiLike | undefined) ?? undefined;
+        if (crypto && typeof crypto.onSyncCompleted === 'function') {
+          const original = crypto.onSyncCompleted.bind(crypto);
+          let nthCall = 0;
+          crypto.onSyncCompleted = (data: unknown): Promise<void> => {
+            const callId = ++nthCall;
+            const startedAt = Date.now();
+            const watchdog = new Promise<void>((resolve) =>
+              setTimeout(() => {
+                this.emit({
+                  kind: 'syncStatus',
+                  status: 'error',
+                  reason: `crypto.onSyncCompleted call #${callId} exceeded 10s — releasing sync loop. wasm bridge may have deadlocked; encrypted room key updates from this batch may be skipped.`,
+                });
+                resolve();
+              }, 10_000),
+            );
+            const real = Promise.resolve(original(data))
+              .then(() => {
+                const dur = Date.now() - startedAt;
+                if (dur > 2_000) {
+                  this.emit({
+                    kind: 'syncStatus',
+                    status: 'connecting',
+                    reason: `crypto.onSyncCompleted call #${callId} took ${dur}ms (slow)`,
+                  });
+                }
+              })
+              .catch((err) => {
+                this.emit({
+                  kind: 'syncStatus',
+                  status: 'reconnecting',
+                  reason: `crypto.onSyncCompleted call #${callId} rejected: ${describe(err)}`,
+                });
+              });
+            return Promise.race([real, watchdog]);
+          };
+          this.emit({
+            kind: 'syncStatus',
+            status: 'connecting',
+            reason: 'watchdog: crypto.onSyncCompleted wrapped with 10s timeout',
+          });
+        }
+      } catch (err) {
+        // Wrapping is best-effort — if the crypto object shape doesn't
+        // match expectations on this SDK version, skip silently rather
+        // than block sync startup.
+        this.emit({
+          kind: 'syncStatus',
+          status: 'connecting',
+          reason: `watchdog: could not wrap crypto.onSyncCompleted (${describe(err)})`,
+        });
+      }
+    }
     // Heartbeat poll on the SDK's internal sync state. ClientEvent.Sync
     // only fires on transitions — if the SDK gets stuck in an
     // intermediate state (e.g. waiting on /sync, processing a slow
