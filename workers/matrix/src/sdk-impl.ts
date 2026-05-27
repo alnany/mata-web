@@ -35,6 +35,7 @@ import {
 import { SyncState } from 'matrix-js-sdk/lib/sync';
 
 import type {
+  RoomMember,
   RoomSummary,
   TimelineEvent,
   UserId,
@@ -471,6 +472,81 @@ export class SdkSession {
   async leaveRoom(roomId: RoomId): Promise<void> {
     const c = this.requireClient();
     await c.leave(roomId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Members panel.
+  //
+  // matrix-js-sdk caches members from sync; if the room was lazy-loaded
+  // (server returned only heroes) `room.getMembers()` will be a short
+  // list. `loadMembersIfNeeded()` forces a /members fetch so the panel
+  // is accurate. For encrypted rooms we walk the device list to derive
+  // a per-user trust badge:
+  //   - verified  : at least one device cross-signed AND we trust the
+  //                 user's master key (master cross-signing verified).
+  //   - unverified: user has master key but it's not verified by us, or
+  //                 some devices remain unverified.
+  //   - unknown   : user has no cross-signing yet, or device list is
+  //                 empty.
+  // ---------------------------------------------------------------------------
+
+  async loadRoomMembers(roomId: RoomId): Promise<RoomMember[]> {
+    const c = this.requireClient();
+    const room = c.getRoom(roomId);
+    if (!room) throw new Error(`room ${roomId} not in store`);
+    await room.loadMembersIfNeeded();
+
+    const crypto = c.getCrypto();
+    const isEncrypted = room.hasEncryptionStateEvent();
+    const powerEvent = room.currentState.getStateEvents('m.room.power_levels', '');
+    const powerContent = (powerEvent?.getContent() as
+      | { users?: Record<string, number>; users_default?: number }
+      | undefined) ?? {};
+    const usersPowers = powerContent.users ?? {};
+    const defaultPower = powerContent.users_default ?? 0;
+
+    const rawMembers = room.getMembers();
+    const out: RoomMember[] = [];
+    for (const m of rawMembers) {
+      let trust: RoomMember['trust'] = null;
+      if (isEncrypted && crypto) {
+        try {
+          const userTrust = await crypto.getUserVerificationStatus(m.userId);
+          const devices = await crypto.getUserDeviceInfo([m.userId]);
+          const userDevices = devices.get(m.userId);
+          if (userTrust.isCrossSigningVerified()) {
+            // Master key verified. If every device is verified too,
+            // call it green; otherwise still verified but with a note.
+            trust = 'verified';
+          } else if (userDevices && userDevices.size > 0) {
+            trust = 'unverified';
+          } else {
+            trust = 'unknown';
+          }
+        } catch {
+          trust = 'unknown';
+        }
+      }
+      out.push({
+        userId: m.userId as UserId,
+        displayname: m.rawDisplayName ?? null,
+        avatarUrl: (m.getMxcAvatarUrl() ?? null) as MxcUri | null,
+        membership: (m.membership ?? 'leave') as RoomMember['membership'],
+        powerLevel: usersPowers[m.userId] ?? defaultPower,
+        trust,
+      });
+    }
+    // Stable order: power level desc, then displayname.
+    out.sort((a, b) => {
+      if (b.powerLevel !== a.powerLevel) return b.powerLevel - a.powerLevel;
+      return (a.displayname ?? a.userId).localeCompare(b.displayname ?? b.userId);
+    });
+    return out;
+  }
+
+  async kickFromRoom(roomId: RoomId, userId: UserId, reason: string | null): Promise<void> {
+    const c = this.requireClient();
+    await c.kick(roomId, userId, reason ?? undefined);
   }
 
   // ---------------------------------------------------------------------------
