@@ -142,6 +142,21 @@ export function installBridge(scope: DedicatedWorkerGlobalScope): BridgeContext 
   // (traces appear but sync never reaches PREPARED).
   const seenFailures = new Set<string>();
   const seenOk = new Set<string>();
+  // During startup we want EVERY matrix endpoint logged once, not
+  // collapsed by family. Once the sync reaches PREPARED we go back to
+  // family-dedup so steady-state /sync long-polls don't flood the log.
+  // Setting this from outside the closure: bridge.ts wires it via
+  // toggleStartupTrace() which bridges' SyncBanner subscriber flips on
+  // first Prepared/Syncing event.
+  let startupTraceMode = true;
+  // Track whether sync has ever transitioned to a live state. While
+  // false, the fetch tracer also logs every distinct (method, family)
+  // tuple as a separate ok line so we can spot the SDK silently going
+  // quiet between two HTTP calls.
+  (scope as unknown as { __mata_disableStartupTrace?: () => void }).__mata_disableStartupTrace =
+    () => {
+      startupTraceMode = false;
+    };
   let firstMatrixContactAt: number | null = null;
   const endpointFamily = (url: string): string =>
     url
@@ -189,7 +204,12 @@ export function installBridge(scope: DedicatedWorkerGlobalScope): BridgeContext 
           }
         } else {
           const key = `ok:${method}:${family}`;
-          if (!seenOk.has(key)) {
+          // During startup, ALWAYS emit ok lines (with a request seq
+          // counter so dedup across identical calls still gives visible
+          // progress). Once sync is live, only emit the first ok per
+          // family to avoid log flood.
+          const shouldEmit = startupTraceMode || !seenOk.has(key);
+          if (shouldEmit) {
             seenOk.add(key);
             const ms = Date.now() - startedAt;
             emit({

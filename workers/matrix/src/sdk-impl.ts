@@ -662,7 +662,14 @@ export class SdkSession {
     // the live SDK state into the banner so we can see exactly where it
     // is — Prepared / Syncing turn the pill green; anything else is
     // reported verbatim alongside the last /sync error if any.
+    // 1s heartbeat so the gap between "startClient returned" and a live
+    // sync state is no longer a 4s black box. The home.tsx log dedupes
+    // identical consecutive entries, so quiet stretches still collapse
+    // to one line — the timestamp difference between that line and the
+    // next event tells us exactly how long the SDK was wedged.
+    let tick = 0;
     const heartbeat = setInterval(() => {
+      tick += 1;
       const state = client.getSyncState();
       if (state === 'PREPARED' || state === 'SYNCING') return;
       const data = client.getSyncStateData();
@@ -673,15 +680,21 @@ export class SdkSession {
       this.emit({
         kind: 'syncStatus',
         status: 'connecting',
-        reason: `sdk sync state: ${state ?? 'null'}${dataErr}`,
+        reason: `sdk sync state: ${state ?? 'null'} [t+${tick}s]${dataErr}`,
       });
-    }, 4_000);
+    }, 1_000);
     // Stop the heartbeat once the SDK reaches a live state — there's no
     // need to keep flooding the pill with redundant status updates.
+    // Also flip the bridge's fetch tracer out of startup-trace mode so
+    // steady-state /sync long-polls collapse by endpoint family.
     const onSyncLive = (state: SyncState) => {
       if (state === SyncState.Prepared || state === SyncState.Syncing) {
         clearInterval(heartbeat);
         client.off(ClientEvent.Sync, onSyncLive);
+        const disable = (
+          self as unknown as { __mata_disableStartupTrace?: () => void }
+        ).__mata_disableStartupTrace;
+        if (typeof disable === 'function') disable();
       }
     };
     client.on(ClientEvent.Sync, onSyncLive);
