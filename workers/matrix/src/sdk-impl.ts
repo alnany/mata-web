@@ -380,6 +380,94 @@ export class SdkSession {
     return this.client;
   }
 
+  private async probeSyncStartup(client: MatrixClient): Promise<void> {
+    // Reproduce the SDK's startup prerequisites with explicit timeouts +
+    // banner reporting. We probe in the same order matrix-js-sdk does
+    // inside SyncApi.sync() so the FIRST step that hangs is the one we
+    // call out. /versions is added on top because matrix-js-sdk's
+    // `prepareLazyLoadingForSync` reads `canSupport` (a map seeded by an
+    // implicit /versions probe) — if /versions never resolved, that map
+    // is empty and downstream code can hang waiting on it.
+    const withTimeout = async <T>(
+      label: string,
+      fn: () => Promise<T>,
+      ms: number,
+    ): Promise<{ ok: boolean; ms: number; detail?: string }> => {
+      const started = Date.now();
+      this.emit({
+        kind: 'syncStatus',
+        status: 'connecting',
+        reason: `probing ${label}`,
+      });
+      try {
+        await Promise.race([
+          fn(),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () =>
+                reject(
+                  new Error(`timeout after ${ms}ms — endpoint never responded`),
+                ),
+              ms,
+            ),
+          ),
+        ]);
+        const elapsed = Date.now() - started;
+        this.emit({
+          kind: 'syncStatus',
+          status: 'connecting',
+          reason: `probe ${label} ok (${elapsed}ms)`,
+        });
+        return { ok: true, ms: elapsed };
+      } catch (err) {
+        const elapsed = Date.now() - started;
+        const detail =
+          err instanceof Error
+            ? `${(err as { errcode?: string }).errcode ? `[${(err as { errcode: string }).errcode}] ` : ''}${err.message}`
+            : String(err);
+        this.emit({
+          kind: 'syncStatus',
+          status: 'error',
+          reason: `probe ${label} FAILED (${elapsed}ms): ${detail}`,
+        });
+        return { ok: false, ms: elapsed, detail };
+      }
+    };
+
+    // 1) /_matrix/client/versions — completely unauthenticated, should
+    //    never fail unless the homeserver URL is unreachable, CORS is
+    //    blocking, or DNS is broken. Failing here means "this isn't a
+    //    homeserver", not a token problem.
+    await withTimeout('GET /versions', () => client.getVersions(), 8_000);
+
+    // 2) GET /_matrix/client/v3/pushrules/ — first authenticated call
+    //    matrix-js-sdk makes during sync startup. 401 here = bad token.
+    //    Hang here = homeserver dropping authenticated requests but
+    //    responding to unauthenticated ones (rare but possible behind a
+    //    proxy with misconfigured auth middleware).
+    await withTimeout('GET /pushrules', () => client.getPushRules(), 10_000);
+
+    // 3) POST /_matrix/client/v3/user/{userId}/filter — second auth
+    //    call. Same auth surface, but a different proxy path, so a
+    //    pushrules-pass + filter-fail combo points at server config for
+    //    that specific endpoint.
+    await withTimeout(
+      'POST /user/<id>/filter',
+      async () => {
+        const userId = client.getUserId();
+        if (!userId) throw new Error('no userId on client (unexpected)');
+        await client.createFilter({
+          room: { timeline: { limit: 30 } },
+        });
+      },
+      10_000,
+    );
+
+    // We deliberately do NOT abort startClient on probe failure — the
+    // SDK has its own retry+keepalive loop and may recover. The probes
+    // exist only to surface WHICH step is the bottleneck.
+  }
+
   private async bootClient(record: SessionRecord): Promise<void> {
     // Every observable transition is announced via `syncStatus` so the UI
     // pill can pinpoint exactly which startup stage is hung. Previously
@@ -470,6 +558,17 @@ export class SdkSession {
         reason: 'starting sync',
       });
     }
+    // Before letting matrix-js-sdk run its hidden sync-startup sequence
+    // (getPushRules → prepareLazyLoadingForSync → storeClientOptions →
+    // getFilter), probe each prerequisite endpoint OURSELVES with a 10s
+    // timeout. The SDK awaits these silently and, if any one HANGS
+    // (rather than throws), syncState stays null forever and no logger
+    // line ever fires. That matches exactly what the user is reporting.
+    // Probing here makes the failing step obvious before we even kick
+    // off startClient. Each probe failure is non-fatal — we surface it
+    // and keep going so /sync still runs if a later step recovers.
+    await this.probeSyncStartup(client);
+
     const opts: IStartClientOpts = {
       initialSyncLimit: 30,
       lazyLoadMembers: true,
