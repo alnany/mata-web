@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "MATA_ENABLE_E2EE=true NODE_OPTIONS=--max-old-space-size=7168 pnpm -r --filter=@mata/web build",
+  "buildCommand": "rm -rf node_modules apps/web/node_modules workers/matrix/node_modules packages/shared/node_modules && pnpm install --frozen-lockfile && MATA_ENABLE_E2EE=true NODE_OPTIONS=--max-old-space-size=7168 pnpm -r --filter=@mata/web build",
   "installCommand": "pnpm install --frozen-lockfile",
   "outputDirectory": "apps/web/dist",
   "framework": null,

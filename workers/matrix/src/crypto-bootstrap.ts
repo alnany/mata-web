@@ -10,17 +10,39 @@
 
 import type { MatrixClient } from 'matrix-js-sdk';
 
+// Force Vite to bundle rust-crypto + crypto-wasm with THIS chunk. Without
+// the static references, matrix-js-sdk's internal
+// `await import("./rust-crypto/index.js")` inside client.js can be
+// invisible to Vite's worker bundler, so the rust-crypto module never
+// makes it into any chunk and runtime crypto init silently fails with
+// `Failed to fetch dynamically imported module`.
+//
+// When MATA_ENABLE_E2EE=false, the Vite alias in apps/web/vite.config.ts
+// rewrites both module ids to the stub, so this entire file gets
+// dead-code-eliminated downstream from the guarded dynamic import in
+// sdk-impl.ts. When E2EE=true, the real modules are pulled in.
+import 'matrix-js-sdk/lib/rust-crypto';
+import '@matrix-org/matrix-sdk-crypto-wasm';
+
 export async function initRustCrypto(
   client: MatrixClient,
   pickleKeyRef: string,
-  cryptoDbName: string,
+  _cryptoDbName: string,
 ): Promise<void> {
   const pickleKey = await derivePickleKey(pickleKeyRef);
+  // matrix-js-sdk 34.x's initRustCrypto API is narrow: { useIndexedDB,
+  // storageKey, storagePassword }. The IndexedDB database name is fixed
+  // by the SDK (RUST_SDK_STORE_PREFIX); we used to pass cryptoDatabasePrefix
+  // but the field is not part of the public signature and was silently
+  // ignored. Kept the param in the signature for forward-compat.
   await client.initRustCrypto({
     useIndexedDB: true,
     storageKey: pickleKey,
-    cryptoDatabasePrefix: cryptoDbName,
   });
+  // Default device isolation = AllDevicesIsolatedMode (send to all known
+  // device keys regardless of trust). That's what Element does and what
+  // unblocks sends to encrypted rooms without verification. Cross-signing
+  // + SAS verification is queued for Phase 5.2.
 }
 
 async function derivePickleKey(ref: string): Promise<Uint8Array> {
