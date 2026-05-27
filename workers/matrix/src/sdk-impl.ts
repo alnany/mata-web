@@ -289,6 +289,92 @@ export class SdkSession {
   // Internals
   // ---------------------------------------------------------------------------
 
+  private buildSdkLogger(): {
+    trace: (...args: unknown[]) => void;
+    debug: (...args: unknown[]) => void;
+    info: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+    getChild: (ns: string) => ReturnType<MatrixCore['buildSdkLogger']>;
+  } {
+    const surface = (level: 'info' | 'warn' | 'error', ns: string, args: unknown[]): void => {
+      // Pretty-print whatever the SDK passed. The first arg is usually a
+      // human string; subsequent args are often Errors or MatrixError
+      // instances whose toString() drops the actual fields.
+      const formatted = args
+        .map((a) => {
+          if (a instanceof Error) {
+            const code =
+              (a as { errcode?: string }).errcode ??
+              (a as { name?: string }).name ??
+              '';
+            return `${code ? `[${code}] ` : ''}${a.message}`;
+          }
+          if (typeof a === 'object' && a !== null) {
+            try {
+              return JSON.stringify(a);
+            } catch {
+              return String(a);
+            }
+          }
+          return String(a);
+        })
+        .join(' ');
+
+      // Drop super-noisy debug paths so the UI banner doesn't churn.
+      const lower = formatted.toLowerCase();
+      const noisy =
+        lower.includes('got reply from saved sync') ||
+        lower.includes('sending initial sync request') ||
+        lower.includes('event sent to') ||
+        lower.includes('decryption keys requested');
+      if (noisy && level !== 'error') return;
+
+      // The smoking-gun line from client.js:454. Anything matching this
+      // pattern is the silent sync-startup hang the heartbeat reports as
+      // "sdk sync state: null" — surface it as a hard error.
+      const silentHang =
+        lower.includes('sync startup aborted') ||
+        lower.includes('failed to start sync');
+      if (silentHang) {
+        this.emit({
+          kind: 'syncStatus',
+          status: 'error',
+          reason: `matrix-js-sdk: ${formatted}`,
+        });
+        return;
+      }
+
+      // Other warn/error from the SDK get surfaced as reconnecting-tier
+      // diagnostics — visible in the banner but don't flip the pill red
+      // unless we're confident the error is fatal.
+      if (level === 'error') {
+        this.emit({
+          kind: 'syncStatus',
+          status: 'reconnecting',
+          reason: `sdk[${ns}] error: ${formatted}`,
+        });
+      } else if (level === 'warn') {
+        this.emit({
+          kind: 'syncStatus',
+          status: 'reconnecting',
+          reason: `sdk[${ns}] warn: ${formatted}`,
+        });
+      }
+    };
+
+    const make = (ns: string): ReturnType<MatrixCore['buildSdkLogger']> => ({
+      trace: () => {},
+      debug: () => {},
+      info: (...args: unknown[]) => surface('info', ns, args),
+      warn: (...args: unknown[]) => surface('warn', ns, args),
+      error: (...args: unknown[]) => surface('error', ns, args),
+      getChild: (sub: string) => make(`${ns}/${sub}`),
+    });
+
+    return make('matrix');
+  }
+
   private requireClient(): MatrixClient {
     if (!this.client) throw authError('Not logged in');
     return this.client;
@@ -312,6 +398,15 @@ export class SdkSession {
       userId: record.userId,
       deviceId: record.deviceId,
       timelineSupport: true,
+      // matrix-js-sdk swallows fatal sync startup errors via
+      //   logger.info("Sync startup aborted with an error:", e)
+      // (see client.js#454). When the silent path triggers, syncState is
+      // left at null forever — exactly the "connecting · sdk sync state:
+      // null" symptom the user reported. We replace the SDK's default
+      // logger with one that re-emits anything matching that signature
+      // (and any `error` call from the sync code) into syncStatus.reason
+      // so the cause becomes visible in the UI.
+      logger: this.buildSdkLogger(),
     });
     this.client = client;
     this.currentUserId = record.userId;
