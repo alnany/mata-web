@@ -24,6 +24,36 @@ import { MataError } from '@mata/shared/errors';
 // handles transpiling the worker entry + dependency graph.
 import MatrixWorker from '@mata/worker-matrix?worker';
 
+/**
+ * Module-level diagnostic counters. The UI can render these directly to
+ * surface what flows through the bridge without needing browser DevTools.
+ *
+ * Phase 5 sync hang was originally invisible because every observable
+ * surface depended on a handler being attached BEFORE the worker emitted.
+ * These counters tick on every envelope the message handler sees,
+ * regardless of any handler being registered, so we can prove whether the
+ * worker → main message channel is alive.
+ */
+export interface BridgeDiag {
+  envelopes: number;
+  responses: number;
+  events: number;
+  errors: number;
+  byKind: Record<string, number>;
+  lastEvent: { kind: string; at: number; preview: string } | null;
+  latchKinds: string[];
+}
+
+export const bridgeDiag: BridgeDiag = {
+  envelopes: 0,
+  responses: 0,
+  events: 0,
+  errors: 0,
+  byKind: {},
+  lastEvent: null,
+  latchKinds: [],
+};
+
 type EventHandler<K extends WorkerEvent['kind']> = (
   event: Extract<WorkerEvent, { kind: K }>,
 ) => void;
@@ -38,12 +68,39 @@ export function createMatrixBridge(): MatrixBridge {
   const pending = new Map<string, Pending>();
   const listeners = new Map<WorkerEvent['kind'], Set<EventHandler<WorkerEvent['kind']>>>();
 
+  /**
+   * Latched last-known value for kinds where late subscribers must see the
+   * most recent state (e.g. `syncStatus`). The worker emits `syncStatus`
+   * during boot, often before the consuming component mounts. Without
+   * replay, the UI would sit on a stale default ("connecting") forever.
+   */
+  const latched = new Map<WorkerEvent['kind'], WorkerEvent>();
+  const LATCH_KINDS = new Set<WorkerEvent['kind']>(['syncStatus']);
+
   let counter = 0;
   const nextId = (): string => `rpc-${++counter}`;
 
   worker.addEventListener('message', (ev: MessageEvent<ResponseEnvelope | EventEnvelope>) => {
     const env = ev.data;
+    bridgeDiag.envelopes += 1;
     if (!env) return;
+
+    if (env.type === 'response') {
+      bridgeDiag.responses += 1;
+    } else if (env.type === 'event') {
+      bridgeDiag.events += 1;
+      const k = env.payload.kind;
+      bridgeDiag.byKind[k] = (bridgeDiag.byKind[k] ?? 0) + 1;
+      try {
+        bridgeDiag.lastEvent = {
+          kind: k,
+          at: Date.now(),
+          preview: JSON.stringify(env.payload).slice(0, 200),
+        };
+      } catch {
+        bridgeDiag.lastEvent = { kind: k, at: Date.now(), preview: '<unserialisable>' };
+      }
+    }
 
     if (env.type === 'response') {
       const slot = pending.get(env.id);
@@ -62,6 +119,10 @@ export function createMatrixBridge(): MatrixBridge {
     }
 
     if (env.type === 'event') {
+      if (LATCH_KINDS.has(env.payload.kind)) {
+        latched.set(env.payload.kind, env.payload);
+        bridgeDiag.latchKinds = Array.from(latched.keys()).map(String);
+      }
       const set = listeners.get(env.payload.kind);
       if (!set) return;
       for (const handler of set) {
@@ -113,6 +174,19 @@ export function createMatrixBridge(): MatrixBridge {
       listeners.set(kind, set);
     }
     set.add(handler as EventHandler<WorkerEvent['kind']>);
+    // Replay last-known value for latched kinds — late subscribers see the
+    // current state immediately instead of waiting for the next transition.
+    if (LATCH_KINDS.has(kind)) {
+      const last = latched.get(kind);
+      if (last) {
+        try {
+          (handler as (event: WorkerEvent) => void)(last);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error('[bridge] replay handler threw', err);
+        }
+      }
+    }
     return () => {
       set?.delete(handler as EventHandler<WorkerEvent['kind']>);
     };
