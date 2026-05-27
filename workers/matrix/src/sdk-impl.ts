@@ -774,20 +774,22 @@ function normalizeServerUrl(input: string): string {
 
 function mapLoginError(err: unknown): Error {
   const msg = describe(err);
-  // DIAG: include raw error in message so we can surface what conduwuit / SDK actually returned.
-  // The regex classifier was over-matching on transport-layer errors that happen to include
-  // strings like "incorrect" or similar.  Once we have the real msg the classifier comes back.
-  const detail = msg.slice(0, 500);
-  if (/M_FORBIDDEN|invalid.*username|invalid.*password/i.test(msg)) {
-    return authError(`Invalid username or password [raw: ${detail}]`);
+  // Match on Matrix error codes only — never on free-text substrings, which
+  // misclassified transport-layer errors as auth failures (the `M_INVALID_USERNAME`
+  // → "Invalid username or password" confusion that masked the real bug for hours).
+  if (/M_FORBIDDEN|M_UNKNOWN_TOKEN|M_MISSING_TOKEN|M_BAD_JSON/i.test(msg)) {
+    return authError('Invalid username or password');
   }
-  if (/M_LIMIT_EXCEEDED|rate.?limit/i.test(msg)) {
-    return authError(`Too many attempts — wait a moment and try again [raw: ${detail}]`);
+  if (/M_USER_IN_USE|M_INVALID_USERNAME/i.test(msg)) {
+    return authError('That username is not accepted by this homeserver');
+  }
+  if (/M_LIMIT_EXCEEDED/i.test(msg)) {
+    return authError('Too many attempts — wait a moment and try again');
   }
   if (/M_USER_DEACTIVATED/i.test(msg)) {
-    return authError(`This account has been deactivated [raw: ${detail}]`);
+    return authError('This account has been deactivated');
   }
-  return authError(`Sign-in failed: ${detail}`);
+  return authError(`Sign-in failed: ${msg.slice(0, 300)}`);
 }
 
 function classifyRoom(room: Room): 'dm' | 'room' | 'space' {
