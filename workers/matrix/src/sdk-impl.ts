@@ -424,21 +424,41 @@ export class SdkSession {
 
   private wireListeners(client: MatrixClient): void {
     client.on(ClientEvent.Sync, (state: SyncState, _prev: SyncState | null, data?: unknown) => {
+      // Pull the error payload off the data object — matrix-js-sdk attaches
+      // the last network/HTTP error there on Reconnecting/Catchup/Error,
+      // and without surfacing it the user just sees "reconnecting" with no
+      // explanation. Common shapes: { error: MatrixError }, MatrixError
+      // (HTTP 401/403/429/5xx), or fetch TypeError (CORS, DNS, offline).
+      const errPayload =
+        data && typeof data === 'object' && 'error' in data
+          ? (data as { error: unknown }).error
+          : undefined;
+      const errStr = errPayload ? `: ${describe(errPayload)}` : '';
       switch (state) {
         case SyncState.Prepared:
         case SyncState.Syncing:
-          this.emit({ kind: 'syncStatus', status: 'syncing' });
+          this.emit({
+            kind: 'syncStatus',
+            status: 'syncing',
+            reason: state === SyncState.Prepared
+              ? `prepared (rooms: ${client.getRooms().length})`
+              : undefined,
+          });
           if (state === SyncState.Prepared) this.emitInitialRooms(client);
           break;
         case SyncState.Reconnecting:
         case SyncState.Catchup:
-          this.emit({ kind: 'syncStatus', status: 'reconnecting' });
+          this.emit({
+            kind: 'syncStatus',
+            status: 'reconnecting',
+            reason: `sdk: ${state}${errStr}`,
+          });
           break;
         case SyncState.Error:
           this.emit({
             kind: 'syncStatus',
             status: 'error',
-            reason: data instanceof Error ? data.message : 'sync error',
+            reason: errPayload ? describe(errPayload) : (data instanceof Error ? data.message : 'sync error'),
           });
           break;
         case SyncState.Stopped:

@@ -125,6 +125,65 @@ export function installBridge(scope: DedicatedWorkerGlobalScope): BridgeContext 
     scope.postMessage(envelope);
   };
 
+  // Intercept fetch INSIDE the worker so /sync, /keys/upload, /keys/query
+  // failures show up in the UI banner instead of being swallowed by
+  // matrix-js-sdk's internal retry loop. matrix-js-sdk silently retries
+  // most network errors and never re-emits Sync.Error for transient
+  // failures (CORS, DNS, 429, 5xx) — so the pill sits at "connecting"
+  // forever while every /sync is failing in the background. We don't
+  // change behavior, just announce the first non-200 we see per endpoint.
+  const seenFailures = new Set<string>();
+  const origFetch = scope.fetch.bind(scope);
+  scope.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+        ? input.toString()
+        : input.url;
+    // Only instrument matrix-client endpoints, not every fetch in the
+    // worker (wasm streaming, etc.).
+    const isMatrix = url.includes('/_matrix/');
+    try {
+      const res = await origFetch(input, init);
+      if (isMatrix && !res.ok) {
+        const endpoint = url.replace(/^.*\/_matrix\//, '/_matrix/').split('?')[0];
+        const key = `${res.status}:${endpoint}`;
+        if (!seenFailures.has(key)) {
+          seenFailures.add(key);
+          emit({
+            kind: 'syncStatus',
+            status: 'reconnecting',
+            reason: `http ${res.status} on ${endpoint}`,
+          });
+        }
+      }
+      return res;
+    } catch (err) {
+      if (isMatrix) {
+        const endpoint = url.replace(/^.*\/_matrix\//, '/_matrix/').split('?')[0];
+        const msg = err instanceof Error ? err.message : String(err);
+        // Network-level failures (CORS, DNS, offline, TLS) hit this
+        // branch. TypeError "Failed to fetch" is browser-speak for CORS
+        // or DNS in 95% of cases — name it explicitly so users don't
+        // have to guess.
+        const hint = msg.includes('Failed to fetch')
+          ? `${msg} (likely CORS or DNS — the homeserver must allow ${scope.location.origin} as Origin)`
+          : msg;
+        const key = `neterr:${endpoint}`;
+        if (!seenFailures.has(key)) {
+          seenFailures.add(key);
+          emit({
+            kind: 'syncStatus',
+            status: 'error',
+            reason: `network on ${endpoint}: ${hint}`,
+          });
+        }
+      }
+      throw err;
+    }
+  };
+
   const core = new MatrixCore(emit);
 
   // Catch anything that escapes a handler's try/catch (silent worker hangs
