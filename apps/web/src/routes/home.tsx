@@ -39,21 +39,19 @@ export function HomePage() {
     bridge.on('syncStatus', (e) => {
       setSyncState(e.status);
       setSyncReason(e.reason ?? '');
-      const reason = e.reason ?? '';
-      if (reason) {
-        setSyncLog((prev) => {
-          // Dedup against most recent entry: the heartbeat emits the same
-          // "sdk sync state: null" line every 4s; we only want one copy.
-          const last = prev[prev.length - 1];
-          if (last && last.state === e.status && last.reason === reason) {
-            return prev;
-          }
-          const next = [...prev, { at: Date.now(), state: e.status, reason }];
-          return next.length > SYNC_LOG_MAX
-            ? next.slice(next.length - SYNC_LOG_MAX)
-            : next;
-        });
-      }
+      const reason = e.reason ?? '<no reason>';
+      setSyncLog((prev) => {
+        // Dedup against most recent entry: the heartbeat emits the same
+        // "sdk sync state: null" line every 4s; we only want one copy.
+        const last = prev[prev.length - 1];
+        if (last && last.state === e.status && last.reason === reason) {
+          return prev;
+        }
+        const next = [...prev, { at: Date.now(), state: e.status, reason }];
+        return next.length > SYNC_LOG_MAX
+          ? next.slice(next.length - SYNC_LOG_MAX)
+          : next;
+      });
       if (e.status === 'error' && e.reason) {
         showToast('error', `Sync error: ${e.reason}`, 8000);
       }
@@ -301,8 +299,7 @@ function SyncBanner(props: {
 }) {
   const visible = () =>
     props.state !== 'syncing' &&
-    props.state !== 'idle' &&
-    props.log.length > 0;
+    props.state !== 'idle';
   const tone = () =>
     props.state === 'error'
       ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300'
@@ -324,6 +321,7 @@ function SyncBanner(props: {
         <div class="flex items-center justify-between px-3 py-1 text-[10px] uppercase tracking-wider opacity-70">
           <span>
             sync log · {props.log.length} entries · latest: {props.state}
+            {props.reason ? ` · ${props.reason.slice(0, 80)}` : ' · <no reason>'}
           </span>
           <button
             type="button"
