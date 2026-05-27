@@ -690,28 +690,33 @@ export class SdkSession {
       status: 'connecting',
       reason: `client.startClient returned (${Date.now() - startClientAt}ms) — awaiting /sync`,
     });
-    // WATCHDOG: instrument crypto.onSyncCompleted.
+    // WATCHDOG: observe crypto.onSyncCompleted (do NOT race / release).
     //
-    // User-reported symptom: /sync returns 200 with valid data, but the
-    // SDK never transitions out of `null` syncState. The /sync URL in
-    // the user's network tab came back, our fetch tracer logged it, and
-    // then the SDK went silent — no /keys/upload, no /keys/query, no
-    // state transition. That's matrix-js-sdk's processSyncResponse()
-    // hanging on an internal await. The most likely await is the rust
-    // crypto bridge's `onSyncCompleted(syncData)` — it calls
-    // OlmMachine.receive_sync_changes in wasm, which can deadlock on
-    // restoration with stale device-tracking state (known issue in
-    // matrix-sdk-crypto-wasm <= 9.0.0; bumped to 9.1.0 but keeping the
-    // watchdog as belt-and-suspenders).
+    // Earlier (db9bef9a) this raced onSyncCompleted against a 10s timeout
+    // and resolved the watchdog branch if the real call hadn't returned.
+    // That was wrong. After resetting crypto to a brand new device on a
+    // 99-room account, the user still saw "exceeded 10s" — fresh store,
+    // so it can't be on-disk corruption. The smoking gun was two timeouts
+    // 200ms apart (call #1 +16.6s, call #2 +16.8s): if the watchdog
+    // resolves to undefined, matrix-js-sdk thinks onSyncCompleted finished
+    // and fires the next /sync. Its onSyncCompleted starts while the
+    // PREVIOUS real wasm call is still mid-flight. They serialize on
+    // IndexedDB, each one runs slower than the last, and we get a cascade
+    // of false "deadlock" alarms.
     //
-    // The patch races onSyncCompleted against a 10s timeout. If the
-    // wasm call returns normally, behavior is unchanged. If it hangs,
-    // we resolve the Promise ourselves so processSyncResponse can
-    // continue to updateSyncState(SYNCING) and the UI unblocks. The
-    // user loses crypto post-processing for that one sync cycle, but
-    // sync itself recovers — which is exactly the right tradeoff for
-    // an interactive client (a broken pill is worse than a sync that
-    // skipped one device-list update).
+    // It's not a deadlock — on first sync after fresh login with 99 rooms,
+    // wasm legitimately has to process device-list updates and to-device
+    // events for every member of every room. That can take >10s on a
+    // single-threaded wasm + IDB pipeline. Releasing the sync loop early
+    // turned a slow-but-finite catchup into a self-induced congestion
+    // collapse.
+    //
+    // New behavior: log progressively, but never short-circuit. We await
+    // the real call. matrix-js-sdk's natural backpressure (one sync at a
+    // time) is preserved. Tags >2s, >5s, >15s, >30s as the call runs so
+    // the banner shows "this is slow, still working" instead of "broken".
+    // If a real deadlock ever happens, the banner will sit at >30s and we
+    // can decide then; the current shape stops manufacturing the problem.
     if (ENABLE_E2EE) {
       try {
         type CryptoApiLike = {
@@ -721,43 +726,56 @@ export class SdkSession {
         if (crypto && typeof crypto.onSyncCompleted === 'function') {
           const original = crypto.onSyncCompleted.bind(crypto);
           let nthCall = 0;
-          crypto.onSyncCompleted = (data: unknown): Promise<void> => {
+          crypto.onSyncCompleted = async (data: unknown): Promise<void> => {
             const callId = ++nthCall;
             const startedAt = Date.now();
-            const watchdog = new Promise<void>((resolve) =>
-              setTimeout(() => {
-                this.emit({
-                  kind: 'syncStatus',
-                  status: 'error',
-                  reason: `crypto.onSyncCompleted call #${callId} exceeded 10s — releasing sync loop. wasm bridge may have deadlocked; encrypted room key updates from this batch may be skipped.`,
-                });
-                resolve();
-              }, 10_000),
-            );
-            const real = Promise.resolve(original(data))
-              .then(() => {
-                const dur = Date.now() - startedAt;
-                if (dur > 2_000) {
+            // Fire-and-forget progress beacons. Each beacon clears itself
+            // when the real call resolves.
+            let finished = false;
+            const beacons: ReturnType<typeof setTimeout>[] = [];
+            const beacon = (ms: number, label: string): void => {
+              beacons.push(
+                setTimeout(() => {
+                  if (finished) return;
                   this.emit({
                     kind: 'syncStatus',
                     status: 'connecting',
-                    reason: `crypto.onSyncCompleted call #${callId} took ${dur}ms (slow)`,
+                    reason: `crypto.onSyncCompleted call #${callId} still running at ${label} (first-sync catchup may be heavy; not releasing the loop)`,
                   });
-                }
-              })
-              .catch((err) => {
+                }, ms),
+              );
+            };
+            beacon(2_000, '2s');
+            beacon(5_000, '5s');
+            beacon(15_000, '15s');
+            beacon(30_000, '30s');
+            try {
+              await original(data);
+              finished = true;
+              for (const id of beacons) clearTimeout(id);
+              const dur = Date.now() - startedAt;
+              if (dur > 2_000) {
                 this.emit({
                   kind: 'syncStatus',
-                  status: 'reconnecting',
-                  reason: `crypto.onSyncCompleted call #${callId} rejected: ${describe(err)}`,
+                  status: 'connecting',
+                  reason: `crypto.onSyncCompleted call #${callId} completed in ${dur}ms`,
                 });
+              }
+            } catch (err) {
+              finished = true;
+              for (const id of beacons) clearTimeout(id);
+              this.emit({
+                kind: 'syncStatus',
+                status: 'reconnecting',
+                reason: `crypto.onSyncCompleted call #${callId} rejected after ${Date.now() - startedAt}ms: ${describe(err)}`,
               });
-            return Promise.race([real, watchdog]);
+              // Swallow — the SDK does not want us to throw from this hook.
+            }
           };
           this.emit({
             kind: 'syncStatus',
             status: 'connecting',
-            reason: 'watchdog: crypto.onSyncCompleted wrapped with 10s timeout',
+            reason: 'watchdog: crypto.onSyncCompleted instrumented (observe-only, no release)',
           });
         }
       } catch (err) {
