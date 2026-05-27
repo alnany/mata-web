@@ -4,6 +4,9 @@ import { useNavigate, useLocation } from '@solidjs/router';
 import { createMatrixBridge } from './bridge/worker-client.js';
 import { BridgeContext } from './bridge/context.js';
 import { session, setSession } from './stores/session.js';
+import { ToastRoot } from './components/toast-root.js';
+// Side-effect: bootstrap the theme classes on <html> at app load.
+import './stores/theme.js';
 import type { MatrixBridge } from '@mata/shared/rpc';
 
 export function App(props: ParentProps) {
@@ -36,23 +39,26 @@ export function App(props: ParentProps) {
   });
 
   return (
-    <Switch>
-      <Match when={bridge() && bootError() === null}>
-        {/* biome-ignore lint/style/noNonNullAssertion: guarded by Match */}
-        <BridgeContext.Provider value={bridge()!}>
-          <SessionRouter>{props.children}</SessionRouter>
-        </BridgeContext.Provider>
-      </Match>
-      <Match when={true}>
-        <BootScreen
-          error={bootError()}
-          onRetry={() => {
-            setBootError(null);
-            window.location.reload();
-          }}
-        />
-      </Match>
-    </Switch>
+    <>
+      <Switch>
+        <Match when={bridge() && bootError() === null}>
+          {/* biome-ignore lint/style/noNonNullAssertion: guarded by Match */}
+          <BridgeContext.Provider value={bridge()!}>
+            <SessionRouter>{props.children}</SessionRouter>
+          </BridgeContext.Provider>
+        </Match>
+        <Match when={true}>
+          <BootScreen
+            error={bootError()}
+            onRetry={() => {
+              setBootError(null);
+              window.location.reload();
+            }}
+          />
+        </Match>
+      </Switch>
+      <ToastRoot />
+    </>
   );
 }
 

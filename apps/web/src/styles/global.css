@@ -18,6 +18,69 @@
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }
 
+/*
+ * Root flex chain: html/body are already h-full from index.html.
+ * Without explicit height on #root, our 100%-cascading layout collapsed
+ * to content-size and the chat list pushed the composer off-screen.
+ */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* Light/dark theme is toggled by adding `.dark` to <html>. */
+html.dark {
+  color-scheme: dark;
+}
+
+/* Telegram-style scroll behaviour: thin scrollbars, no jank. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 120, 120, 0.35) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(120, 120, 120, 0.35);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 120, 120, 0.55);
+}
+
+/* Smooth message-bubble entry animation. */
+@keyframes mata-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.msg-enter {
+  animation: mata-fade-up 160ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+/* Toast entry */
+@keyframes mata-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.toast-enter {
+  animation: mata-toast-in 180ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
 /* Performance budget hygiene: never animate layout props. */
 * {
   -webkit-font-smoothing: antialiased;
