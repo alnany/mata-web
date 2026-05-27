@@ -10,7 +10,7 @@ import {
 } from 'solid-js';
 import { useBridge } from '../bridge/context.js';
 import { session } from '../stores/session.js';
-import { showToast } from '../stores/toast.js';
+import { dismissToast, showToast } from '../stores/toast.js';
 import type {
   EventId,
   MessageBody,
@@ -423,6 +423,48 @@ export function RoomView(props: {
     setDraft('');
   };
 
+  // ---- Attachment send ---------------------------------------------------
+  //
+  // Decode dimensions for images client-side so the event info is
+  // accurate (other clients trust it for layout). Skip the optimistic
+  // pending row for now — a real file blob doesn't compress well into a
+  // PendingMessage, and the event ID comes back fast enough that the
+  // toast carries the user through the gap.
+  const handleAttach = (file: File) => {
+    const shortName = file.name.length > 32 ? `${file.name.slice(0, 30)}…` : file.name;
+    const toastId = showToast('info', `Uploading ${shortName}…`);
+    void (async () => {
+      try {
+        const data = await file.arrayBuffer();
+        const info: {
+          mimetype: string;
+          size: number;
+          w?: number;
+          h?: number;
+        } = { mimetype: file.type || 'application/octet-stream', size: file.size };
+        if (file.type.startsWith('image/')) {
+          const dims = await readImageDimensions(file);
+          if (dims) {
+            info.w = dims.w;
+            info.h = dims.h;
+          }
+        }
+        await bridge.request({
+          kind: 'sendFileMessage',
+          roomId: props.room.roomId,
+          data,
+          filename: file.name,
+          info,
+          txnId: mkTxn(),
+        });
+        dismissToast(toastId);
+      } catch (err) {
+        dismissToast(toastId);
+        showToast('error', `Upload failed: ${msgOf(err)}`);
+      }
+    })();
+  };
+
   // ---- Message action wiring ---------------------------------------------
   const actions: MessageActions = {
     onReply: (ev) => {
@@ -560,6 +602,7 @@ export function RoomView(props: {
         onCancelContext={cancelContext}
         onSubmit={submit}
         onTyping={sendTyping}
+        onAttach={handleAttach}
         focusToken={focusToken}
       />
     </section>
@@ -607,6 +650,28 @@ function PendingRow(props: { pending: PendingEvent }) {
 
 function mkTxn(): string {
   return `m${Date.now()}.${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Read an image's intrinsic dimensions by loading it into an
+ * HTMLImageElement off-DOM. Resolves to null for non-image files or
+ * decode errors — caller treats that as "no dims, send anyway" rather
+ * than blocking the upload.
+ */
+function readImageDimensions(file: File): Promise<{ w: number; h: number } | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+    img.src = url;
+  });
 }
 
 function msgOf(err: unknown): string {

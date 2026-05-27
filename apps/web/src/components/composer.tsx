@@ -16,10 +16,13 @@ export function Composer(props: {
   onCancelContext: () => void;
   onSubmit: () => void;
   onTyping: () => void;
+  /** Called when the user picks a file from the attach button. */
+  onAttach?: (file: File) => void;
   /** Tells parent the textarea wants focus (after picking reply target etc). */
   focusToken: Accessor<number>;
 }) {
   let textareaRef: HTMLTextAreaElement | undefined;
+  let fileInputRef: HTMLInputElement | undefined;
 
   // Auto-focus after any context change.
   createEffect(
@@ -91,6 +94,28 @@ export function Composer(props: {
       </Show>
 
       <div class="flex items-end gap-2">
+        <Show when={props.onAttach && !props.editing}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            class="hidden"
+            onChange={(e) => {
+              const file = e.currentTarget.files?.[0];
+              if (file && props.onAttach) props.onAttach(file);
+              // Reset so the same file can be picked again later.
+              e.currentTarget.value = '';
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef?.click()}
+            class="h-9 w-9 shrink-0 rounded-full text-neutral-500 transition-colors hover:bg-neutral-200 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+            aria-label="Attach file"
+            title="Attach file"
+          >
+            📎
+          </button>
+        </Show>
         <textarea
           ref={textareaRef}
           value={props.draft()}

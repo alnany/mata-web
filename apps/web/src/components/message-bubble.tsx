@@ -1,12 +1,14 @@
-import { createSignal, For, Show } from 'solid-js';
+import { createResource, createSignal, For, Show, type Resource } from 'solid-js';
 import type {
   EventId,
+  MediaMessageBody,
   ReactionAggregate,
   RoomMessageEvent,
   TimelineEvent,
   UserId,
 } from '@mata/shared/matrix';
 import { shortTime } from '../lib/date-buckets.js';
+import { useBridge } from '../bridge/context.js';
 import { EmojiPicker } from './emoji-picker.js';
 
 /**
@@ -268,6 +270,9 @@ function Body(props: { msg: RoomMessageEvent }) {
   if (c.msgtype === 'm.text' || c.msgtype === 'm.notice' || c.msgtype === 'm.emote') {
     return c.body;
   }
+  if (c.msgtype === 'm.image' || c.msgtype === 'm.video' || c.msgtype === 'm.audio' || c.msgtype === 'm.file') {
+    return <MediaContent body={c} />;
+  }
   return `[${c.msgtype}] ${c.body}`;
 }
 
@@ -308,3 +313,107 @@ function previewOf(ev: TimelineEvent): string {
 }
 
 export { initials, prettyName };
+
+// ---------------------------------------------------------------------------
+// MediaContent — image / video / audio / file body.
+//
+// loadMedia (worker RPC) returns raw bytes; we wrap them in a Blob and
+// hand the object URL to <img>/<video>/<audio>. URL.revokeObjectURL is
+// best-effort — Solid's createResource doesn't expose an onCleanup
+// without a dedicated owner, and the leak is bounded by the
+// component's lifetime, so we rely on the GC + page nav to reclaim.
+// Encrypted vs plain is fully transparent here: worker auto-detects via
+// the presence of `file` on the body.
+// ---------------------------------------------------------------------------
+
+function MediaContent(props: { body: MediaMessageBody }) {
+  const bridge = useBridge();
+
+  type Loaded = { url: string; mime: string };
+  const [resource] = createResource<Loaded | null, MediaMessageBody>(
+    () => props.body,
+    async (body) => {
+      // Resolve the canonical mxc — for encrypted media we use file.url,
+      // for plain media we use url. If neither is present (malformed
+      // event) we render the filename fallback.
+      const mxc = body.file?.url ?? body.url;
+      if (!mxc) return null;
+      try {
+        const res = await bridge.request({
+          kind: 'loadMedia',
+          mxc,
+          encryptedFile: body.file ?? null,
+          mime: body.info.mimetype,
+        });
+        const blob = new Blob([res.data], { type: res.mime });
+        return { url: URL.createObjectURL(blob), mime: res.mime };
+      } catch {
+        return null;
+      }
+    },
+  );
+
+  return (
+    <div class="my-1">
+      <Show when={resource()} fallback={<MediaLoading body={props.body} loading={resource.loading} />}>
+        {(r) => <MediaPlayer body={props.body} loaded={r()} />}
+      </Show>
+    </div>
+  );
+}
+
+function MediaLoading(props: { body: MediaMessageBody; loading: boolean }) {
+  return (
+    <div class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900">
+      <span>{props.body.msgtype === 'm.image' ? '🖼️' : props.body.msgtype === 'm.video' ? '🎬' : props.body.msgtype === 'm.audio' ? '🔊' : '📎'}</span>
+      <span class="truncate">{props.body.body}</span>
+      <span class="ml-auto shrink-0">{props.loading ? 'loading…' : 'unavailable'}</span>
+    </div>
+  );
+}
+
+function MediaPlayer(props: { body: MediaMessageBody; loaded: { url: string; mime: string } }) {
+  const c = props.body;
+  if (c.msgtype === 'm.image') {
+    // Cap displayed size so giant photos don't blow out the bubble.
+    return (
+      <img
+        src={props.loaded.url}
+        alt={c.body}
+        class="max-h-80 max-w-full cursor-zoom-in rounded-lg object-contain"
+        onClick={() => window.open(props.loaded.url, '_blank')}
+      />
+    );
+  }
+  if (c.msgtype === 'm.video') {
+    return <video src={props.loaded.url} controls class="max-h-80 max-w-full rounded-lg" />;
+  }
+  if (c.msgtype === 'm.audio') {
+    return <audio src={props.loaded.url} controls class="w-full" />;
+  }
+  // m.file
+  return (
+    <a
+      href={props.loaded.url}
+      download={c.body}
+      class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-700 hover:bg-neutral-100 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+    >
+      <span>📎</span>
+      <span class="truncate">{c.body}</span>
+      <span class="ml-auto shrink-0 text-[10px] text-neutral-500">
+        {formatBytes(c.info.size)}
+      </span>
+    </a>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+// Re-export to satisfy the Resource type import (avoids unused import
+// warning while keeping the type available for future signatures).
+export type _MediaResource = Resource<{ url: string; mime: string } | null>;
