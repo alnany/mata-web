@@ -1,0 +1,25 @@
+{
+  "name": "@mata/worker-matrix",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "echo \"@mata/worker-matrix is bundled by @mata/web's Vite config\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@mata/shared": "workspace:*",
+    "@matrix-org/matrix-sdk-crypto-wasm": "9.0.0",
+    "idb": "8.0.0",
+    "matrix-js-sdk": "34.11.1"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3",
+    "vitest": "2.1.5"
+  }
+}

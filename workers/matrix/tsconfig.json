@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "WebWorker"],
+    "types": [],
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "noEmit": true,
+    "paths": {
+      "@mata/shared": ["../../packages/shared/src/index.ts"],
+      "@mata/shared/*": ["../../packages/shared/src/*"]
+    }
+  },
+  "include": ["src/**/*"]
+}

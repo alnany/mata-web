@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.turbo/
+.vercel/
+.env*
+*.log
+.DS_Store
+.cache/
+coverage/
+.idea/
+.vscode/

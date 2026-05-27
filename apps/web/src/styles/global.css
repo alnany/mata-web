@@ -1,0 +1,31 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-mata-50: #f5f7fa;
+  --color-mata-100: #e7edf3;
+  --color-mata-500: #4f7cac;
+  --color-mata-600: #3d6291;
+  --color-mata-900: #0f172a;
+
+  --font-sans:
+    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:
+    ui-monospace, 'SF Mono', Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', monospace;
+}
+
+:root {
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+/* Performance budget hygiene: never animate layout props. */
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Offscreen rows skip layout/paint. Used by the virtualized timeline. */
+.row-vis {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+}

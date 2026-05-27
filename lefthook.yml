@@ -1,0 +1,21 @@
+# See: https://lefthook.dev
+# Run: pnpm prepare  (installs hooks)
+pre-commit:
+  parallel: true
+  commands:
+    biome:
+      glob: "*.{ts,tsx,js,jsx,json,jsonc}"
+      run: pnpm exec biome check --write --no-errors-on-unmatched {staged_files} && git add {staged_files}
+    typecheck:
+      glob: "*.{ts,tsx}"
+      run: pnpm typecheck
+
+commit-msg:
+  commands:
+    commitlint:
+      run: pnpm exec commitlint --edit {1}
+
+pre-push:
+  commands:
+    test:
+      run: pnpm test

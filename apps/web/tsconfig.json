@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
+    "noEmit": true,
+    "paths": {
+      "@mata/shared": ["../../packages/shared/src/index.ts"],
+      "@mata/shared/*": ["../../packages/shared/src/*"],
+      "@mata/worker-matrix": ["../../workers/matrix/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*", "tests/**/*", "vite.config.ts", "playwright.config.ts"]
+}

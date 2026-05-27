@@ -1,0 +1,23 @@
+{
+  "name": "@mata/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./rpc": "./src/rpc-contract.ts",
+    "./errors": "./src/errors.ts",
+    "./matrix": "./src/matrix-types.ts"
+  },
+  "scripts": {
+    "build": "echo \"@mata/shared is consumed via TS sources, no build step\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3",
+    "vitest": "2.1.5"
+  }
+}
