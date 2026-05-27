@@ -5,6 +5,7 @@ import { themeMode, setThemeMode, type ThemeMode } from '../stores/theme.js';
 import { withToast } from '../stores/toast.js';
 import { useNavigate } from '@solidjs/router';
 import type { Device } from '@mata/shared/matrix';
+import { EncryptionPanel } from './encryption-panel.js';
 
 /**
  * Settings drawer — slides in from the left over the app shell.
@@ -24,7 +25,9 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
   const bridge = useBridge();
   const navigate = useNavigate();
 
-  const [tab, setTab] = createSignal<'profile' | 'appearance' | 'devices'>('profile');
+  const [tab, setTab] = createSignal<
+    'profile' | 'appearance' | 'encryption' | 'devices'
+  >('profile');
 
   const [devices] = createResource<Device[]>(
     () => (props.open && tab() === 'devices' ? Math.random() : null), // refetch when tab opened
@@ -151,7 +154,7 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
             </button>
           </header>
           <nav class="flex gap-1 border-b border-neutral-200 px-4 dark:border-neutral-800">
-            {(['profile', 'appearance', 'devices'] as const).map((t) => (
+            {(['profile', 'appearance', 'encryption', 'devices'] as const).map((t) => (
               <button
                 type="button"
                 onClick={() => setTab(t)}
@@ -225,6 +228,10 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
               </div>
             </Show>
 
+            <Show when={tab() === 'encryption'}>
+              <EncryptionPanel />
+            </Show>
+
             <Show when={tab() === 'devices'}>
               <div class="space-y-2">
                 <Show
@@ -260,7 +267,9 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
                   </Show>
                 </Show>
                 <p class="pt-3 text-[11px] text-neutral-500">
-                  Device verification and key backup land with the encryption rollout.
+                  Devices marked verified have been cross-signed with your
+                  master key. Set up key backup in the Encryption tab to
+                  unlock cross-device key recovery.
                 </p>
               </div>
             </Show>
