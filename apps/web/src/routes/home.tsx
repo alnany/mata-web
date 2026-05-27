@@ -25,10 +25,35 @@ export function HomePage() {
   // Stage hint (e.g., 'loading crypto (~9MB)') — shown next to the pill so
   // a stuck startup is observable, not silent.
   const [syncReason, setSyncReason] = createSignal<string>('');
+  // Append-only log of every distinct (state, reason) pair the worker has
+  // emitted, in time order. The pill / single-reason banner is useless for
+  // debugging a startup hang because the 4-second heartbeat overwrites
+  // every interesting trace within 4s with "sdk sync state: null". This
+  // log preserves every emit so the user can SEE the worker's progress
+  // (or the exact point at which it stops emitting) without DevTools.
+  // Bounded ring buffer so a long-running session can't OOM.
+  type SyncLogEntry = { at: number; state: string; reason: string };
+  const [syncLog, setSyncLog] = createSignal<SyncLogEntry[]>([]);
+  const SYNC_LOG_MAX = 30;
   onCleanup(
     bridge.on('syncStatus', (e) => {
       setSyncState(e.status);
       setSyncReason(e.reason ?? '');
+      const reason = e.reason ?? '';
+      if (reason) {
+        setSyncLog((prev) => {
+          // Dedup against most recent entry: the heartbeat emits the same
+          // "sdk sync state: null" line every 4s; we only want one copy.
+          const last = prev[prev.length - 1];
+          if (last && last.state === e.status && last.reason === reason) {
+            return prev;
+          }
+          const next = [...prev, { at: Date.now(), state: e.status, reason }];
+          return next.length > SYNC_LOG_MAX
+            ? next.slice(next.length - SYNC_LOG_MAX)
+            : next;
+        });
+      }
       if (e.status === 'error' && e.reason) {
         showToast('error', `Sync error: ${e.reason}`, 8000);
       }
@@ -140,7 +165,11 @@ export function HomePage() {
           <span class="text-sm font-semibold tracking-tight">Mata</span>
           <SyncPill state={syncState()} reason={syncReason()} />
         </header>
-        <SyncBanner state={syncState()} reason={syncReason()} />
+        <SyncBanner
+          state={syncState()}
+          reason={syncReason()}
+          log={syncLog()}
+        />
 
         <div class="border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
           <div class="relative">
@@ -260,24 +289,64 @@ function SyncPill(props: { state: string; reason?: string }) {
 
 // Dedicated diagnostic banner — full-width under the sidebar header — so
 // stage hints / errors are readable instead of getting truncated in the
-// 130-ish-pixel slot the pill has. Only renders when there's something
-// worth showing.
-function SyncBanner(props: { state: string; reason?: string }) {
+// 130-ish-pixel slot the pill has. Renders a SCROLLING LOG of every
+// distinct syncStatus emit so a stuck startup is fully observable: the
+// user can see the worker's last successful step, the exact point it
+// stopped emitting, and any HTTP traces from the fetch interceptor.
+// Only renders when sync is not healthy.
+function SyncBanner(props: {
+  state: string;
+  reason?: string;
+  log: ReadonlyArray<{ at: number; state: string; reason: string }>;
+}) {
   const visible = () =>
-    !!props.reason &&
     props.state !== 'syncing' &&
-    props.state !== 'idle';
+    props.state !== 'idle' &&
+    props.log.length > 0;
   const tone = () =>
     props.state === 'error'
       ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300'
       : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300';
+  const t0 = () => props.log[0]?.at ?? Date.now();
+  const dt = (at: number) => {
+    const ms = at - t0();
+    return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+  };
+  const copyLog = () => {
+    const lines = props.log.map(
+      (e) => `+${dt(e.at)}\t[${e.state}]\t${e.reason}`,
+    );
+    void navigator.clipboard?.writeText(lines.join('\n'));
+  };
   return (
     <Show when={visible()}>
-      <div
-        class={`flex items-start gap-2 border-b px-3 py-1.5 text-[11px] leading-snug ${tone()}`}
-      >
-        <span class="font-medium">{props.state}:</span>
-        <span class="break-words">{props.reason}</span>
+      <div class={`border-b ${tone()}`}>
+        <div class="flex items-center justify-between px-3 py-1 text-[10px] uppercase tracking-wider opacity-70">
+          <span>
+            sync log · {props.log.length} entries · latest: {props.state}
+          </span>
+          <button
+            type="button"
+            onClick={copyLog}
+            class="rounded border border-current/30 px-1.5 py-0.5 text-[10px] hover:bg-current/10"
+            title="Copy full log to clipboard"
+          >
+            copy
+          </button>
+        </div>
+        <ol class="max-h-40 overflow-y-auto px-3 pb-1.5 text-[11px] leading-snug font-mono">
+          <For each={props.log}>
+            {(entry) => (
+              <li class="flex gap-2 break-words">
+                <span class="shrink-0 tabular-nums opacity-60">
+                  +{dt(entry.at)}
+                </span>
+                <span class="shrink-0 font-medium">[{entry.state}]</span>
+                <span class="min-w-0 break-all">{entry.reason}</span>
+              </li>
+            )}
+          </For>
+        </ol>
       </div>
     </Show>
   );
