@@ -53,6 +53,79 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
     navigate('/login', { replace: true });
   };
 
+  /**
+   * Reset encryption data — nukes the local rust-crypto IndexedDB stores
+   * and signs out. The user signs back in with a fresh crypto session.
+   *
+   * Used as the escape hatch when the wasm bridge deadlocks on every
+   * sync cycle (corrupted device-tracking state on disk). The watchdog
+   * keeps the UI usable but key exchange never converges; only a wipe
+   * fixes it.
+   *
+   * We stop the client first (via logout), then delete every matrix-js-sdk
+   * IndexedDB database from the main thread, then hard-reload so any
+   * in-memory caches drop too. Login page re-prompts for password.
+   */
+  const [resetBusy, setResetBusy] = createSignal(false);
+  const resetEncryption = async () => {
+    if (resetBusy()) return;
+    const ok = window.confirm(
+      'Reset encryption data?\n\n' +
+        'This will:\n' +
+        '• Sign you out\n' +
+        '• Delete locally cached encryption keys\n' +
+        '• Reload the app\n\n' +
+        'Your messages on the server are NOT affected, but you may lose access ' +
+        "to history in encrypted rooms until other devices share keys back. " +
+        'Use this when the connection banner shows repeated "wasm bridge deadlocked" errors.',
+    );
+    if (!ok) return;
+    setResetBusy(true);
+    try {
+      try {
+        await bridge.request({ kind: 'logout' });
+      } catch {
+        // best-effort — even if logout fails (already disconnected),
+        // we still want to wipe and reload.
+      }
+      const idb = (globalThis as { indexedDB?: IDBFactory }).indexedDB;
+      if (idb) {
+        const PREFIX = 'matrix-js-sdk';
+        let names: string[] = [];
+        if (typeof (idb as { databases?: unknown }).databases === 'function') {
+          const list = (await idb.databases()) as Array<{ name?: string }>;
+          names = list
+            .map((d) => d.name ?? '')
+            .filter((n) => n && n.startsWith(PREFIX));
+        } else {
+          names = [
+            `${PREFIX}::matrix-sdk-crypto`,
+            `${PREFIX}::matrix-sdk-crypto-meta`,
+            `${PREFIX}:crypto`,
+            `${PREFIX}:riot-web-sync`,
+          ];
+        }
+        await Promise.all(
+          names.map(
+            (name) =>
+              new Promise<void>((resolve) => {
+                const req = idb.deleteDatabase(name);
+                req.onsuccess = () => resolve();
+                req.onerror = () => resolve();
+                req.onblocked = () => resolve();
+              }),
+          ),
+        );
+      }
+    } finally {
+      // Hard reload — drops any in-memory crypto state in the worker too.
+      window.location.replace('/login');
+      // location.replace won't synchronously unload; ensure we don't
+      // re-enable the button if the user is still on this page somehow.
+      setTimeout(() => setResetBusy(false), 5000);
+    }
+  };
+
   return (
     <Show when={props.open}>
       <div
@@ -115,6 +188,19 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
                 >
                   Sign out
                 </button>
+                <button
+                  type="button"
+                  onClick={resetEncryption}
+                  disabled={resetBusy()}
+                  class="mt-2 w-full rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-400 dark:hover:bg-amber-950"
+                >
+                  {resetBusy() ? 'Resetting…' : 'Reset encryption data'}
+                </button>
+                <p class="text-[11px] text-neutral-500">
+                  Use this if the connection banner repeatedly shows
+                  "wasm bridge deadlocked" or encrypted sends never succeed.
+                  Signs you out and clears local encryption keys.
+                </p>
               </div>
             </Show>
 
