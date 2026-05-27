@@ -8,6 +8,7 @@ import { showToast } from '../stores/toast.js';
 import type { RoomId, RoomSummary } from '@mata/shared/matrix';
 import { RoomView, createRoomCache, type RoomCache } from './room-view.js';
 import { SettingsDrawer } from '../components/settings-drawer.js';
+import { NewRoomModal } from '../components/new-room-modal.js';
 import { readRoomList, writeRoomList } from '../lib/persistent-cache.js';
 import { listTime } from '../lib/date-buckets.js';
 import { initials } from '../components/message-bubble.js';
@@ -20,6 +21,37 @@ export function HomePage() {
   const [rooms, setRooms] = createSignal<RoomSummary[] | null>(null);
   const [filter, setFilter] = createSignal('');
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [newRoomOpen, setNewRoomOpen] = createSignal(false);
+
+  // ---- Invite accept/decline -------------------------------------------
+  // `acting` indexes by roomId so the Accept/Decline buttons can show
+  // their per-row pending state without a heavier component split.
+  const [acting, setActing] = createSignal<Record<string, 'join' | 'leave'>>({});
+  const respondToInvite = async (roomId: RoomId, action: 'join' | 'leave') => {
+    if (acting()[roomId]) return;
+    setActing({ ...acting(), [roomId]: action });
+    try {
+      if (action === 'join') {
+        const res = await bridge.request({ kind: 'joinRoom', roomId });
+        showToast('success', 'Joined room');
+        // Don't force-open — let the sync delta promote it into the
+        // joined list, then the user clicks normally. Forcing open
+        // before the room exists in our cache causes a flash of
+        // "Loading…" that we'd rather avoid.
+        void res;
+      } else {
+        await bridge.request({ kind: 'leaveRoom', roomId });
+        showToast('info', 'Invite declined');
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast('error', `${action === 'join' ? 'Join' : 'Decline'} failed: ${msg}`);
+    } finally {
+      const next = { ...acting() };
+      delete next[roomId];
+      setActing(next);
+    }
+  };
 
   // Sync state pill ('idle' | 'connecting' | 'syncing' | 'reconnecting' | 'error')
   const [syncState, setSyncState] = createSignal<string>('connecting');
@@ -156,9 +188,14 @@ export function HomePage() {
   });
 
   // -------- Filtered room list ------------------------------------------
+  const joinedRooms = (): RoomSummary[] =>
+    (rooms() ?? []).filter((r) => r.membership === 'join');
+  const invitedRooms = (): RoomSummary[] =>
+    (rooms() ?? []).filter((r) => r.membership === 'invite');
+
   const filteredRooms = (): RoomSummary[] => {
     const q = filter().trim().toLowerCase();
-    const list = rooms() ?? [];
+    const list = joinedRooms();
     if (!q) return list;
     return list.filter(
       (r) =>
@@ -196,6 +233,15 @@ export function HomePage() {
           </button>
           <span class="text-sm font-semibold tracking-tight">Mata</span>
           <SyncPill state={syncState()} reason={syncReason()} />
+          <button
+            type="button"
+            onClick={() => setNewRoomOpen(true)}
+            class="ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-neutral-500 hover:bg-neutral-200 hover:text-neutral-900 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+            aria-label="New conversation"
+            title="New conversation"
+          >
+            ✎
+          </button>
         </header>
         <SyncBanner
           state={syncState()}
@@ -218,8 +264,49 @@ export function HomePage() {
           </div>
         </div>
 
+        <Show when={invitedRooms().length > 0}>
+          <div class="border-b border-neutral-200 bg-amber-50/60 px-3 py-2 dark:border-neutral-800 dark:bg-amber-950/30">
+            <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+              Pending invites · {invitedRooms().length}
+            </div>
+            <ul class="space-y-1.5">
+              <For each={invitedRooms()}>
+                {(r) => (
+                  <li class="flex items-center gap-2 rounded-md bg-white/70 px-2 py-1.5 text-xs dark:bg-neutral-900/70">
+                    <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-[10px] font-semibold text-amber-800 dark:bg-amber-900 dark:text-amber-100">
+                      {initials(r.name || r.roomId)}
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="truncate font-medium">{r.name || r.roomId}</div>
+                      <Show when={r.topic}>
+                        <div class="truncate text-[10px] text-neutral-500">{r.topic}</div>
+                      </Show>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => respondToInvite(r.roomId, 'join')}
+                      disabled={!!acting()[r.roomId]}
+                      class="rounded-md bg-mata-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-mata-500 disabled:opacity-50"
+                    >
+                      {acting()[r.roomId] === 'join' ? '…' : 'Accept'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => respondToInvite(r.roomId, 'leave')}
+                      disabled={!!acting()[r.roomId]}
+                      class="rounded-md border border-neutral-300 px-2 py-1 text-[10px] font-medium text-neutral-700 hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                    >
+                      {acting()[r.roomId] === 'leave' ? '…' : 'Decline'}
+                    </button>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </div>
+        </Show>
+
         <Show
-          when={(rooms() ?? []).length > 0}
+          when={joinedRooms().length > 0}
           fallback={
             <div class="flex flex-1 items-center justify-center p-6 text-center text-xs text-neutral-500">
               <Show
@@ -290,6 +377,18 @@ export function HomePage() {
       </div>
 
       <SettingsDrawer open={settingsOpen()} onClose={() => setSettingsOpen(false)} />
+      <NewRoomModal
+        open={newRoomOpen()}
+        onClose={() => setNewRoomOpen(false)}
+        onCreated={(roomId) => {
+          // The sync delta will land the room in our list shortly; once
+          // it does the route param triggers RoomView. Pushing the
+          // route immediately works because openRoom only looks up by
+          // id and falls back gracefully if the row isn't there yet.
+          navigate(`/rooms/${encodeURIComponent(roomId)}`);
+          setActiveId(roomId);
+        }}
+      />
     </div>
   );
 }
