@@ -85,6 +85,14 @@ export class SdkSession {
   private emit: Emit;
   private client: MatrixClient | null = null;
   private currentUserId: UserId | null = null;
+  /**
+   * In-memory cache of SSSS private keys keyed by SSSS key id. Populated
+   * by `enableKeyBackup`/`restoreKeyBackup` and read by the
+   * `cryptoCallbacks.getSecretStorageKey` we registered with the SDK at
+   * `createClient` time. Never persisted — rebuilt from passphrase on
+   * each device boot.
+   */
+  readonly secretStorageKeyCache: Map<string, Uint8Array> = new Map();
 
   constructor(emit: Emit) {
     this.emit = emit;
@@ -375,6 +383,42 @@ export class SdkSession {
   }
 
   // ---------------------------------------------------------------------------
+  // Phase 5.2 — encryption setup (cross-signing + SSSS + key backup)
+  //
+  // Implementation lives in `./encryption.ts` so the bulk of the
+  // cross-signing / SSSS / backup protocol logic stays out of this
+  // 1400-line file. These thin delegates only adapt the EncryptionDeps
+  // shape (client + cache accessors) and forward.
+  // ---------------------------------------------------------------------------
+
+  private encryptionDeps(): import('./encryption.js').EncryptionDeps {
+    return {
+      client: () => this.client,
+      secretStorageKeyCache: this.secretStorageKeyCache,
+    };
+  }
+
+  async getEncryptionStatus() {
+    const { getEncryptionStatus } = await import('./encryption.js');
+    return getEncryptionStatus(this.encryptionDeps());
+  }
+
+  async listDevices() {
+    const { listDevices } = await import('./encryption.js');
+    return listDevices(this.encryptionDeps());
+  }
+
+  async enableKeyBackup(password: string, passphrase: string) {
+    const { enableKeyBackup } = await import('./encryption.js');
+    return enableKeyBackup(this.encryptionDeps(), password, passphrase);
+  }
+
+  async restoreKeyBackup(recoveryKey: string) {
+    const { restoreKeyBackup } = await import('./encryption.js');
+    return restoreKeyBackup(this.encryptionDeps(), recoveryKey);
+  }
+
+  // ---------------------------------------------------------------------------
   // Internals
   // ---------------------------------------------------------------------------
 
@@ -575,6 +619,27 @@ export class SdkSession {
       userId: record.userId,
       deviceId: record.deviceId,
       timelineSupport: true,
+      // Wire the SSSS callback so that any time the SDK needs to
+      // decrypt an SSSS-protected secret (cross-signing private parts,
+      // backup decryption key) it can look up the cached private bytes
+      // for the matching SSSS key id. Cache is populated by
+      // `enableKeyBackup` on setup and `restoreKeyBackup` on a fresh
+      // device — both store the raw `Uint8Array` keyed by SSSS key id.
+      // The SDK invokes us with the list of acceptable key ids; we
+      // return the first one we have, or `null` to make the SDK fail
+      // open with a "key not found" error the UI can surface.
+      cryptoCallbacks: {
+        getSecretStorageKey: async ({ keys }) => {
+          for (const keyId of Object.keys(keys)) {
+            const cached = this.secretStorageKeyCache.get(keyId);
+            if (cached) return [keyId, cached];
+          }
+          return null;
+        },
+        cacheSecretStorageKey: (keyId, _info, key) => {
+          this.secretStorageKeyCache.set(keyId, key);
+        },
+      },
       // matrix-js-sdk swallows fatal sync startup errors via
       //   logger.info("Sync startup aborted with an error:", e)
       // (see client.js#454). When the silent path triggers, syncState is
