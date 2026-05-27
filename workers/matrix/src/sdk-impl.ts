@@ -22,6 +22,7 @@ import {
   RoomEvent,
   RoomMemberEvent,
   RoomStateEvent,
+  MatrixEventEvent,
   EventType,
   MsgType,
   type MatrixClient,
@@ -945,6 +946,36 @@ export class SdkSession {
         deltas: [
           {
             roomId: room.roomId as RoomId,
+            summary: partialSummary(room),
+            newEvents: [tev],
+          },
+        ],
+        nextBatch: client.getSyncStateData()?.nextSyncToken ?? '',
+      });
+    });
+
+    // ---- Decryption updates --------------------------------------------
+    // RoomEvent.Timeline fires with the event still in its m.room.encrypted
+    // shape (decryption is async). We forward that placeholder so the UI
+    // can show a "decrypting…" slot. Once matrix-js-sdk finishes the wasm
+    // decrypt, it fires MatrixEventEvent.Decrypted on the event object —
+    // the type internally flips from m.room.encrypted to m.room.message
+    // (or stays encrypted on failure). Without this re-emit the live tab
+    // shows the encrypted placeholder forever; only a refresh (which
+    // re-reads the post-decrypt timeline) makes the message appear. This
+    // was the "friend replied, didn't see it until refresh" symptom.
+    client.on(MatrixEventEvent.Decrypted, (event: MatrixEvent) => {
+      const roomId = event.getRoomId();
+      if (!roomId) return;
+      const room = client.getRoom(roomId);
+      if (!room) return;
+      const tev = toTimelineEvent(event);
+      if (!tev) return;
+      this.emit({
+        kind: 'syncUpdate',
+        deltas: [
+          {
+            roomId: roomId as RoomId,
             summary: partialSummary(room),
             newEvents: [tev],
           },

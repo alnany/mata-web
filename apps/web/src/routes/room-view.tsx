@@ -145,9 +145,26 @@ export function RoomView(props: {
     const delta = e.deltas.find((d) => d.roomId === props.room.roomId);
     if (!delta || delta.newEvents.length === 0) return;
     props.setCache(props.room.roomId, (c: RoomCache) => {
-      const known = new Set(c.events.map((ev) => ev.eventId));
+      // Replace-or-push by eventId. Worker emits the same eventId twice
+      // for E2EE messages: once with type 'm.room.encrypted'
+      // decryptionStatus:'pending' from RoomEvent.Timeline (live insert
+      // placeholder), then again as 'm.room.message' from
+      // MatrixEventEvent.Decrypted once the wasm decrypt finishes.
+      // Skipping on known-id (the old behavior) left the placeholder
+      // pinned and made live replies invisible until a page refresh
+      // re-read the post-decrypt timeline.
+      const indexById = new Map<string, number>();
+      for (let i = 0; i < c.events.length; i++) {
+        indexById.set(c.events[i].eventId, i);
+      }
       for (const ev of delta.newEvents) {
-        if (!known.has(ev.eventId)) c.events.push(ev);
+        const existing = indexById.get(ev.eventId);
+        if (existing !== undefined) {
+          c.events[existing] = ev;
+        } else {
+          indexById.set(ev.eventId, c.events.length);
+          c.events.push(ev);
+        }
       }
     });
     if (stickToBottom()) {
