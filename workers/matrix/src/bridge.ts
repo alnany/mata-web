@@ -127,6 +127,26 @@ export function installBridge(scope: DedicatedWorkerGlobalScope): BridgeContext 
 
   const core = new MatrixCore(emit);
 
+  // Catch anything that escapes a handler's try/catch (silent worker hangs
+  // were impossible to diagnose otherwise — the pill stayed at 'connecting'
+  // forever while the actual cause sat in the worker console).
+  scope.addEventListener('unhandledrejection', (ev: PromiseRejectionEvent) => {
+    const reason =
+      ev.reason instanceof Error ? ev.reason.message : String(ev.reason);
+    emit({
+      kind: 'syncStatus',
+      status: 'error',
+      reason: `Worker unhandled rejection: ${reason}`,
+    });
+  });
+  scope.addEventListener('error', (ev: ErrorEvent) => {
+    emit({
+      kind: 'syncStatus',
+      status: 'error',
+      reason: `Worker error: ${ev.message}`,
+    });
+  });
+
   scope.addEventListener('message', async (ev: MessageEvent<RequestEnvelope>) => {
     const env = ev.data;
     if (!env || env.type !== 'request') return;

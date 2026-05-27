@@ -22,11 +22,15 @@ export function HomePage() {
 
   // Sync state pill ('idle' | 'connecting' | 'syncing' | 'reconnecting' | 'error')
   const [syncState, setSyncState] = createSignal<string>('connecting');
+  // Stage hint (e.g., 'loading crypto (~9MB)') — shown next to the pill so
+  // a stuck startup is observable, not silent.
+  const [syncReason, setSyncReason] = createSignal<string>('');
   onCleanup(
     bridge.on('syncStatus', (e) => {
       setSyncState(e.status);
+      setSyncReason(e.reason ?? '');
       if (e.status === 'error' && e.reason) {
-        showToast('error', `Sync error: ${e.reason}`, 6000);
+        showToast('error', `Sync error: ${e.reason}`, 8000);
       }
     }),
   );
@@ -134,7 +138,7 @@ export function HomePage() {
             ☰
           </button>
           <span class="text-sm font-semibold tracking-tight">Mata</span>
-          <SyncPill state={syncState()} />
+          <SyncPill state={syncState()} reason={syncReason()} />
         </header>
 
         <div class="border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
@@ -233,7 +237,7 @@ function meLine(): string {
   return s.userId;
 }
 
-function SyncPill(props: { state: string }) {
+function SyncPill(props: { state: string; reason?: string }) {
   const map: Record<string, { color: string; label: string }> = {
     idle: { color: 'bg-neutral-400', label: 'idle' },
     connecting: { color: 'bg-amber-500 animate-pulse', label: 'connecting' },
@@ -242,10 +246,21 @@ function SyncPill(props: { state: string }) {
     error: { color: 'bg-red-500', label: 'error' },
   };
   const m = map[props.state] ?? map.idle;
+  const showReason = () =>
+    props.reason &&
+    (props.state === 'connecting' ||
+      props.state === 'reconnecting' ||
+      props.state === 'error');
   return (
-    <span class="ml-auto inline-flex items-center gap-1 text-[10px] text-neutral-500">
+    <span
+      class="ml-auto inline-flex max-w-[60%] items-center gap-1 text-[10px] text-neutral-500"
+      title={props.reason || m.label}
+    >
       <span class={`inline-block h-1.5 w-1.5 rounded-full ${m.color}`} />
-      {m.label}
+      <span class="truncate">
+        {m.label}
+        {showReason() ? ` · ${props.reason}` : ''}
+      </span>
     </span>
   );
 }

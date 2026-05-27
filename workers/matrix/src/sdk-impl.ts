@@ -269,6 +269,17 @@ export class SdkSession {
   }
 
   private async bootClient(record: SessionRecord): Promise<void> {
+    // Every observable transition is announced via `syncStatus` so the UI
+    // pill can pinpoint exactly which startup stage is hung. Previously
+    // we always overwrote the last status with 'connecting' right before
+    // `startClient`, which clobbered any crypto error we'd just emitted.
+    let cryptoOk = true;
+    this.emit({
+      kind: 'syncStatus',
+      status: 'connecting',
+      reason: 'creating client',
+    });
+
     const client = createClient({
       baseUrl: record.homeserverBaseUrl,
       accessToken: record.accessToken,
@@ -280,25 +291,78 @@ export class SdkSession {
     this.currentUserId = record.userId;
 
     if (ENABLE_E2EE) {
+      this.emit({
+        kind: 'syncStatus',
+        status: 'connecting',
+        reason: 'loading crypto (~9MB, one-time)',
+      });
+      const cryptoStart = Date.now();
       try {
         const { initRustCrypto } = await import('./crypto-bootstrap.js');
-        await initRustCrypto(client, record.pickleKeyRef, CRYPTO_DB_NAME);
+        this.emit({
+          kind: 'syncStatus',
+          status: 'connecting',
+          reason: `initializing Olm device (loaded in ${Date.now() - cryptoStart}ms)`,
+        });
+        // 30s timeout — first-time device upload + OTK claim can be slow,
+        // but anything past this is a real hang. We race with a rejected
+        // promise so we get a deterministic surface to the UI rather than
+        // an infinite "connecting".
+        await Promise.race([
+          initRustCrypto(client, record.pickleKeyRef, CRYPTO_DB_NAME),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    `crypto init exceeded 30s — likely hanging on device-key upload to ${record.homeserverBaseUrl}`,
+                  ),
+                ),
+              30_000,
+            ),
+          ),
+        ]);
+        this.emit({
+          kind: 'syncStatus',
+          status: 'connecting',
+          reason: `crypto ready (${Date.now() - cryptoStart}ms)`,
+        });
       } catch (err) {
+        cryptoOk = false;
         this.emit({
           kind: 'syncStatus',
           status: 'error',
-          reason: `Crypto bootstrap failed: ${describe(err)} — proceeding without E2EE for this session.`,
+          reason: `Crypto bootstrap failed after ${Date.now() - cryptoStart}ms: ${describe(err)}`,
         });
+        // Stop here when E2EE is on but crypto failed — proceeding to
+        // startClient with broken crypto causes /sync to hang indefinitely
+        // on encrypted to-device messages it can't process. Fail loud.
+        return;
       }
     }
 
     this.wireListeners(client);
-    this.emit({ kind: 'syncStatus', status: 'connecting' });
+    if (cryptoOk) {
+      this.emit({
+        kind: 'syncStatus',
+        status: 'connecting',
+        reason: 'starting sync',
+      });
+    }
     const opts: IStartClientOpts = {
       initialSyncLimit: 30,
       lazyLoadMembers: true,
     };
-    await client.startClient(opts);
+    try {
+      await client.startClient(opts);
+    } catch (err) {
+      this.emit({
+        kind: 'syncStatus',
+        status: 'error',
+        reason: `startClient failed: ${describe(err)}`,
+      });
+      throw err;
+    }
   }
 
   private wireListeners(client: MatrixClient): void {
