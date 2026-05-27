@@ -590,6 +590,42 @@ export class SdkSession {
           reason: `crypto ready (${Date.now() - cryptoStart}ms)`,
         });
       } catch (err) {
+        // Account-mismatch is a well-known recoverable state: previous
+        // bundle/login left a rust-crypto store keyed to a different
+        // deviceId, and now this restore is trying to open it as the
+        // new deviceId. The store data is unrecoverable (we don't have
+        // the old device's keys), so wipe + retry once. This SHOULD be
+        // unreachable on `login` (that path runs wipeStaleCryptoStores
+        // proactively), but on `restoreFrom` the wipe is skipped to
+        // preserve crypto keys across page reloads, so this auto-recovery
+        // is the only path that handles the "user's IDB drifted from
+        // session record" case.
+        const msg = err instanceof Error ? err.message : String(err);
+        const isAccountMismatch =
+          msg.includes("account in the store doesn't match") ||
+          msg.includes('account in the store does not match');
+        if (isAccountMismatch) {
+          this.emit({
+            kind: 'syncStatus',
+            status: 'connecting',
+            reason: 'recovering: stale crypto store detected, wiping & retrying',
+          });
+          // Tear down the half-initialized client so its handles release
+          // the IDB locks before we delete the underlying databases.
+          await this.teardownExistingClient();
+          await wipeStaleCryptoStores(this.emit.bind(this));
+          // Re-enter bootClient ONCE with the same session record. If
+          // this second attempt also fails, fall through to the normal
+          // error path on the next throw (no infinite loop — recursion
+          // is bounded because the wipe guarantees a clean store).
+          this.emit({
+            kind: 'syncStatus',
+            status: 'connecting',
+            reason: 'retrying boot after crypto wipe',
+          });
+          await this.bootClient(record);
+          return;
+        }
         cryptoOk = false;
         this.emit({
           kind: 'syncStatus',
