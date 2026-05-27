@@ -573,6 +573,19 @@ export class SdkSession {
       initialSyncLimit: 30,
       lazyLoadMembers: true,
     };
+    // Bookend startClient so we can distinguish "SDK is hanging inside
+    // its prerequisite chain (getFilter/getPushRules/etc.) before the
+    // first /sync" from "SDK started fine but never reaches PREPARED".
+    // The "started" line should appear within milliseconds; if it doesn't,
+    // startClient itself is blocked on a synchronous step. Combined with
+    // the fetch tracer in bridge.ts, the banner tells us exactly which
+    // step is wedged.
+    this.emit({
+      kind: 'syncStatus',
+      status: 'connecting',
+      reason: 'invoking client.startClient',
+    });
+    const startClientAt = Date.now();
     try {
       await client.startClient(opts);
     } catch (err) {
@@ -583,6 +596,11 @@ export class SdkSession {
       });
       throw err;
     }
+    this.emit({
+      kind: 'syncStatus',
+      status: 'connecting',
+      reason: `client.startClient returned (${Date.now() - startClientAt}ms) — awaiting /sync`,
+    });
     // Heartbeat poll on the SDK's internal sync state. ClientEvent.Sync
     // only fires on transitions — if the SDK gets stuck in an
     // intermediate state (e.g. waiting on /sync, processing a slow
