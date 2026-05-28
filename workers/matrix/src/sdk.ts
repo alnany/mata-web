@@ -221,6 +221,28 @@ export class MatrixCore {
     return this.requireSession().restoreKeyBackup(recoveryKey);
   }
 
+  // --- Link previews + user directory ---------------------------------------
+
+  /**
+   * Server-side OG fetch via `/_matrix/media/v3/preview_url`. Returns
+   * null when the homeserver can't produce metadata (404, opaque
+   * URL, admin-locked endpoint, etc.) so the UI falls back to plain
+   * text without a noisy toast.
+   */
+  async getUrlPreview(url: string) {
+    return this.requireSession().getUrlPreview(url);
+  }
+
+  /**
+   * Live user-directory search backing the "find a person to chat
+   * with" surface. See `SdkSession.searchUsers` for the contract —
+   * empty term short-circuits, mxc:// avatars resolved to http URLs
+   * on this side.
+   */
+  async searchUsers(term: string, limit: number) {
+    return this.requireSession().searchUsers(term, limit);
+  }
+
   private requireSession(): SdkSession {
     if (!this.session) throw authError('Not logged in');
     return this.session;
