@@ -127,9 +127,19 @@ function SessionRouter(props: ParentProps) {
   onMount(sync);
 
   return (
-    <Show when={session().phase !== 'restoring'} fallback={<RestoreScreen />}>
-      {props.children}
-    </Show>
+    // Don't gate children on the `restoring` phase any more. The old
+    // gate (a centred "Restoring session…" loader) was eating the
+    // entire 0.5–2 s window the worker spent rehydrating its olm
+    // sessions + reading SQLite, which is exactly the window the user
+    // perceives as "the chat client takes forever to load." Element
+    // doesn't block here — it paints the IndexedDB-cached room list
+    // immediately and reconciles live as /sync deltas land. HomePage
+    // already loads its room list from `readRoomList()` (IndexedDB,
+    // synchronous read after page paint) and is wired to defer any
+    // bridge.request() calls until phase === 'authenticated', so it
+    // can render during 'unknown' and 'restoring' safely. SessionRouter
+    // still owns the anonymous→/login redirect via its own createEffect.
+    <>{props.children}</>
   );
 }
 

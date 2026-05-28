@@ -675,23 +675,63 @@ export function RoomView(props: {
     return map;
   });
 
+  // `<For>` keys items by REFERENCE, not by some extracted id. If the
+  // rows() memo returns a fresh `{ kind: 'msg', ev, ... }` object on
+  // every recomputation, every existing message looks like a new item
+  // to <For>, which then remounts every <li>. Each remount re-fires
+  // the `msg-enter` 120 ms fade-in animation — that is the "all
+  // messages flash" symptom the user reported on send (one syncUpdate
+  // → new `c.events` array reference → rows() reruns → every Row
+  // identity changes → every bubble flashes).
+  //
+  // We cache Row objects by their stable identity key (eventId for
+  // messages, day-bucket key for separators) and only mint a new
+  // object when the underlying inputs that drive its render actually
+  // change. `<For>` then sees referential equality for unchanged
+  // rows and keeps the DOM (and the animation) untouched.
+  const rowCache = new Map<string, Row>();
   const rows = createMemo<Row[]>(() => {
     const out: Row[] = [];
     const evs = props.cache.events;
+    const seen = new Set<string>();
     let lastSender: UserId | null = null;
     let lastTs = 0;
     for (let i = 0; i < evs.length; i++) {
       const ev = evs[i];
       if (i === 0 || !isSameDay(lastTs, ev.originServerTs)) {
-        out.push({ kind: 'day', ts: ev.originServerTs, key: `d-${ev.eventId}` });
+        const dayKey = `d-${ev.eventId}`;
+        let dayRow = rowCache.get(dayKey);
+        if (!dayRow || dayRow.kind !== 'day' || dayRow.ts !== ev.originServerTs) {
+          dayRow = { kind: 'day', ts: ev.originServerTs, key: dayKey };
+          rowCache.set(dayKey, dayRow);
+        }
+        seen.add(dayKey);
+        out.push(dayRow);
         lastSender = null;
       }
       const showHeader =
         ev.sender !== lastSender ||
         ev.originServerTs - lastTs > 2 * 60 * 1000; // >2 min gap re-shows header
-      out.push({ kind: 'msg', ev, showHeader, key: ev.eventId });
+      const msgKey = ev.eventId;
+      let msgRow = rowCache.get(msgKey);
+      if (
+        !msgRow ||
+        msgRow.kind !== 'msg' ||
+        msgRow.ev !== ev ||
+        msgRow.showHeader !== showHeader
+      ) {
+        msgRow = { kind: 'msg', ev, showHeader, key: msgKey };
+        rowCache.set(msgKey, msgRow);
+      }
+      seen.add(msgKey);
+      out.push(msgRow);
       lastSender = ev.sender;
       lastTs = ev.originServerTs;
+    }
+    // Evict cache entries for rows that disappeared (e.g., redacted
+    // message). Leaving them around would slowly leak memory.
+    for (const k of rowCache.keys()) {
+      if (!seen.has(k)) rowCache.delete(k);
     }
     return out;
   });
