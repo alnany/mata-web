@@ -64,7 +64,12 @@ export interface UrlPreview {
   url: string;
   title?: string;
   description?: string;
-  /** Already-resolved http(s) image URL — mxc rewriting happens on the worker. */
+  /**
+   * Image URL. May be either `http(s)://` (server-hosted OG image,
+   * usable in `<img src>` directly) or `mxc://` (authenticated
+   * media — UI must fetch bytes via `loadMedia` and use a Blob URL,
+   * because `<img>` can't attach the bearer token Synapse requires).
+   */
   image?: string;
   imageWidth?: number;
   imageHeight?: number;
