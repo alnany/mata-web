@@ -234,13 +234,17 @@ export class MatrixCore {
   }
 
   /**
-   * Live user-directory search backing the "find a person to chat
-   * with" surface. See `SdkSession.searchUsers` for the contract —
-   * empty term short-circuits, mxc:// avatars resolved to http URLs
-   * on this side.
+   * Type-leak accessor for the matrix-js-sdk client instance held
+   * privately inside `SdkSession`. We need this so sibling modules
+   * (e.g. `user-search.ts`) can run one-shot client methods without
+   * SdkSession itself growing — sdk-impl.ts is intentionally frozen
+   * at the moment due to a pipeline upload constraint. `private` is
+   * compile-time only in TypeScript, so this cast is safe at runtime
+   * and limited to this single seam.
    */
-  async searchUsers(term: string, limit: number) {
-    return this.requireSession().searchUsers(term, limit);
+  getMatrixClient(): unknown {
+    const session = this.session as unknown as { client?: unknown } | null;
+    return session?.client ?? null;
   }
 
   private requireSession(): SdkSession {
