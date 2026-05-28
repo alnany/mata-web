@@ -330,12 +330,85 @@ export async function restoreKeyBackup(
     return { keysImported: 0 };
   }
 
-  // The SDK does the import asynchronously in the background once
-  // checkKeyBackupAndEnable confirms trust. The legacy
-  // `restoreKeyBackupWithRecoveryKey` API gave a synchronous count;
-  // the rust-crypto path on 34.x reports via crypto events. For now
-  // we return the server-reported count as a best-effort approximation
-  // so the UI can show "starting restore of N keys".
-  const total = check.backupInfo.count ?? 0;
-  return { keysImported: total };
+  // Step 5 — ACTIVELY pull every backed-up session down.
+  //
+  // checkKeyBackupAndEnable() only verifies the backup is trusted and
+  // turns on *future* backup-of-new-keys; it does NOT walk the
+  // server's existing /room_keys/keys archive and import historical
+  // megolm sessions. Without this step the user clicks "Restore from
+  // backup", we silently approve trust, and zero past messages
+  // decrypt — exactly the "I restored but old messages are still
+  // missing" symptom on first set-up of a second device.
+  //
+  // The legacy client API restoreKeyBackupWithRecoveryKey downloads
+  // every session, decrypts them with the recovery key bytes (the
+  // backup decryption key derives from the same SSSS curve25519
+  // private), and pushes them into the crypto store. matrix-js-sdk's
+  // BackupDecryptor then fires MatrixEvent decrypted callbacks on
+  // every event whose session id was just imported — so the live
+  // tab's "🔒 N encrypted messages" pill collapses and the real text
+  // appears without a refresh, because sdk-impl.ts already re-emits
+  // syncUpdate on the MatrixEventEvent.Decrypted hook.
+  //
+  // We pass the raw user input (whitespace-stripped) — the API parses
+  // it as base58 internally. Passphrase input still flows through
+  // here because deriveRecoveryKeyFromPassphrase above seeded
+  // `privateKey`; the API will fall back to base58 parsing first then
+  // re-derive if needed. Either way the result is the same curve25519
+  // private bytes the backup was encrypted with.
+  const recoveryKeyInput = userInput.replace(/\s+/g, '');
+  let result: { total: number; imported: number };
+  try {
+    result = await client.restoreKeyBackupWithRecoveryKey(
+      recoveryKeyInput,
+      undefined,
+      undefined,
+      check.backupInfo,
+    );
+  } catch (err) {
+    // Surface a useful message but don't unwind the bootstrap that
+    // already succeeded — the user IS now cross-signed and SSSS is
+    // hydrated; only the historical-key download failed.
+    throw cryptoError(
+      `Restored cross-signing but key import failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
+  // Step 6 — Retry decryption on already-loaded UTD events.
+  //
+  // The newly-imported sessions cause matrix-js-sdk to fire
+  // MatrixEventEvent.Decrypted for events that were waiting on those
+  // session ids — but only for events the SDK still has open
+  // attemptDecryption promises on. Events that we already mapped to
+  // m.room.encrypted{decryptionStatus:'failed'} a long time ago will
+  // NOT re-attempt automatically; the SDK considers their decryption
+  // pipeline closed. Walking every room's live timeline and
+  // re-asking decryptEventIfNeeded() forces a fresh attempt, which
+  // now succeeds because the session is in the crypto store, and
+  // fires the Decrypted hook the worker already taps to re-emit
+  // syncUpdate.
+  //
+  // This is best-effort: a room with thousands of historical UTDs
+  // will take a few seconds to walk, but every retry is cheap (the
+  // megolm AES path is fast) and matrix-js-sdk dedupes if the event
+  // is already mid-flight.
+  for (const room of client.getRooms()) {
+    const events = room.getLiveTimeline().getEvents();
+    for (const ev of events) {
+      if (ev.isDecryptionFailure()) {
+        // Fire and forget — each retry resolves on its own and the
+        // Decrypted hook handles the UI update. Awaiting in series
+        // would needlessly stretch the spinner.
+        client.decryptEventIfNeeded(ev).catch(() => {
+          /* swallow — the event will stay UTD if the session truly
+             isn't in the imported set (e.g. sender used a different
+             megolm session than the one backed up). */
+        });
+      }
+    }
+  }
+
+  return { keysImported: result.imported };
 }
