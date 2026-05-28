@@ -131,6 +131,18 @@ async function routeSignal(evt: SignalEvent): Promise<void> {
     typeof evt.content.call_id === 'string' ? (evt.content.call_id as string) : null;
   if (!callId) return;
 
+  // Self-echo guard. With the worker no longer filtering by sender
+  // MXID (so same-account multi-device works), our own sent events
+  // come back through sync. MSC2746's `party_id` is the per-device
+  // identifier — if it matches the partyId of our currently bound
+  // session for this callId, this event originated on this very
+  // device and routing it would mis-fire the state machine (e.g.
+  // an inbound `m.call.invite` echo would try to spawn a second
+  // session, hit the busy branch, and reject our own call).
+  if (session && session.callId === callId && evt.partyId && evt.partyId === session.partyId) {
+    return;
+  }
+
   // Inbound invite — only create a new session if we don't already
   // have an active one. If we do, send a hangup as busy.
   if (evt.eventType === 'm.call.invite') {
