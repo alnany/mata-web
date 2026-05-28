@@ -2,6 +2,11 @@ import { createResource, For, Show, createSignal } from 'solid-js';
 import { useBridge } from '../bridge/context.js';
 import { session, setSession } from '../stores/session.js';
 import { themeMode, setThemeMode, type ThemeMode } from '../stores/theme.js';
+import {
+  notifyEnabled,
+  notifyPermission,
+  setNotifyEnabled,
+} from '../stores/notifications.js';
 import { withToast } from '../stores/toast.js';
 import { useNavigate } from '@solidjs/router';
 import type { Device } from '@mata/shared/matrix';
@@ -209,22 +214,65 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
             </Show>
 
             <Show when={tab() === 'appearance'}>
-              <div class="space-y-3">
-                <label class="block text-sm font-medium">Theme</label>
-                <div class="grid grid-cols-3 gap-2">
-                  {(['light', 'dark', 'system'] as ThemeMode[]).map((m) => (
+              <div class="space-y-6">
+                <div class="space-y-3">
+                  <label class="block text-sm font-medium">Theme</label>
+                  <div class="grid grid-cols-3 gap-2">
+                    {(['light', 'dark', 'system'] as ThemeMode[]).map((m) => (
+                      <button
+                        type="button"
+                        onClick={() => setThemeMode(m)}
+                        class={`rounded-lg border px-3 py-2 text-sm capitalize transition-colors ${
+                          themeMode() === m
+                            ? 'border-mata-500 bg-mata-500/10 text-mata-600 dark:text-mata-500'
+                            : 'border-neutral-200 hover:border-neutral-300 dark:border-neutral-800 dark:hover:border-neutral-700'
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div class="space-y-2">
+                  <label class="block text-sm font-medium">Notifications</label>
+                  {/*
+                    The permission request must come from THIS click — the
+                    browser silently denies any Notification.requestPermission()
+                    call that lacks a user gesture in the call stack.
+                  */}
+                  <div class="flex items-start justify-between gap-3 rounded-lg border border-neutral-200 px-3 py-2.5 dark:border-neutral-800">
+                    <div class="min-w-0 flex-1">
+                      <div class="text-sm">Desktop notifications</div>
+                      <div class="text-[11px] text-neutral-500">
+                        Chime + browser toast for mentions and new messages in
+                        rooms you're not viewing.
+                      </div>
+                      <Show when={notifyEnabled() && notifyPermission() !== 'granted'}>
+                        <div class="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                          Browser permission not granted — open browser settings
+                          to allow notifications for this site.
+                        </div>
+                      </Show>
+                    </div>
                     <button
                       type="button"
-                      onClick={() => setThemeMode(m)}
-                      class={`rounded-lg border px-3 py-2 text-sm capitalize transition-colors ${
-                        themeMode() === m
-                          ? 'border-mata-500 bg-mata-500/10 text-mata-600 dark:text-mata-500'
-                          : 'border-neutral-200 hover:border-neutral-300 dark:border-neutral-800 dark:hover:border-neutral-700'
+                      onClick={() => void setNotifyEnabled(!notifyEnabled())}
+                      class={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                        notifyEnabled()
+                          ? 'bg-mata-500'
+                          : 'bg-neutral-300 dark:bg-neutral-700'
                       }`}
+                      aria-pressed={notifyEnabled()}
+                      aria-label="Toggle notifications"
                     >
-                      {m}
+                      <span
+                        class={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                          notifyEnabled() ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
                     </button>
-                  ))}
+                  </div>
                 </div>
               </div>
             </Show>

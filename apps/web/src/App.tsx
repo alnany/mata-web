@@ -1,5 +1,5 @@
 import type { ParentProps } from 'solid-js';
-import { createSignal, onCleanup, onMount, Show, Switch, Match } from 'solid-js';
+import { createEffect, createSignal, onCleanup, onMount, Show, Switch, Match } from 'solid-js';
 import { useNavigate, useLocation } from '@solidjs/router';
 import { createMatrixBridge } from './bridge/worker-client.js';
 import { BridgeContext } from './bridge/context.js';
@@ -7,6 +7,7 @@ import { session, setSession } from './stores/session.js';
 import { ToastRoot } from './components/toast-root.js';
 import { VerificationModal } from './components/verification-modal.js';
 import { attachVerificationStore } from './stores/verification.js';
+import { notifyTotals } from './stores/notifications.js';
 // Side-effect: bootstrap the theme classes on <html> at app load.
 import './stores/theme.js';
 import type { MatrixBridge } from '@mata/shared/rpc';
@@ -43,6 +44,23 @@ export function App(props: ParentProps) {
 
   onCleanup(() => {
     bridge()?.dispose();
+  });
+
+  // Tab title reflects unread / highlight tallies driven by the
+  // notifications store. We pin the base title here (rather than in
+  // index.html) so the reset path is unambiguous: tally = 0 → "Mata".
+  // Highlights get a precedence prefix because they're the actionable
+  // class of unread.
+  const BASE_TITLE = 'Mata';
+  createEffect(() => {
+    const h = notifyTotals.highlights();
+    const u = notifyTotals.unread();
+    let next = BASE_TITLE;
+    if (h > 0) next = `(${h}🔔) ${BASE_TITLE}`;
+    else if (u > 0) next = `(${u}) ${BASE_TITLE}`;
+    if (typeof document !== 'undefined' && document.title !== next) {
+      document.title = next;
+    }
   });
 
   return (
