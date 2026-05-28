@@ -485,10 +485,29 @@ function MediaContent(props: { body: MediaMessageBody }) {
       const mxc = body.file?.url ?? body.url;
       if (!mxc) return { loaded: null, error: 'no mxc URI on event' };
       try {
+        // body.file lives inside a Solid store — passing it directly into
+        // worker.postMessage trips DataCloneError ("#<Object> could not
+        // be cloned") because the proxy isn't structured-cloneable. Snap
+        // a plain copy here so the request envelope is pure JSON.
+        const ef = body.file
+          ? {
+              v: 'v2' as const,
+              url: body.file.url,
+              key: {
+                kty: 'oct' as const,
+                alg: 'A256CTR' as const,
+                key_ops: ['encrypt', 'decrypt'] as ['encrypt', 'decrypt'],
+                k: body.file.key.k,
+                ext: true as const,
+              },
+              iv: body.file.iv,
+              hashes: { sha256: body.file.hashes.sha256 },
+            }
+          : null;
         const res = await bridge.request({
           kind: 'loadMedia',
           mxc,
-          encryptedFile: body.file ?? null,
+          encryptedFile: ef,
           mime: body.info.mimetype,
         });
         const blob = new Blob([res.data], { type: res.mime });

@@ -2072,9 +2072,25 @@ function decodeEncryptedFile(c: IContent): EncryptedFile | null {
   if (!key || typeof key.k !== 'string') return null;
   const hashes = f.hashes as Record<string, unknown> | undefined;
   if (!hashes || typeof hashes.sha256 !== 'string') return null;
-  // Pass the wire payload through verbatim — the decryption pipeline in
-  // attachments.ts expects this exact shape (JWK + base64-unpadded iv).
-  return raw as unknown as EncryptedFile;
+  // Build a fresh plain-JSON copy — matrix-js-sdk's IContent can carry
+  // proxy / class wrappers / getters that survive its internal cloning
+  // but fail the worker→main `structuredClone` we use to ship body
+  // around (DataCloneError: "#<Object> could not be cloned"). Picking
+  // each field by name strips anything non-spec, so the renderer-side
+  // `worker.postMessage({ encryptedFile, … })` is always cloneable.
+  return {
+    v: 'v2',
+    url: f.url as MxcUri,
+    key: {
+      kty: 'oct',
+      alg: 'A256CTR',
+      key_ops: ['encrypt', 'decrypt'],
+      k: key.k,
+      ext: true,
+    },
+    iv: f.iv,
+    hashes: { sha256: hashes.sha256 },
+  };
 }
 
 function decodeMediaInfo(info: unknown): MediaInfo {
