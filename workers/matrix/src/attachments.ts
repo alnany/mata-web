@@ -272,7 +272,25 @@ export async function loadMedia(
 ): Promise<{ data: ArrayBuffer; mime: string }> {
   const { mxc, encryptedFile, mime } = args;
 
-  const httpUrl = client.mxcUrlToHttp(mxc, undefined, undefined, undefined, undefined, true);
+  // matrix-js-sdk 34 signature:
+  //   mxcUrlToHttp(mxc, width?, height?, resizeMethod?, allowDirectLinks?,
+  //                allowRedirects?, useAuthentication?): string | null
+  // The 7th positional flips the URL from legacy `/_matrix/media/v3/download/...`
+  // (unauth, rejected by modern Synapse with `enable_authenticated_media: true`)
+  // to `/_matrix/client/v1/media/download/...` (authenticated). We were passing
+  // `true` in position 6 = `allowRedirects`, leaving `useAuthentication` undefined
+  // and silently shipping the legacy URL — Synapse 1.100+ answers that with
+  // 404/401 even when we attach `Authorization: Bearer`, which is exactly the
+  // "image unavailable" the user is seeing.
+  const httpUrl = client.mxcUrlToHttp(
+    mxc,
+    undefined, // width
+    undefined, // height
+    undefined, // resizeMethod
+    undefined, // allowDirectLinks
+    true, // allowRedirects — follow CDN 30x from the v1 endpoint
+    true, // useAuthentication — REQUIRED to get the v1 URL
+  );
   if (!httpUrl) throw cryptoError(`Could not resolve mxc URL: ${mxc}`);
 
   // The Matrix v1.11 spec requires Authorization on /_matrix/client/v1/
