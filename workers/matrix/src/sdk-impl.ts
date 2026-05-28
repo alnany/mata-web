@@ -39,6 +39,7 @@ import type {
   RoomMember,
   RoomSummary,
   TimelineEvent,
+  RoomEncryptedEvent,
   UserId,
   DeviceId,
   RoomId,
@@ -53,7 +54,7 @@ import type {
 } from '@mata/shared/matrix';
 import { authError, networkError, syncError } from '@mata/shared/errors';
 import type { WorkerEvent } from '@mata/shared/rpc';
-import type { IceServer } from '@mata/shared/rpc';
+import type { IceServer, UrlPreview, UserSearchHit } from '@mata/shared/rpc';
 import { VerificationService } from './verification.js';
 import {
   type SessionRecord,
@@ -979,6 +980,115 @@ export class SdkSession {
       });
     }
     return { results: hits, count: hits.length, highlights: [term] };
+  }
+
+  /**
+   * Fetch URL preview via /_matrix/media/v3/preview_url. The
+   * homeserver server-side-fetches the page so the user's IP/UA
+   * never reach the third-party host — that's the privacy story
+   * for link previews in Matrix. We normalize the OG response
+   * (`og:title`, `og:image`, …) into a flat shape the UI can
+   * render without knowing about Matrix conventions, and resolve
+   * any `mxc://` image to an authenticated http URL on this side
+   * where the client lives.
+   *
+   * Returns null instead of throwing on any error — the UI
+   * fallback is "render the link as plain text", which is
+   * already the default behavior, so we never surface a preview
+   * failure to the user.
+   */
+  async getUrlPreview(url: string): Promise<UrlPreview | null> {
+    const client = this.requireClient();
+    try {
+      const raw = await client.getUrlPreview(url, Date.now());
+      if (!raw || typeof raw !== 'object') return null;
+
+      const pick = (k: string): string | undefined => {
+        const v = raw[k];
+        return typeof v === 'string' && v.length > 0 ? v : undefined;
+      };
+      const pickNum = (k: string): number | undefined => {
+        const v = raw[k];
+        return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+      };
+
+      let image = pick('og:image');
+      if (image && image.startsWith('mxc://')) {
+        // Use a sensible bounded size — the card renders at 80px
+        // tall on small previews and full-width on large ones.
+        // 600×600 covers both cases without round-tripping a giant
+        // original through the worker.
+        const http = client.mxcUrlToHttp(image, 600, 600, 'scale', false, true, true);
+        image = http ?? undefined;
+      }
+
+      const title = pick('og:title');
+      const description = pick('og:description');
+      const siteName = pick('og:site_name');
+
+      // If nothing useful came back, treat it as no preview rather
+      // than render an empty card with just the URL.
+      if (!title && !description && !image) return null;
+
+      return {
+        url,
+        title,
+        description,
+        image,
+        imageWidth: pickNum('og:image:width'),
+        imageHeight: pickNum('og:image:height'),
+        siteName,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Live user-directory search for the "start a chat" flow. Hits
+   * `searchUserDirectory` (POST /_matrix/client/v3/user_directory/
+   * search) and rewrites any `mxc://` avatar to an authenticated
+   * 64×64 thumbnail URL on this side — the main thread doesn't have
+   * the client and can't resolve mxc itself.
+   *
+   * Empty / whitespace-only terms short-circuit to no results so we
+   * don't burn a round-trip on every keystroke before the user has
+   * typed anything meaningful.
+   */
+  async searchUsers(
+    term: string,
+    limit: number,
+  ): Promise<{ results: UserSearchHit[]; limited: boolean }> {
+    const trimmed = term.trim();
+    if (!trimmed) return { results: [], limited: false };
+    const client = this.requireClient();
+    try {
+      const raw = await client.searchUserDirectory({
+        term: trimmed,
+        limit: Math.max(1, Math.min(limit, 50)),
+      });
+      const results: UserSearchHit[] = (raw.results ?? []).map((r) => {
+        let avatarUrl: string | undefined;
+        if (r.avatar_url && r.avatar_url.startsWith('mxc://')) {
+          const http = client.mxcUrlToHttp(r.avatar_url, 64, 64, 'crop', false, true, true);
+          avatarUrl = http ?? undefined;
+        } else if (r.avatar_url) {
+          avatarUrl = r.avatar_url;
+        }
+        return {
+          userId: r.user_id as UserId,
+          displayName: r.display_name,
+          avatarUrl,
+        };
+      });
+      return { results, limited: !!raw.limited };
+    } catch {
+      // Synapse returns 403 on the endpoint when the homeserver
+      // admin has disabled the directory entirely. Treat that as
+      // "no matches" instead of an error so the UI can fall back
+      // to direct Matrix-ID entry without a noisy toast.
+      return { results: [], limited: false };
+    }
   }
 
   async loadThread(roomId: RoomId, threadRootId: EventId): Promise<TimelineEvent[]> {
@@ -2139,6 +2249,30 @@ function extractPreview(ev: MatrixEvent): string | null {
   return null;
 }
 
+/**
+ * Map matrix-js-sdk's `DecryptionFailureCode` to the coarser category
+ * the UI uses for copy. Keep this exhaustive — unrecognized codes fall
+ * through to `'unknown'` rather than leaking raw enum names to users.
+ */
+function categorizeFailure(code: string | null): RoomEncryptedEvent['failureReason'] {
+  if (!code) return 'unknown';
+  if (code.startsWith('HISTORICAL_MESSAGE_')) return 'historical';
+  if (code === 'MEGOLM_KEY_WITHHELD' || code === 'MEGOLM_KEY_WITHHELD_FOR_UNVERIFIED_DEVICE') {
+    return 'key_withheld';
+  }
+  if (code === 'MEGOLM_UNKNOWN_INBOUND_SESSION_ID' || code === 'OLM_UNKNOWN_MESSAGE_INDEX') {
+    return 'session_missing';
+  }
+  if (
+    code === 'SENDER_IDENTITY_PREVIOUSLY_VERIFIED' ||
+    code === 'UNSIGNED_SENDER_DEVICE' ||
+    code === 'UNKNOWN_SENDER_DEVICE'
+  ) {
+    return 'verification';
+  }
+  return 'unknown';
+}
+
 function toTimelineEvent(ev: MatrixEvent): TimelineEvent | null {
   const type = ev.getType();
   const sender = ev.getSender();
@@ -2149,6 +2283,27 @@ function toTimelineEvent(ev: MatrixEvent): TimelineEvent | null {
     sender: sender as UserId,
     originServerTs: ev.getTs(),
   } as const;
+
+  // Intercept decryption failures BEFORE the type branching below. When
+  // matrix-js-sdk fails to decrypt, it replaces the cleartext content
+  // with a placeholder body like "** Unable to decrypt: DecryptionError:
+  // This message was sent before this device logged in, and there is no
+  // key backup on the server. **" AND keeps the event's `getType()` as
+  // `m.room.message`. Without this guard, the `RoomMessage` branch
+  // below would happily render that raw developer-speak as a real
+  // message body. Route it to our structured `m.room.encrypted` shape
+  // instead so the UI can show friendly copy and collapse runs of
+  // undecryptable events.
+  if (ev.isDecryptionFailure()) {
+    const code = (ev as unknown as { decryptionFailureReason: string | null })
+      .decryptionFailureReason;
+    return {
+      type: 'm.room.encrypted',
+      ...base,
+      decryptionStatus: 'failed',
+      failureReason: categorizeFailure(code),
+    };
+  }
 
   if (type === EventType.RoomMessage) {
     const c = ev.getContent();
@@ -2172,11 +2327,14 @@ function toTimelineEvent(ev: MatrixEvent): TimelineEvent | null {
     };
   }
   if (type === EventType.RoomEncrypted) {
+    // The `isDecryptionFailure()` branch is already handled above, so
+    // reaching here means decryption is still pending (just arrived,
+    // session lookup mid-flight).
     return {
       type: 'm.room.encrypted',
       ...base,
-      decryptionStatus: ev.isDecryptionFailure() ? 'failed' : 'pending',
-      failureReason: ev.isDecryptionFailure() ? 'decryption failed' : null,
+      decryptionStatus: 'pending',
+      failureReason: null,
     };
   }
   if (type === EventType.RoomMember) {
