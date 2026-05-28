@@ -75,7 +75,16 @@ export function MessageBubble(props: {
 
   return (
     <li
-      class={`msg-enter group flex ${isMine() ? 'justify-end' : 'justify-start'} ${
+      // `msg-enter` (120 ms fade) is intentionally OWN-MESSAGE-OFF.
+      // Own messages first appear as a PendingRow at the bottom of
+      // the timeline the instant the user hits send — same rectangle,
+      // same ink, same timestamp slot as this MessageBubble. When the
+      // server echo lands, the pending vanishes and this bubble mounts
+      // at a slightly different DOM position (above the pending list).
+      // Re-fading the bubble at mount = "flash on the message I just
+      // sent." Incoming bubbles still animate because they really are
+      // new content from the user's POV.
+      class={`${isMine() ? '' : 'msg-enter'} group flex ${isMine() ? 'justify-end' : 'justify-start'} ${
         props.showHeader ? 'mt-3' : 'mt-0.5'
       }`}
       data-event-id={msg.eventId}
