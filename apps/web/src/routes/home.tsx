@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import { useNavigate } from '@solidjs/router';
 import { useBridge } from '../bridge/context.js';
@@ -71,14 +71,26 @@ export function HomePage() {
     }),
   );
 
-  onMount(async () => {
-    if (session().phase === 'anonymous') {
+  // Boot sequence is gated on the session phase, not onMount, because the
+  // worker's session restore is async and finishes AFTER this page mounts.
+  // If we fire `loadRoomList` while phase is still `restoring` / `unknown`,
+  // the worker throws "Not logged in" and the toast fires before login
+  // even completes. Wait for `authenticated`, run once, then let the
+  // syncUpdate listener take over for live refetches.
+  let booted = false;
+  createEffect(() => {
+    const s = session();
+    if (s.phase === 'anonymous') {
       navigate('/login', { replace: true });
       return;
     }
-    const cached = await readRoomList();
-    if (cached && !rooms()) setRooms(sortRooms(cached.rooms));
-    void refetchRooms();
+    if (s.phase !== 'authenticated' || booted) return;
+    booted = true;
+    void (async () => {
+      const cached = await readRoomList();
+      if (cached && !rooms()) setRooms(sortRooms(cached.rooms));
+      void refetchRooms();
+    })();
   });
 
   const refetchRooms = async () => {
