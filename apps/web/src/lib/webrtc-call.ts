@@ -33,12 +33,8 @@
  * We implement this; it's a 4-line check inside `handleInvite`.
  */
 
-import type {
-  EventId,
-  RoomId,
-  UserId,
-  IceServer,
-} from '@mata/shared/rpc';
+import type { EventId, RoomId, UserId } from '@mata/shared/matrix';
+import type { IceServer } from '@mata/shared/rpc';
 
 /** Per-spec the SDP version a v1 client emits. */
 const CALL_PROTOCOL_VERSION = '1';
@@ -321,11 +317,9 @@ export class CallSession {
     for (const c of raw as Array<Record<string, unknown>>) {
       const init: RTCIceCandidateInit = {
         candidate: typeof c.candidate === 'string' ? (c.candidate as string) : '',
-        sdpMid: typeof c.sdpMid === 'string' ? (c.sdpMid as string) : undefined,
-        sdpMLineIndex: typeof c.sdpMLineIndex === 'number'
-          ? (c.sdpMLineIndex as number)
-          : undefined,
       };
+      if (typeof c.sdpMid === 'string') init.sdpMid = c.sdpMid as string;
+      if (typeof c.sdpMLineIndex === 'number') init.sdpMLineIndex = c.sdpMLineIndex as number;
       // Empty candidate string signals end-of-candidates per Trickle ICE.
       // We still apply it because RTCPeerConnection uses it as a hint.
       if (!this.remoteDescriptionApplied) {

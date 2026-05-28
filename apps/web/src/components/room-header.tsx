@@ -2,6 +2,8 @@ import { createSignal, Show } from 'solid-js';
 import type { RoomSummary } from '@mata/shared/matrix';
 import { initials, prettyName } from './message-bubble.js';
 import { useBridge } from '../bridge/context.js';
+import { activeCall, placeCall } from '../stores/call.js';
+import { showToast } from '../stores/toast.js';
 
 /**
  * Header for the active room: avatar (initials placeholder), name + member
@@ -74,6 +76,28 @@ export function RoomHeader(props: {
         </div>
         <div class="truncate text-[11px] text-neutral-500">{subtitle()}</div>
       </div>
+      {/* Phase 14.1 — call buttons. Visible only when no other call is
+          in flight; we disable rather than hide so the buttons keep
+          their slot in the header layout (no jumping on press). The
+          peer userId is left null in v0: any joined user in the room
+          can answer per spec, and the first answer's sender becomes
+          the peer for the duration of the call. For DM rooms with
+          exactly two members we could pin the peer up-front; that
+          refinement is a Phase 14.2 task. */}
+      <CallButton
+        room={props.room}
+        media="audio"
+        label="📞"
+        title="Voice call"
+        ariaLabel="Start voice call"
+      />
+      <CallButton
+        room={props.room}
+        media="video"
+        label="🎥"
+        title="Video call"
+        ariaLabel="Start video call"
+      />
       <Show when={props.onShowMembers}>
         <button
           type="button"
@@ -177,5 +201,45 @@ function Row(props: { label: string; children: any }) {
       <dt class="w-24 shrink-0 text-xs font-medium text-neutral-500">{props.label}</dt>
       <dd class="flex-1 text-neutral-800 dark:text-neutral-200">{props.children}</dd>
     </div>
+  );
+}
+
+/**
+ * Header-mounted call-start button. Disabled while another call is
+ * active so we don't try to spin a second peer connection. We don't
+ * keep our own pending flag — `placeCall` flips `activeCall()` to a
+ * non-null snapshot synchronously enough that the disabled state
+ * latches before the user can double-click.
+ */
+function CallButton(props: {
+  room: RoomSummary;
+  media: 'audio' | 'video';
+  label: string;
+  title: string;
+  ariaLabel: string;
+}) {
+  const isBusy = () => activeCall() != null && activeCall()?.state !== 'ended';
+  const onClick = async () => {
+    if (isBusy()) return;
+    try {
+      await placeCall(props.room.roomId, null, props.media);
+    } catch (err) {
+      showToast(
+        'error',
+        err instanceof Error ? err.message : 'Could not start the call',
+      );
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={isBusy()}
+      class="rounded p-1.5 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+      aria-label={props.ariaLabel}
+      title={props.title}
+    >
+      {props.label}
+    </button>
   );
 }

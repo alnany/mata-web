@@ -403,14 +403,16 @@ function SystemRow(props: { ev: TimelineEvent }) {
   );
 }
 
-export function initials(userId: string): string {
+export function initials(userId: string | undefined): string {
+  if (!userId) return '?';
   const localpart = userId.startsWith('@') ? userId.slice(1).split(':')[0] : userId;
-  return localpart.slice(0, 2).toUpperCase();
+  return (localpart ?? userId).slice(0, 2).toUpperCase();
 }
 
-export function prettyName(userId: string): string {
+export function prettyName(userId: string | undefined): string {
+  if (!userId) return 'Unknown';
   const localpart = userId.startsWith('@') ? userId.slice(1).split(':')[0] : userId;
-  return localpart;
+  return localpart ?? userId;
 }
 
 function previewOf(ev: TimelineEvent): string {
@@ -421,8 +423,6 @@ function previewOf(ev: TimelineEvent): string {
   if (ev.type === 'm.room.encrypted') return '🔒 encrypted';
   return '…';
 }
-
-export { initials, prettyName };
 
 // ---------------------------------------------------------------------------
 // MediaContent — image / video / audio / file body.
