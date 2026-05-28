@@ -88,7 +88,7 @@ const handlers: Handlers = {
     // narrow it down further once we see which CORE phase is last.
     core.diagLog(`send-RPC: handler entered txn=${req.txnId.slice(-6)} room=${req.roomId.slice(0, 24)}`);
     try {
-      await core.sendMessage(req.roomId, req.content, req.txnId, req.threadRoot);
+      await core.sendMessage(req.roomId, req.content, req.txnId, req.threadRoot, req.replyTo);
       core.diagLog(`send-RPC: core returned ok txn=${req.txnId.slice(-6)}`);
       return { kind: 'sendMessage', queued: true };
     } catch (err) {

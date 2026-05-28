@@ -82,6 +82,16 @@ export type MainToWorkerRequest =
        * still see a reply chain.
        */
       threadRoot?: EventId;
+      /**
+       * When set, the outgoing event is decorated with
+       * `m.relates_to: { 'm.in_reply_to': { event_id } }` per Matrix
+       * spec v1.4 (rich replies). The worker also rebuilds the
+       * `> <@sender> body\n\n` fallback prefix so clients without rich
+       * reply support still see a quote chain. Mutually composable
+       * with `threadRoot` — when both are set we emit a thread relation
+       * with an in-reply-to to the parent (intra-thread reply).
+       */
+      replyTo?: { eventId: EventId; sender: UserId; body: string };
     }
   | { kind: 'editMessage'; roomId: RoomId; eventId: EventId; content: MessageBody; txnId: string }
   | { kind: 'redactMessage'; roomId: RoomId; eventId: EventId; reason: string | null }
