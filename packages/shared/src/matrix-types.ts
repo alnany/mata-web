@@ -35,9 +35,22 @@ export interface RoomDelta {
 }
 
 export type MessageBody =
-  | { msgtype: 'm.text'; body: string; formattedBody: string | null }
-  | { msgtype: 'm.emote'; body: string }
-  | { msgtype: 'm.notice'; body: string }
+  | {
+      msgtype: 'm.text';
+      body: string;
+      formattedBody: string | null;
+      /**
+       * MSC3952 intentional mentions. Forwarded round-trip — the worker
+       * serializes this to `m.mentions: { user_ids: [...] }` on send, and
+       * parses the same field back on receive. The UI uses it to render
+       * mention pills and to scope self-mention highlight.
+       *
+       * `room: true` represents `@room` (entire-room mention).
+       */
+      mentions?: { userIds: UserId[]; room?: boolean };
+    }
+  | { msgtype: 'm.emote'; body: string; mentions?: { userIds: UserId[]; room?: boolean } }
+  | { msgtype: 'm.notice'; body: string; mentions?: { userIds: UserId[]; room?: boolean } }
   | MediaMessageBody
   | { msgtype: 'm.location'; body: string; geoUri: string };
 

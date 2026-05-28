@@ -1559,20 +1559,40 @@ function toTimelineEvent(ev: MatrixEvent): TimelineEvent | null {
 }
 
 function encodeMessageBody(body: MessageBody): IContent {
+  // MSC3952 intentional mentions: attach as `m.mentions` when present,
+  // so push rules on the homeserver fire correctly even when the body
+  // text has no display-name match. We merge it onto every text-ish
+  // result via the helper below to avoid duplicating the spread in
+  // each branch (text formatted vs unformatted etc).
+  const withMentions = <T extends Record<string, unknown>>(out: T): T => {
+    if (body.msgtype !== 'm.text' && body.msgtype !== 'm.emote' && body.msgtype !== 'm.notice') {
+      return out;
+    }
+    const m = body.mentions;
+    if (!m) return out;
+    const payload: { user_ids?: string[]; room?: true } = {};
+    if (m.userIds && m.userIds.length > 0) payload.user_ids = m.userIds;
+    if (m.room) payload.room = true;
+    if (Object.keys(payload).length === 0) return out;
+    return { ...out, 'm.mentions': payload };
+  };
+
   switch (body.msgtype) {
     case 'm.text':
-      return body.formattedBody
-        ? {
-            msgtype: MsgType.Text,
-            body: body.body,
-            format: 'org.matrix.custom.html',
-            formatted_body: body.formattedBody,
-          }
-        : { msgtype: MsgType.Text, body: body.body };
+      return withMentions(
+        body.formattedBody
+          ? {
+              msgtype: MsgType.Text,
+              body: body.body,
+              format: 'org.matrix.custom.html',
+              formatted_body: body.formattedBody,
+            }
+          : { msgtype: MsgType.Text, body: body.body },
+      );
     case 'm.emote':
-      return { msgtype: MsgType.Emote, body: body.body };
+      return withMentions({ msgtype: MsgType.Emote, body: body.body });
     case 'm.notice':
-      return { msgtype: MsgType.Notice, body: body.body };
+      return withMentions({ msgtype: MsgType.Notice, body: body.body });
     case 'm.image':
       return { msgtype: MsgType.Image, body: body.body, url: body.url, info: mediaInfo(body.info) };
     case 'm.video':
@@ -1601,9 +1621,27 @@ function mediaInfo(info: MediaInfo): Record<string, unknown> {
 function decodeMessageBody(c: IContent): MessageBody {
   const msgtype = (c.msgtype ?? MsgType.Text) as string;
   const body = typeof c.body === 'string' ? c.body : '';
+  // MSC3952 mentions on the receive side. We pluck this out once and
+  // merge it into the structured text variants; matrix-js-sdk does
+  // *not* surface this field at the typed-event layer, so the cast
+  // to a record is unavoidable.
+  const decodeMentions = (): { userIds: UserId[]; room?: boolean } | undefined => {
+    const raw = (c as Record<string, unknown>)['m.mentions'];
+    if (!raw || typeof raw !== 'object') return undefined;
+    const r = raw as { user_ids?: unknown; room?: unknown };
+    const userIds: UserId[] = Array.isArray(r.user_ids)
+      ? r.user_ids.filter((u): u is UserId => typeof u === 'string' && u.startsWith('@'))
+      : [];
+    const isRoom = r.room === true;
+    if (userIds.length === 0 && !isRoom) return undefined;
+    const out: { userIds: UserId[]; room?: boolean } = { userIds };
+    if (isRoom) out.room = true;
+    return out;
+  };
   switch (msgtype) {
-    case MsgType.Text:
-      return {
+    case MsgType.Text: {
+      const mentions = decodeMentions();
+      const base: MessageBody = {
         msgtype: 'm.text',
         body,
         formattedBody:
@@ -1611,10 +1649,21 @@ function decodeMessageBody(c: IContent): MessageBody {
             ? c.formatted_body
             : null,
       };
-    case MsgType.Emote:
-      return { msgtype: 'm.emote', body };
-    case MsgType.Notice:
-      return { msgtype: 'm.notice', body };
+      if (mentions) (base as { mentions?: typeof mentions }).mentions = mentions;
+      return base;
+    }
+    case MsgType.Emote: {
+      const mentions = decodeMentions();
+      const base: MessageBody = { msgtype: 'm.emote', body };
+      if (mentions) (base as { mentions?: typeof mentions }).mentions = mentions;
+      return base;
+    }
+    case MsgType.Notice: {
+      const mentions = decodeMentions();
+      const base: MessageBody = { msgtype: 'm.notice', body };
+      if (mentions) (base as { mentions?: typeof mentions }).mentions = mentions;
+      return base;
+    }
     case MsgType.Image:
       return {
         msgtype: 'm.image',
