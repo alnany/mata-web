@@ -531,6 +531,33 @@ export function RoomView(props: {
     const txnId = mkTxn();
     const shortTxn = txnId.slice(-6);
 
+    // Reply wire-up. When the user clicked Reply on a message, attach
+    // the in-reply-to relation so the worker emits a proper Matrix
+    // rich-reply (`m.relates_to.m.in_reply_to` + quote-prefix fallback).
+    // The worker handles the fallback body construction and HTML
+    // wrapping; we just hand it the parent's eventId / sender / body.
+    //
+    // This MUST be declared before the cache-push try-block: the
+    // pending entry retains `replyToParam` so a Retry can replay the
+    // same reply target, and referencing it from inside the try-block
+    // before it's bound is a temporal-dead-zone violation (manifests
+    // post-bundle as "Cannot access 'te' before initialization" and
+    // surfaces to the user as the "Send setup failed" toast).
+    const replyToParam =
+      replyTarget && replyTarget.content.msgtype === 'm.text'
+        ? {
+            eventId: replyTarget.eventId,
+            sender: replyTarget.sender,
+            body: replyTarget.content.body,
+          }
+        : replyTarget
+          ? {
+              eventId: replyTarget.eventId,
+              sender: replyTarget.sender,
+              body: replyTarget.content.body || '',
+            }
+          : undefined;
+
     // Synchronous setup (cache mutation, draft clear) MUST be guarded.
     // Earlier "silent send failure" bug (L2 fix log) was exactly this:
     // setCache threw because the room cache wasn't initialized, and
@@ -567,26 +594,7 @@ export function RoomView(props: {
       return;
     }
 
-    // Reply wire-up. When the user clicked Reply on a message, attach
-    // the in-reply-to relation so the worker emits a proper Matrix
-    // rich-reply (`m.relates_to.m.in_reply_to` + quote-prefix fallback).
-    // The worker handles the fallback body construction and HTML
-    // wrapping; we just hand it the parent's eventId / sender / body.
     diag(`send-UI[${shortTxn}]: before-rpc dispatching bridge.request`);
-    const replyToParam =
-      replyTarget && replyTarget.content.msgtype === 'm.text'
-        ? {
-            eventId: replyTarget.eventId,
-            sender: replyTarget.sender,
-            body: replyTarget.content.body,
-          }
-        : replyTarget
-          ? {
-              eventId: replyTarget.eventId,
-              sender: replyTarget.sender,
-              body: replyTarget.content.body || '',
-            }
-          : undefined;
     const sendCall = bridge.request({
       kind: 'sendMessage',
       roomId: props.room.roomId,
