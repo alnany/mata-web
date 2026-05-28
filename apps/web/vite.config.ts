@@ -61,8 +61,15 @@ export default defineConfig({
     sourcemap: false,
     cssCodeSplit: true,
     // terser hits ~20-30% smaller than the default esbuild minifier on
-    // matrix-js-sdk specifically, which matters because the Composio
-    // deploy gateway caps a single request at ~1 MB.
+    // matrix-js-sdk specifically. Historically (Composio deploy gateway,
+    // ~1 MB per request) we ran with `toplevel: true` on both mangle and
+    // compress; that broke cross-chunk references in the split matrix-a /
+    // matrix-b bundle ("c is not defined" at runtime on send/decrypt),
+    // because Terser renames top-level bindings inside each chunk
+    // independently while Rollup keeps the ESM import linkage. Vercel
+    // has no per-chunk ceiling, so we drop `toplevel` and keep the rest
+    // (dead-code + unused + pure_funcs across 3 passes still trims most
+    // of the win).
     minify: 'terser',
     terserOptions: {
       compress: {
@@ -70,9 +77,8 @@ export default defineConfig({
         pure_funcs: ['console.debug', 'console.log'],
         dead_code: true,
         unused: true,
-        toplevel: true,
       },
-      mangle: { toplevel: true },
+      mangle: {},
       format: { comments: false },
     },
     rollupOptions: {
