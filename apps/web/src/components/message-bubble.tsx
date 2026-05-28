@@ -242,9 +242,11 @@ export function MessageBubble(props: {
            * users tabbing through actions.
            */}
           <div
-            class={`pointer-events-none absolute top-0 z-20 -translate-y-1/2 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${
-              isMine() ? 'left-2' : 'right-2'
-            }`}
+            class={`absolute top-0 z-20 -translate-y-1/2 transition-opacity duration-100 ${
+              showMenu() || showEmoji()
+                ? 'pointer-events-auto opacity-100'
+                : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100'
+            } ${isMine() ? 'left-2' : 'right-2'}`}
           >
             <div
               class="flex items-center gap-0.5 rounded-full border bg-elev px-1 py-0.5 shadow-md"
@@ -284,6 +286,62 @@ export function MessageBubble(props: {
                 <span class="text-base leading-none">⋯</span>
               </ActionBtn>
             </div>
+
+            {/*
+             * Overflow menu — nested inside the toolbar wrapper so
+             * its `top-full` anchors directly to the toolbar pill's
+             * bottom edge (one continuous menu, no air gap between
+             * pill and dropdown). Right-aligned to the pill since
+             * the ⋯ button is always the rightmost item regardless
+             * of which shoulder the toolbar sits on.
+             */}
+            <Show when={showMenu()}>
+              <div
+                role="menu"
+                class="absolute right-0 top-full z-30 mt-1 min-w-[176px] rounded-lg border bg-elev py-1 text-sm shadow-lg"
+                style={{ 'border-color': 'var(--color-line)' }}
+              >
+                <MenuItem
+                  onClick={() => {
+                    props.actions.onReply(msg);
+                    setShowMenu(false);
+                  }}
+                >
+                  Reply
+                </MenuItem>
+                <MenuItem
+                  onClick={() => {
+                    props.actions.onForward(msg);
+                    setShowMenu(false);
+                  }}
+                >
+                  Forward
+                </MenuItem>
+                <MenuDivider />
+                <MenuItem onClick={copyText}>Copy text</MenuItem>
+                <MenuItem onClick={copyPermalink}>Copy link</MenuItem>
+                <Show when={isMine() && msg.content.msgtype === 'm.text'}>
+                  <MenuDivider />
+                  <MenuItem
+                    onClick={() => {
+                      props.actions.onEdit(msg);
+                      setShowMenu(false);
+                    }}
+                  >
+                    Edit
+                  </MenuItem>
+                  <MenuItem
+                    destructive
+                    onClick={() => {
+                      props.actions.onDelete(msg.eventId);
+                      setShowMenu(false);
+                    }}
+                  >
+                    Delete
+                  </MenuItem>
+                </Show>
+              </div>
+            </Show>
           </div>
 
           {/*
@@ -308,63 +366,6 @@ export function MessageBubble(props: {
             </div>
           </Show>
 
-          {/*
-           * Overflow menu — drops BELOW the bubble (`top-full mt-1`)
-           * anchored on the bubble's "inside" shoulder so it never
-           * extends past the viewport edge. Reactions row sits below
-           * the bubble too; z-30 lets the menu visually win without
-           * affecting click-through on the reactions when the menu is
-           * closed.
-           */}
-          <Show when={showMenu()}>
-            <div
-              style={{ 'border-color': 'var(--color-line)' }}
-              role="menu"
-              class={`absolute top-full z-30 mt-1 min-w-[176px] rounded-lg border bg-elev py-1 text-sm shadow-lg ${
-                isMine() ? 'right-0' : 'left-0'
-              }`}
-            >
-              <MenuItem
-                onClick={() => {
-                  props.actions.onReply(msg);
-                  setShowMenu(false);
-                }}
-              >
-                Reply
-              </MenuItem>
-              <MenuItem
-                onClick={() => {
-                  props.actions.onForward(msg);
-                  setShowMenu(false);
-                }}
-              >
-                Forward
-              </MenuItem>
-              <MenuDivider />
-              <MenuItem onClick={copyText}>Copy text</MenuItem>
-              <MenuItem onClick={copyPermalink}>Copy link</MenuItem>
-              <Show when={isMine() && msg.content.msgtype === 'm.text'}>
-                <MenuDivider />
-                <MenuItem
-                  onClick={() => {
-                    props.actions.onEdit(msg);
-                    setShowMenu(false);
-                  }}
-                >
-                  Edit
-                </MenuItem>
-                <MenuItem
-                  destructive
-                  onClick={() => {
-                    props.actions.onDelete(msg.eventId);
-                    setShowMenu(false);
-                  }}
-                >
-                  Delete
-                </MenuItem>
-              </Show>
-            </div>
-          </Show>
         </div>
 
         {/*
