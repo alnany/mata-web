@@ -280,6 +280,30 @@ export function installBridge(scope: DedicatedWorkerGlobalScope): BridgeContext 
   // (traces appear but sync never reaches PREPARED).
   const seenFailures = new Set<string>();
   const seenOk = new Set<string>();
+  // Homeserver reachability probe state. When a network failure hits
+  // /sync (a 30s long-poll, very prone to mid-flight interruption from
+  // tab suspension / WiFi roam / VPN handoff), we don't want to scream
+  // "CORS!" at the user when the SDK will just retry the long-poll and
+  // succeed. Instead we kick a cheap GET /_matrix/client/versions probe
+  // against the same homeserver to verify it's actually reachable from
+  // this origin. The result is cached briefly so a burst of failures
+  // shares one probe.
+  let homeserverReachableProbe: Promise<boolean> | null = null;
+  let lastProbeAt = 0;
+  const probeHomeserverReachable = (sampleUrl: string): Promise<boolean> => {
+    const now = Date.now();
+    if (homeserverReachableProbe && now - lastProbeAt < 5000) {
+      return homeserverReachableProbe;
+    }
+    lastProbeAt = now;
+    const baseMatch = sampleUrl.match(/^(https?:\/\/[^/]+)/);
+    if (!baseMatch) return Promise.resolve(false);
+    const versionsUrl = `${baseMatch[1]}/_matrix/client/versions`;
+    homeserverReachableProbe = origFetch(versionsUrl, { method: 'GET' })
+      .then((r) => r.ok)
+      .catch(() => false);
+    return homeserverReachableProbe;
+  };
   // During startup we want EVERY matrix endpoint logged once, not
   // collapsed by family. Once the sync reaches PREPARED we go back to
   // family-dedup so steady-state /sync long-polls don't flood the log.
@@ -393,21 +417,56 @@ export function installBridge(scope: DedicatedWorkerGlobalScope): BridgeContext 
       if (isMatrix) {
         const family = endpointFamily(url);
         const msg = err instanceof Error ? err.message : String(err);
-        // Network-level failures (CORS, DNS, offline, TLS) hit this
-        // branch. TypeError "Failed to fetch" is browser-speak for CORS
-        // or DNS in 95% of cases — name it explicitly so users don't
-        // have to guess.
-        const hint = msg.includes('Failed to fetch')
-          ? `${msg} (likely CORS or DNS — the homeserver must allow ${scope.location.origin} as Origin)`
-          : msg;
-        const key = `neterr:${family}`;
-        if (!seenFailures.has(key)) {
-          seenFailures.add(key);
-          emit({
-            kind: 'syncStatus',
-            status: 'error',
-            reason: `network on ${family}: ${hint}`,
+        const isFailedToFetch = msg.includes('Failed to fetch');
+        // /sync is a 30s long-poll. The browser interrupts long-polls
+        // on tab suspension, network flips, or VPN handoff — the SDK
+        // just retries and recovers without user-visible disruption.
+        // Surfacing a hard error toast on every such interruption is
+        // pure noise.
+        const isSyncLongPoll = family.startsWith('/_matrix/client/v3/sync');
+
+        if (isFailedToFetch) {
+          // Kick a reachability probe before accusing CORS. If the
+          // homeserver answers /versions from this same origin, CORS
+          // and DNS are fine and the failure was transient.
+          probeHomeserverReachable(url).then((reachable) => {
+            const key = reachable
+              ? `transient:${family}`
+              : `unreach:${family}`;
+            if (seenFailures.has(key)) return;
+            seenFailures.add(key);
+            if (reachable) {
+              // Server is up and CORS-permits this origin. The failure
+              // was a transient browser/network interruption. For /sync
+              // long-polls we say nothing visible (SDK retries silently);
+              // for other endpoints we drop a diag note for forensics.
+              if (!isSyncLongPoll) {
+                emit({
+                  kind: 'diagNote',
+                  note: `transient network blip on ${family} (homeserver still reachable)`,
+                });
+              }
+            } else {
+              emit({
+                kind: 'syncStatus',
+                status: 'error',
+                reason: `Homeserver unreachable from ${scope.location.origin} (DNS / TLS / CORS preflight on /_matrix/client/versions failed). Check that the homeserver URL is correct, the server is up, and your network allows it.`,
+              });
+            }
           });
+        } else {
+          // Non-"Failed to fetch" errors (AbortError, timeout, TLS errors
+          // with named messages) — surface the message itself, once per
+          // family.
+          const key = `neterr:${family}`;
+          if (!seenFailures.has(key)) {
+            seenFailures.add(key);
+            emit({
+              kind: 'syncStatus',
+              status: isSyncLongPoll ? 'reconnecting' : 'error',
+              reason: `network on ${family}: ${msg}`,
+            });
+          }
         }
       }
       throw err;
