@@ -817,6 +817,38 @@ export function RoomView(props: {
     return map;
   });
 
+  /**
+   * Aggregate thread reply counts per root event in one pass over
+   * the cached timeline. Used by MessageBubble to render the
+   * Element-style "💬 N replies · last reply Xm ago" pill below
+   * thread roots — the clickable affordance that turns threads
+   * from a buried More-menu feature into a first-class surface.
+   *
+   * Why a Map keyed by root id (not by index): the bubble looks
+   * up by its OWN eventId, not by position in the list, so we
+   * need O(1) access. Recomputes on cache.events change.
+   */
+  type ThreadSummary = { count: number; lastTs: number; lastSender: UserId | null };
+  const threadSummaries = createMemo(() => {
+    const map = new Map<EventId, ThreadSummary>();
+    for (const ev of props.cache.events) {
+      if (ev.type !== 'm.room.message') continue;
+      const root = ev.threadRoot;
+      if (!root) continue;
+      const cur = map.get(root);
+      if (!cur) {
+        map.set(root, { count: 1, lastTs: ev.originServerTs, lastSender: ev.sender });
+      } else {
+        cur.count += 1;
+        if (ev.originServerTs > cur.lastTs) {
+          cur.lastTs = ev.originServerTs;
+          cur.lastSender = ev.sender;
+        }
+      }
+    }
+    return map;
+  });
+
   // `<For>` keys items by REFERENCE, not by some extracted id. If the
   // rows() memo returns a fresh `{ kind: 'msg', ev, ... }` object on
   // every recomputation, every existing message looks like a new item
@@ -988,6 +1020,7 @@ export function RoomView(props: {
                           ? eventById().get(row.ev.inReplyTo)
                           : undefined
                       }
+                      threadSummary={threadSummaries().get(row.ev.eventId)}
                       actions={actions}
                     />
                   )

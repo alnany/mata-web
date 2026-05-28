@@ -45,6 +45,18 @@ export function MessageBubble(props: {
   me: UserId | null;
   showHeader: boolean;
   inReplyToEvent?: TimelineEvent;
+  /**
+   * Set when this message is the root of an active thread. The
+   * bubble renders a clickable "💬 N replies · last reply Xm ago"
+   * pill below the message so users can discover and re-enter
+   * threads without digging into the More menu. Computed by the
+   * parent room view as a single pass over the event cache.
+   */
+  threadSummary?: {
+    count: number;
+    lastTs: number;
+    lastSender: UserId | null;
+  };
   actions: MessageActions;
 }) {
   const isMine = () => props.ev.sender === props.me;
@@ -232,6 +244,18 @@ export function MessageBubble(props: {
                 <span class="text-base leading-none">↩</span>
               </ActionBtn>
               <ActionBtn
+                title={msg.threadRoot ? 'Open thread' : 'Reply in thread'}
+                onClick={() => {
+                  // For replies already inside a thread, jump to the
+                  // thread's actual root (Matrix forbids nested threads
+                  // per MSC3440).
+                  const rootId = msg.threadRoot ?? msg.eventId;
+                  props.actions.onOpenThread(rootId);
+                }}
+              >
+                <span class="text-base leading-none">💬</span>
+              </ActionBtn>
+              <ActionBtn
                 title="More"
                 onClick={() => {
                   setShowMenu((v) => !v);
@@ -291,18 +315,6 @@ export function MessageBubble(props: {
               </MenuItem>
               <MenuItem
                 onClick={() => {
-                  // If this message is already in a thread, open the
-                  // existing thread root rather than try to nest —
-                  // Matrix doesn't allow nested threads.
-                  const rootId = msg.threadRoot ?? msg.eventId;
-                  props.actions.onOpenThread(rootId);
-                  setShowMenu(false);
-                }}
-              >
-                {msg.threadRoot ? 'Open thread' : 'Reply in thread'}
-              </MenuItem>
-              <MenuItem
-                onClick={() => {
                   props.actions.onForward(msg);
                   setShowMenu(false);
                 }}
@@ -336,6 +348,44 @@ export function MessageBubble(props: {
           </Show>
         </div>
 
+        {/*
+         * Thread summary pill — only renders on the thread ROOT
+         * message (never on replies, otherwise we'd plaster the
+         * indicator on every reply too). Element / Slack pattern:
+         * the indicator IS the entry point, so the user can
+         * re-enter a thread without remembering it lives behind a
+         * hover menu. Click → opens the thread side-panel.
+         */}
+        <Show when={props.threadSummary && props.threadSummary.count > 0 && !msg.threadRoot}>
+          {(_) => {
+            const s = props.threadSummary!;
+            return (
+              <div class={`mt-1 flex ${isMine() ? 'justify-end' : 'justify-start'}`}>
+                <button
+                  type="button"
+                  onClick={() => props.actions.onOpenThread(msg.eventId)}
+                  class="group/thread inline-flex max-w-full items-center gap-1.5 rounded-full border bg-elev px-2.5 py-1 text-xs text-fg-2 shadow-sm transition-colors hover:border-mata-500 hover:text-mata-500"
+                  style={{ 'border-color': 'var(--color-line)' }}
+                  title={`${s.count} ${s.count === 1 ? 'reply' : 'replies'} · last reply ${relativeTime(s.lastTs)}`}
+                >
+                  <span class="text-sm leading-none">💬</span>
+                  <span class="font-medium">
+                    {s.count} {s.count === 1 ? 'reply' : 'replies'}
+                  </span>
+                  <span class="text-fg-3">·</span>
+                  <span class="truncate text-fg-3">{relativeTime(s.lastTs)}</span>
+                  <span
+                    class="text-fg-3 transition-transform group-hover/thread:translate-x-0.5"
+                    aria-hidden="true"
+                  >
+                    →
+                  </span>
+                </button>
+              </div>
+            );
+          }}
+        </Show>
+
         {/* Reactions pill row */}
         <Show when={msg.reactions.length > 0}>
           <div class={`mt-1 flex flex-wrap gap-1 ${isMine() ? 'justify-end' : 'justify-start'}`}>
@@ -349,6 +399,20 @@ export function MessageBubble(props: {
       </div>
     </li>
   );
+}
+
+/**
+ * Short human-friendly relative timestamp, e.g. "just now",
+ * "3m ago", "2h ago", "Apr 12". Used for the thread summary pill so
+ * users can tell at a glance whether a thread is fresh or stale.
+ */
+function relativeTime(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d ago`;
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function ActionBtn(props: { title: string; onClick: () => void; children: any }) {
