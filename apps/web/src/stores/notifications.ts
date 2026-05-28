@@ -163,7 +163,17 @@ export function dispatchSyncDeltas(input: NotifyDispatchInput): void {
       const isMention = !!me && isMentionEvent(msg, me);
       if (roomIsActive && !isMention) continue;
 
-      needChime = true;
+      // Sound gating. When the window is focused and the event is
+      // not a mention, the user is already actively using the app —
+      // a chime is just noise. Tab badge + unread counter cover the
+      // visibility. We still play for mentions (highlight rule) and
+      // for any new traffic when the tab is in the background.
+      if (windowFocused() && !isMention) {
+        // still flow through to desktop notification gate below if
+        // somehow permitted, but skip the chime.
+      } else {
+        needChime = true;
+      }
 
       if (
         enabled()

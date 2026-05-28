@@ -94,7 +94,28 @@ export function RoomView(props: {
   const [typingUsers, setTypingUsers] = createSignal<UserId[]>([]);
 
   // Composer state lives here because reply/edit context is per-room view.
-  const [draft, setDraft] = createSignal('');
+  // The draft is persisted to localStorage keyed by roomId so it
+  // survives both room-switching and full reloads. We hydrate from
+  // storage on first mount and write-through on every setDraft.
+  const draftStorageKey = (): string => `mata.draft.${props.room.roomId}`;
+  const loadStoredDraft = (): string => {
+    try {
+      return localStorage.getItem(draftStorageKey()) ?? '';
+    } catch {
+      return '';
+    }
+  };
+  const [draftValue, setDraftValueRaw] = createSignal<string>(loadStoredDraft());
+  const draft = draftValue;
+  const setDraft = (v: string) => {
+    setDraftValueRaw(v);
+    try {
+      if (v) localStorage.setItem(draftStorageKey(), v);
+      else localStorage.removeItem(draftStorageKey());
+    } catch {
+      /* localStorage may be disabled */
+    }
+  };
   const [replyingTo, setReplyingTo] = createSignal<RoomMessageEvent | null>(null);
   const [editing, setEditing] = createSignal<RoomMessageEvent | null>(null);
   // Thread side-panel (Phase 13). null = panel closed. When set,
@@ -750,8 +771,72 @@ export function RoomView(props: {
     return out;
   });
 
+  // ---- Drag/drop + paste image ------------------------------------------
+  // Both surfaces just hand the resulting File to `handleAttach` — the
+  // existing pipeline already handles encryption + send. Paste lives
+  // on the section (any focus in the room view), drag/drop reuses the
+  // same section and shows a translucent overlay when active.
+  const [isDragOver, setIsDragOver] = createSignal(false);
+  const dragDepth = { count: 0 };
+  const onDragEnter = (e: DragEvent) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    dragDepth.count++;
+    setIsDragOver(true);
+  };
+  const onDragOver = (e: DragEvent) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  };
+  const onDragLeave = (e: DragEvent) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    dragDepth.count = Math.max(0, dragDepth.count - 1);
+    if (dragDepth.count === 0) setIsDragOver(false);
+  };
+  const onDrop = (e: DragEvent) => {
+    e.preventDefault();
+    dragDepth.count = 0;
+    setIsDragOver(false);
+    const file = e.dataTransfer?.files?.[0];
+    if (file) handleAttach(file);
+  };
+  const onPaste = (e: ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const it of items) {
+      if (it.kind === 'file') {
+        const file = it.getAsFile();
+        if (file) {
+          e.preventDefault();
+          handleAttach(file);
+          return;
+        }
+      }
+    }
+  };
+
   return (
-    <section class="relative grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-conv">
+    <section
+      class="relative grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-conv"
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      onPaste={onPaste}
+    >
+      <Show when={isDragOver()}>
+        <div
+          class="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-accent/15 backdrop-blur-sm"
+          style={{ 'border': '2px dashed var(--color-accent)' }}
+        >
+          <div class="rounded-[10px] border bg-elev px-6 py-4 text-sm font-medium text-fg shadow-xl"
+               style={{ 'border-color': 'var(--color-accent)' }}>
+            Drop to send
+          </div>
+        </div>
+      </Show>
       <RoomHeader
         room={props.room}
         typingUserIds={typingUsers()}
@@ -760,20 +845,21 @@ export function RoomView(props: {
       />
 
       {/* Timeline */}
+      <div class="relative min-h-0">
       <div
         ref={scrollerRef}
         onScroll={onScroll}
-        class="min-h-0 overflow-y-auto px-4 py-4"
+        class="h-full min-h-0 overflow-y-auto px-4 py-4"
         data-mata-timeline
       >
         <Show when={props.cache.loaded} fallback={<LoadingStub />}>
           <Show when={props.cache.paginating}>
-            <div class="mb-2 text-center text-[11px] text-neutral-500">Loading older…</div>
+            <div class="mb-2 text-center text-[11px] text-fg-3">Loading older…</div>
           </Show>
           <Show
             when={rows().length > 0 || props.cache.pending.length > 0}
             fallback={
-              <div class="flex h-full items-center justify-center text-xs text-neutral-500">
+              <div class="flex h-full items-center justify-center text-xs text-fg-3">
                 No messages yet — say hi.
               </div>
             }
@@ -801,6 +887,27 @@ export function RoomView(props: {
               <For each={props.cache.pending}>{(p) => <PendingRow pending={p} />}</For>
             </ul>
           </Show>
+        </Show>
+      </div>
+        {/* Jump-to-bottom pill — only visible when scrolled away from
+            the bottom. Clicking smooth-scrolls to the latest message
+            and re-engages the stick-to-bottom behavior. */}
+        <Show when={!stickToBottom()}>
+          <button
+            type="button"
+            onClick={() => {
+              scrollToBottom('smooth');
+              setStickToBottom(true);
+            }}
+            class="absolute bottom-3 right-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border bg-elev text-fg shadow-lg transition-transform hover:scale-110"
+            style={{ 'border-color': 'var(--color-line)' }}
+            aria-label="Jump to latest"
+            title="Jump to latest"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 7l4 4 4-4" />
+            </svg>
+          </button>
         </Show>
       </div>
 
@@ -843,7 +950,7 @@ export function RoomView(props: {
 function DayDivider(props: { ts: number }) {
   return (
     <li class="my-3 flex justify-center">
-      <span class="rounded-full bg-neutral-100 px-3 py-0.5 text-[11px] font-medium text-neutral-500 dark:bg-neutral-900">
+      <span class="rounded-full bg-input px-3 py-0.5 text-[11px] font-medium text-fg-3">
         {dayLabel(props.ts)}
       </span>
     </li>
@@ -852,7 +959,7 @@ function DayDivider(props: { ts: number }) {
 
 function LoadingStub() {
   return (
-    <div class="flex h-full items-center justify-center text-xs text-neutral-500">
+    <div class="flex h-full items-center justify-center text-xs text-fg-3">
       Loading messages…
     </div>
   );

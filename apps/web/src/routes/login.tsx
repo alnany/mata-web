@@ -5,11 +5,27 @@ import { setSession } from '../stores/session.js';
 import { Mark } from '../components/logo.js';
 
 const DEFAULT_HOMESERVER = 'https://matrix.org';
+const HOMESERVER_LS_KEY = 'mata.lastHomeserver';
+
+/**
+ * Remembers the last successful homeserver URL the user typed. We do
+ * NOT remember credentials — only the server URL, so power users who
+ * type `https://chat.greatass.me` every time get it back on reload.
+ */
+function loadRememberedHomeserver(): string {
+  try {
+    const v = localStorage.getItem(HOMESERVER_LS_KEY);
+    if (v && typeof v === 'string' && /^https?:\/\//.test(v)) return v;
+  } catch {
+    /* localStorage may be disabled */
+  }
+  return DEFAULT_HOMESERVER;
+}
 
 export function LoginPage() {
   const bridge = useBridge();
   const navigate = useNavigate();
-  const [homeserver, setHomeserver] = createSignal(DEFAULT_HOMESERVER);
+  const [homeserver, setHomeserver] = createSignal(loadRememberedHomeserver());
   const [username, setUsername] = createSignal('');
   const [password, setPassword] = createSignal('');
   const [submitting, setSubmitting] = createSignal(false);
@@ -21,14 +37,22 @@ export function LoginPage() {
     setError(null);
     setSubmitting(true);
     try {
+      const normalized = normalizeServer(homeserver());
       const result = await bridge.request({
         kind: 'login',
-        serverUrl: normalizeServer(homeserver()),
+        serverUrl: normalized,
         user: username().trim(),
         password: password(),
         deviceDisplayName: deriveDeviceName(),
       });
       console.log('[mata-login] success', result);
+      // Persist the homeserver URL only on successful login — so a
+      // typo'd URL doesn't get stuck across reloads.
+      try {
+        localStorage.setItem(HOMESERVER_LS_KEY, normalized);
+      } catch {
+        /* localStorage may be disabled */
+      }
       setSession({
         phase: 'authenticated',
         userId: result.userId,
