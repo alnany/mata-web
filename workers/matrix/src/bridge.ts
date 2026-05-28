@@ -183,6 +183,10 @@ const handlers: Handlers = {
     const iceServers = await core.getTurnServers();
     return { kind: 'getTurnServers', iceServers };
   },
+  searchMessages: async (req, core) => {
+    const { results, count, highlights } = await core.searchMessages(req.query, req.roomId);
+    return { kind: 'searchMessages', results, count, highlights };
+  },
   uploadMedia: async (req, core) => {
     const mxc = await core.uploadMedia(req.data, req.mime, req.filename);
     return { kind: 'uploadMedia', mxc };

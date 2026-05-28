@@ -43,6 +43,7 @@ import type {
   RoomMember,
   RoomSummary,
   SasEmoji,
+  SearchHit,
   TimelineEvent,
   UserId,
   VerificationRequest,
@@ -231,7 +232,20 @@ export type MainToWorkerRequest =
    * spec's public STUN list when the server doesn't expose
    * /voip/turnServer (older or self-hosted setups).
    */
-  | { kind: 'getTurnServers' };
+  | { kind: 'getTurnServers' }
+  /**
+   * Server-side full-text search for room events.
+   *
+   * Maps to matrix-js-sdk's `searchRoomEvents({ term, filter })`,
+   * which posts to `/_matrix/client/v3/search` under
+   * `search_categories.room_events`. When `roomId` is non-null the
+   * worker scopes the search with `filter.rooms = [roomId]`; when
+   * `null` the search runs across every joined room.
+   *
+   * First page only — no `next_batch` round-trip yet. Server default
+   * page size (~10) is fine for a "ctrl-F in this room" UX.
+   */
+  | { kind: 'searchMessages'; query: string; roomId: RoomId | null };
 
 export type MainToWorkerResponse =
   | { kind: 'ping'; pong: true }
@@ -280,6 +294,14 @@ export type MainToWorkerResponse =
    * only, host-to-host" and accepts the higher failure rate.
    */
   | { kind: 'getTurnServers'; iceServers: IceServer[] }
+  | {
+      kind: 'searchMessages';
+      results: SearchHit[];
+      /** Server's best estimate of total matching events. */
+      count: number;
+      /** Stemmed terms the server says match — used for client highlight. */
+      highlights: string[];
+    }
 
 // Compile-time guarantee: request kind ↔ response kind 1:1.
 export type ResponseFor<K extends MainToWorkerRequest['kind']> = Extract<

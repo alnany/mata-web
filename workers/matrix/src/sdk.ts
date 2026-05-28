@@ -17,6 +17,7 @@ import type {
   UserId,
 } from '@mata/shared/matrix';
 import { authError } from '@mata/shared/errors';
+import type { SearchHit } from '@mata/shared/matrix';
 import type { WorkerEvent } from '@mata/shared/rpc';
 import type { LoggedIn, LoginInput, SdkSession } from './sdk-impl.js';
 import { loadActiveSession, type SessionRecord } from './session-store.js';
@@ -116,6 +117,13 @@ export class MatrixCore {
 
   async getTurnServers(): Promise<import('@mata/shared/rpc').IceServer[]> {
     return this.requireSession().getTurnServers();
+  }
+
+  async searchMessages(
+    query: string,
+    roomId: RoomId | null,
+  ): Promise<{ results: SearchHit[]; count: number; highlights: string[] }> {
+    return this.requireSession().searchMessages(query, roomId);
   }
 
   async editMessage(

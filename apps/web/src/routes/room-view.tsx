@@ -27,6 +27,7 @@ import { ThreadPanel } from '../components/thread-panel.js';
 import { Composer } from '../components/composer.js';
 import { RoomHeader } from '../components/room-header.js';
 import { MembersPanel } from '../components/members-panel.js';
+import { SearchPanel } from '../components/search-panel.js';
 
 /**
  * Per-room state held by the parent so re-opening a previously-loaded
@@ -136,6 +137,7 @@ export function RoomView(props: {
   const [openThread, setOpenThread] = createSignal<EventId | null>(null);
   const [focusToken, setFocusToken] = createSignal(0);
   const [membersOpen, setMembersOpen] = createSignal(false);
+  const [searchOpen, setSearchOpen] = createSignal(false);
 
   // Pending intentional mentions for the next send. Composer pushes
   // here when the user picks from the @autocomplete dropdown; we drain
@@ -224,7 +226,21 @@ export function RoomView(props: {
     bumpFocus();
     const onFocus = () => markLatestRead();
     window.addEventListener('focus', onFocus);
-    onCleanup(() => window.removeEventListener('focus', onFocus));
+    // Cmd/Ctrl+F toggles the search panel. We swallow the browser's
+    // native find dialog because in-room search is the more useful
+    // affordance — the conversation rarely lives entirely in the DOM
+    // (virtualized off-screen messages won't match a native find).
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        setSearchOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    onCleanup(() => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('keydown', onKey);
+    });
   });
 
   createEffect(
@@ -917,6 +933,8 @@ export function RoomView(props: {
         typingUserIds={typingUsers()}
         membersOpen={membersOpen()}
         onShowMembers={() => setMembersOpen((v) => !v)}
+        searchOpen={searchOpen()}
+        onShowSearch={() => setSearchOpen((v) => !v)}
       />
 
       {/* Timeline */}
@@ -1012,6 +1030,11 @@ export function RoomView(props: {
         open={membersOpen()}
         myUserId={me()}
         onClose={() => setMembersOpen(false)}
+      />
+      <SearchPanel
+        room={props.room}
+        open={searchOpen()}
+        onClose={() => setSearchOpen(false)}
       />
       <Show when={openThread()}>
         {(rootId) => (

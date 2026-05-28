@@ -175,6 +175,27 @@ export interface ReactionAggregate {
   selfReacted: boolean;
 }
 
+/**
+ * One row in the message-search results panel.
+ *
+ * Synapse's `/search` returns full `MatrixEvent` objects with context;
+ * we flatten to just what the panel renders (sender, ts, body, room)
+ * plus the `eventId` so a future "jump to this message" wire-up has the
+ * anchor it needs. `contextBefore` / `contextAfter` are short text
+ * snippets pulled from the SearchResult's surrounding timeline — the
+ * panel renders them muted above/below the match.
+ */
+export interface SearchHit {
+  eventId: EventId;
+  roomId: RoomId;
+  sender: UserId;
+  originServerTs: number;
+  /** The matching event's body (or a best-effort summary for media events). */
+  body: string;
+  contextBefore: string | null;
+  contextAfter: string | null;
+}
+
 export interface Device {
   deviceId: DeviceId;
   displayName: string | null;

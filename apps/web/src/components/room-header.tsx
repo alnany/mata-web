@@ -20,6 +20,8 @@ export function RoomHeader(props: {
   typingUserIds: string[];
   onShowMembers?: () => void;
   membersOpen?: boolean;
+  onShowSearch?: () => void;
+  searchOpen?: boolean;
 }) {
   const [menuOpen, setMenuOpen] = createSignal(false);
   const [infoOpen, setInfoOpen] = createSignal(false);
@@ -102,6 +104,15 @@ export function RoomHeader(props: {
 
       {/* Right action group */}
       <div class="flex shrink-0 items-center gap-[2px]">
+        <Show when={props.onShowSearch}>
+          <HeaderIconButton
+            onClick={props.onShowSearch!}
+            active={props.searchOpen}
+            label="Search messages (⌘F)"
+          >
+            <IconSearch class="h-[14px] w-[14px]" />
+          </HeaderIconButton>
+        </Show>
         <Show when={props.onShowMembers}>
           <HeaderIconButton
             onClick={props.onShowMembers!}
@@ -283,6 +294,14 @@ function CallButton(props: {
    Icons
    ========================================================================= */
 
+function IconSearch(p: { class?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class={p.class}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </svg>
+  );
+}
 function IconUsers(p: { class?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class={p.class}>
