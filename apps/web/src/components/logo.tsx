@@ -91,19 +91,22 @@ export function Mark(props: { size?: MarkSize; class?: string; barColor?: string
 }
 
 /**
- * Workspace-rail brand tile. Lime square with an italic serif `M`. Per
- * LOGO.md §"Application: in-product · Workspace rail brand square":
- * 38×38 outer, 9px radius, lime background, italic `M` in Instrument
- * Serif 22px. We render the glyph live (not as SVG) so it picks up the
- * loaded font; if Instrument Serif hasn't loaded yet, the fallback is
- * Georgia italic — close enough not to flash.
+ * Workspace-rail brand tile — the iOS "Default" app-icon variant from
+ * LOGO.md §"App icon (iOS / macOS)": dark `#0a0a0b` squircle background,
+ * paper ring + lime bar mark centered at ~33% of canvas width. We render
+ * the squircle as a 9px-radius rounded square (the iOS OS-applied radius
+ * is for the 1024px canvas; at 38px the rail spec calls for 9px).
  *
- * The 1px outline ring 3px outside the tile (per spec) is rendered via
- * a wrapper element with `box-shadow` rather than `::after` because
- * Solid + Tailwind v4 want the rendering in JSX.
+ * The 1px outline ring 3px outside the tile (per spec) is rendered via a
+ * sibling element with `border` rather than `::after` because Solid +
+ * Tailwind v4 want the rendering in JSX.
  */
 export function BrandSquare(props: { size?: number; class?: string }) {
   const sz = () => props.size ?? 38;
+  // Mark sits at ~52% of canvas in the rail (slightly tighter than the
+  // 33% iOS app-icon ratio because the rail tile already lives inside a
+  // 64px gutter — needs to read as a logo, not a dot).
+  const markPct = 52;
   return (
     <div
       class={`relative shrink-0 ${props.class ?? ''}`}
@@ -112,19 +115,16 @@ export function BrandSquare(props: { size?: number; class?: string }) {
       role="img"
     >
       <div
-        class="flex h-full w-full items-center justify-center select-none"
+        class="flex h-full w-full items-center justify-center"
         style={{
-          'background-color': 'var(--color-accent)',
-          color: 'var(--color-accent-ink)',
+          'background-color': '#0a0a0b',
           'border-radius': '9px',
-          'font-family': "'Instrument Serif', Georgia, serif",
-          'font-style': 'italic',
-          'font-size': `${Math.round(sz() * 0.58)}px`,
-          'letter-spacing': '-0.02em',
-          'line-height': '1',
+          color: '#ededee',
         }}
       >
-        M
+        <div style={{ width: `${markPct}%`, height: `${markPct}%` }}>
+          <Mark size="optical" />
+        </div>
       </div>
       {/* 1px outline ring 3px outside, faded accent. */}
       <div
