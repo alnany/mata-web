@@ -32,6 +32,13 @@ export function Composer(props: {
   onTyping: () => void;
   /** Called when the user picks a file from the attach button. */
   onAttach?: (file: File) => void;
+  /**
+   * Optional: tells the composer the parent has staged attachments
+   * pending send. When >0 the Send button enables even with empty
+   * text (pure attachment send is legal) and the Enter handler fires
+   * onSubmit instead of bailing on empty draft.
+   */
+  hasStagedAttachments?: Accessor<boolean>;
   /** Tells parent the textarea wants focus (after picking reply target etc). */
   focusToken: Accessor<number>;
   /**
@@ -417,7 +424,7 @@ export function Composer(props: {
               props.onSubmit();
               requestAnimationFrame(() => autosize());
             }}
-            disabled={!props.draft().trim()}
+            disabled={!props.draft().trim() && !props.hasStagedAttachments?.()}
             class="flex h-[30px] shrink-0 items-center gap-[6px] rounded-[7px] bg-accent pl-[14px] pr-[12px] text-[12px] text-accent-ink transition-[filter] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
             style={{ 'font-weight': 500 }}
           >
