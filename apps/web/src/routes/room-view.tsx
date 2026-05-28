@@ -21,7 +21,7 @@ import type {
   UserId,
   RoomMember,
 } from '@mata/shared/matrix';
-import { dayLabel, isSameDay } from '../lib/date-buckets.js';
+import { dayLabel, isSameDay, shortTime } from '../lib/date-buckets.js';
 import { MessageBubble, type MessageActions } from '../components/message-bubble.js';
 import { ThreadPanel } from '../components/thread-panel.js';
 import { Composer } from '../components/composer.js';
@@ -49,6 +49,16 @@ interface PendingEvent {
   body: string;
   status: 'sending' | 'failed';
   errorReason?: string;
+  /**
+   * Set once the server has confirmed the send (sendStatus 'sent'
+   * fires) and we know which event id will arrive from /sync. The
+   * pending bubble keeps rendering until the sync delivery for this
+   * id arrives — at which point the pending entry is spliced and the
+   * real `m.room.message` is appended to `events` in the SAME
+   * setCache transaction. That single-frame swap is the difference
+   * between "silky like Telegram" and the flash-and-jump symptom.
+   */
+  expectedEventId?: EventId;
 }
 
 export function createRoomCache(roomId: RoomId): RoomCache {
@@ -155,9 +165,35 @@ export function RoomView(props: {
     }
   };
 
+  /**
+   * Mark the latest event as read whenever the user has the room in
+   * view. Called from the initial-load completion, on room switch, on
+   * window focus, and on every new sync delta — covering all the
+   * paths the previous code didn't (no live sync after opening a room
+   * with existing unread messages → badge stayed at "1 new" forever).
+   */
+  const markLatestRead = () => {
+    if (!document.hasFocus()) return;
+    const evs = props.cache.events;
+    const last = evs[evs.length - 1];
+    if (!last) return;
+    void bridge
+      .request({
+        kind: 'sendReadReceipt',
+        roomId: props.room.roomId,
+        eventId: last.eventId,
+      })
+      .catch(() => {
+        // best-effort
+      });
+  };
+
   onMount(() => {
-    loadInitial();
+    loadInitial().then(markLatestRead);
     bumpFocus();
+    const onFocus = () => markLatestRead();
+    window.addEventListener('focus', onFocus);
+    onCleanup(() => window.removeEventListener('focus', onFocus));
   });
 
   createEffect(
@@ -183,25 +219,33 @@ export function RoomView(props: {
   const unsubSync = bridge.on('syncUpdate', (e) => {
     const delta = e.deltas.find((d) => d.roomId === props.room.roomId);
     if (!delta || delta.newEvents.length === 0) return;
+    // Collect the set of eventIds about to land so we can spot pending
+    // entries the user has already optimistically rendered and splice
+    // them in the SAME setCache transaction the events grow in. Doing
+    // both halves of the swap in one Solid update is what removes the
+    // flash: Solid commits "pending shrinks by 1, events grows by 1"
+    // as a single render — no frame where both bubbles coexist and no
+    // frame where neither exists.
+    const incomingIds = new Set<string>();
+    for (const ev of delta.newEvents) incomingIds.add(ev.eventId);
+
     props.setCache(props.room.roomId, (c: RoomCache) => {
-      // Replace-or-push by eventId, then ASSIGN a fresh array reference.
+      // Replace-or-push by eventId on the events array, assigning a
+      // FRESH array reference. Worker emits the same eventId twice for
+      // E2EE messages: once with type 'm.room.encrypted'
+      // decryptionStatus:'pending' from RoomEvent.Timeline (live insert
+      // placeholder), then again as 'm.room.message' from
+      // MatrixEventEvent.Decrypted once the wasm decrypt finishes.
+      // Skipping on known-id (the old behavior) left the placeholder
+      // pinned and made live replies invisible until a page refresh.
       //
-      // Worker emits the same eventId twice for E2EE messages: once with
-      // type 'm.room.encrypted' decryptionStatus:'pending' from
-      // RoomEvent.Timeline (live insert placeholder), then again as
-      // 'm.room.message' from MatrixEventEvent.Decrypted once the wasm
-      // decrypt finishes. Skipping on known-id (the old behavior) left
-      // the placeholder pinned and made live replies invisible until a
-      // page refresh re-read the post-decrypt timeline.
-      //
-      // Important: we assign `c.events = next` instead of mutating in
-      // place with .push() / index assignment. Solid stores nested
-      // inside a produce() in the parent updater do not always wake the
-      // downstream createMemo(rows) on bare-array mutations — the
-      // symptom is "inbound message never shows until reload", because
-      // the cache holds the new event but `rows()` never recomputes.
-      // Full-array assignment is the same path loadInitial uses
-      // (`c.events = res.events`) and that one demonstrably propagates.
+      // We assign `c.events = next` instead of mutating in place with
+      // .push() / index assignment because Solid stores nested inside
+      // a parent produce() don't always wake the downstream
+      // createMemo(rows) on bare-array mutations — the symptom is
+      // "inbound message never shows until reload". Full-array
+      // assignment is the same path loadInitial uses and that one
+      // demonstrably propagates.
       const indexById = new Map<string, number>();
       const next = c.events.slice();
       for (let i = 0; i < next.length; i++) {
@@ -217,6 +261,20 @@ export function RoomView(props: {
         }
       }
       c.events = next;
+
+      // Atomic pending-bubble lock-in. For every pending entry whose
+      // expectedEventId just arrived in this delta, drop the pending
+      // entry now — the real event is already present in `events`
+      // above, so the swap is a single-frame transition. Same fresh
+      // array semantics as events above to guarantee reactivity.
+      if (c.pending.length > 0) {
+        const nextPending = c.pending.filter(
+          (p) => !(p.expectedEventId && incomingIds.has(p.expectedEventId)),
+        );
+        if (nextPending.length !== c.pending.length) {
+          c.pending = nextPending;
+        }
+      }
     });
     if (stickToBottom()) {
       requestAnimationFrame(() => scrollToBottom('smooth'));
@@ -243,11 +301,28 @@ export function RoomView(props: {
       const idx = c.pending.findIndex((p) => p.txnId === e.txnId);
       if (idx < 0) return;
       if (e.status === 'sent') {
-        c.pending.splice(idx, 1);
+        // DON'T splice yet. The server confirmed the send and gave us
+        // the canonical eventId, but the /sync delivery for that event
+        // hasn't necessarily landed in `c.events` yet. If we splice
+        // now, the bubble disappears until sync arrives (visible flash
+        // / "message vanished" symptom). Instead, record the expected
+        // eventId — the syncUpdate handler above splices the pending
+        // entry in the same setCache transaction it appends the real
+        // event, producing a single-frame swap.
+        //
+        // Fresh array reference so Solid's pending For() rerenders.
+        const nextPending = c.pending.slice();
+        nextPending[idx] = { ...nextPending[idx], expectedEventId: e.eventId };
+        c.pending = nextPending;
       } else if (e.status === 'failed') {
-        c.pending[idx].status = 'failed';
-        c.pending[idx].errorReason = e.error?.message ?? 'send failed';
-        showToast('error', `Send failed: ${c.pending[idx].errorReason}`);
+        const nextPending = c.pending.slice();
+        nextPending[idx] = {
+          ...nextPending[idx],
+          status: 'failed',
+          errorReason: e.error?.message ?? 'send failed',
+        };
+        c.pending = nextPending;
+        showToast('error', `Send failed: ${nextPending[idx].errorReason}`);
       }
     });
   });
@@ -729,19 +804,40 @@ function LoadingStub() {
   );
 }
 
+/**
+ * Pending (optimistic) own-message bubble. Visually IDENTICAL to a
+ * confirmed own MessageBubble (`bg-accent text-accent-ink`, same
+ * radius / padding / type scale) so that when the sync delivery lands
+ * and the pending entry is spliced in favour of the real event, the
+ * user sees no visual jump — same rectangle, same position, same ink.
+ * The only differences are a faint pulse while we wait for the
+ * homeserver to ack and a failed-state recolouring.
+ */
 function PendingRow(props: { pending: PendingEvent }) {
+  const confirmed = () => Boolean(props.pending.expectedEventId);
+  const failed = () => props.pending.status === 'failed';
   return (
-    <li class="msg-enter mt-0.5 flex justify-end">
-      <div
-        class={`max-w-[78%] rounded-2xl px-3 py-2 text-sm leading-5 text-white ${
-          props.pending.status === 'failed' ? 'bg-red-500' : 'bg-mata-500/70'
-        }`}
-      >
-        <span class="whitespace-pre-wrap break-words">{props.pending.body}</span>
-        <div class="mt-1 text-right text-[10px] opacity-80">
-          {props.pending.status === 'failed'
-            ? `failed: ${props.pending.errorReason}`
-            : 'sending…'}
+    <li class="mt-0.5 flex justify-end">
+      <div class="relative max-w-[78%]">
+        <div
+          class={`relative rounded-2xl px-3 py-2 text-sm leading-5 transition-opacity ${
+            failed()
+              ? 'bg-red-500 text-white'
+              : 'bg-accent text-accent-ink'
+          } ${confirmed() || failed() ? 'opacity-100' : 'opacity-90'}`}
+        >
+          <span class="whitespace-pre-wrap break-words">{props.pending.body}</span>
+          <div
+            class={`mt-1 flex items-center justify-end gap-1 text-[10px] ${
+              failed() ? 'text-white/80' : 'text-accent-ink/70'
+            }`}
+          >
+            {failed() ? (
+              <span>failed: {props.pending.errorReason}</span>
+            ) : (
+              <span>{shortTime(Date.now())}</span>
+            )}
+          </div>
         </div>
       </div>
     </li>
