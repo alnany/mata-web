@@ -44,6 +44,27 @@
   --radius-1: 6px;
   --radius-2: 10px;
   --radius-3: 14px;
+
+  /* ---- Legacy `mata-*` aliases (Phase A compatibility shim) -----------
+     The codebase still references `bg-mata-500`, `text-mata-600`, etc. in
+     components that have not yet been migrated to the new tokens
+     (settings-drawer, encryption-panel, new-room-modal, members-panel,
+     thread-panel, verification-modal, call-overlay, message-bubble,
+     mention-popover, emoji-picker). Without these aliases, those classes
+     resolve to `background: var(--color-mata-500)` which is undefined,
+     painting nothing. We point the alias scale at the accent so the
+     visual remains coherent until Phase B retires the calls. Remove this
+     block after the last `mata-*` reference is gone. */
+  --color-mata-50:  color-mix(in oklab, var(--color-accent) 12%, var(--color-elev));
+  --color-mata-100: color-mix(in oklab, var(--color-accent) 18%, var(--color-elev));
+  --color-mata-300: color-mix(in oklab, var(--color-accent) 50%, var(--color-elev));
+  --color-mata-500: var(--color-accent);
+  --color-mata-600: color-mix(in oklab, var(--color-accent) 78%, #000);
+  --color-mata-700: var(--color-accent-ink);
+  --color-mata-800: var(--color-accent-ink);
+  --color-mata-900: var(--color-accent-ink);
+  --color-mata-950: var(--color-accent-ink);
+  --color-mata-200: color-mix(in oklab, var(--color-accent) 30%, var(--color-elev));
 }
 
 /* =========================================================================
