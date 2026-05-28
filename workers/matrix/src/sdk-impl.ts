@@ -584,6 +584,130 @@ export class SdkSession {
   }
 
   // ---------------------------------------------------------------------------
+  // Room mute (Phase 12)
+  //
+  // We use matrix-js-sdk's `setRoomMutePushRule('global', roomId, muted)`
+  // which is the documented helper for the `global.room` override
+  // push rule. The shape is:
+  //   muted=true  -> POST /pushrules/global/room/{roomId} with
+  //                  actions:["dont_notify"] and a conditions[0]
+  //                  event_match on roomId
+  //   muted=false -> DELETE the rule
+  //
+  // The next sync delta refreshes `RoomSummary.isMuted` via toSummary
+  // -> isRoomMuted (which reads back the same push rule). We return
+  // the new boolean immediately so the UI doesn't have to wait for
+  // a round trip through sync.
+  //
+  // We intentionally bypass any matrix-js-sdk TypeScript surface that
+  // would force us to pre-construct a PushRule object — the helper
+  // method takes the boolean directly and handles both create/delete.
+  // ---------------------------------------------------------------------------
+
+  async setRoomMuted(roomId: RoomId, muted: boolean): Promise<boolean> {
+    const c = this.requireClient();
+    type MuteCapable = {
+      setRoomMutePushRule?: (scope: 'global', roomId: string, muted: boolean) => Promise<unknown>;
+    };
+    const helper = (c as unknown as MuteCapable).setRoomMutePushRule;
+    if (typeof helper !== 'function') {
+      // Defensive: every matrix-js-sdk we've used has this, but we
+      // surface a clear error rather than failing silently if the
+      // server (or a future sdk rev) drops it.
+      throw new Error('Homeserver client does not support setRoomMutePushRule');
+    }
+    try {
+      await helper.call(c, 'global', roomId, muted);
+    } catch (err) {
+      throw networkError(`setRoomMuted failed: ${describe(err)}`);
+    }
+    return muted;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Threads (Phase 13)
+  //
+  // matrix-js-sdk has a Thread abstraction (`room.getThread(rootId)`)
+  // which paginates over the spec's
+  //   GET /_matrix/client/v1/rooms/{roomId}/relations/{eventId}/m.thread
+  // endpoint. When the SDK has loaded the thread (which it does
+  // lazily when sync sees a thread relation), `thread.timelineSet`
+  // contains every event in oldest-first order. When the thread
+  // hasn't been instantiated yet we hit `fetchRelations` directly so
+  // the panel can open immediately without waiting on the SDK's lazy
+  // path.
+  // ---------------------------------------------------------------------------
+
+  async loadThread(roomId: RoomId, threadRootId: EventId): Promise<TimelineEvent[]> {
+    const c = this.requireClient();
+    const room = c.getRoom(roomId);
+    if (!room) throw new Error(`loadThread: room not found: ${roomId}`);
+
+    // First, the root event itself — we always show it at the top of
+    // the panel even though the thread relation list excludes it.
+    const collected: MatrixEvent[] = [];
+    const rootEv = room.findEventById(threadRootId);
+    if (rootEv) collected.push(rootEv);
+
+    // Try the SDK's in-memory thread store first.
+    type ThreadCapable = {
+      getThread?: (id: string) => { timeline?: MatrixEvent[]; events?: MatrixEvent[] } | null | undefined;
+      fetchRoomThreads?: () => Promise<unknown>;
+    };
+    const roomCast = room as unknown as ThreadCapable;
+    const thread = roomCast.getThread?.(threadRootId);
+    if (thread) {
+      const evs = (thread.timeline ?? thread.events ?? []) as MatrixEvent[];
+      for (const e of evs) {
+        if (e.getId() && e.getId() !== threadRootId) collected.push(e);
+      }
+    }
+
+    // Hit the relations endpoint as a fallback / refresh. We use the
+    // server pagination form to grab everything in one shot; threads
+    // are typically small (<1k events) so a single page is fine. If
+    // the homeserver doesn't support v1 relations (very old server)
+    // matrix-js-sdk transparently downgrades to /unstable/.
+    try {
+      type RelationsCapable = {
+        relations: (
+          roomId: string,
+          eventId: string,
+          relationType: string | null,
+          eventType: string | null,
+          opts?: { dir?: 'b' | 'f'; limit?: number },
+        ) => Promise<{ events?: MatrixEvent[]; chunk?: MatrixEvent[] }>;
+      };
+      const rel = await (c as unknown as RelationsCapable).relations(
+        roomId,
+        threadRootId,
+        'm.thread',
+        null,
+        { dir: 'f', limit: 200 },
+      );
+      const chunk = (rel.events ?? rel.chunk ?? []) as MatrixEvent[];
+      // De-duplicate by event_id — the SDK in-memory thread and the
+      // server fetch overlap heavily during a refresh.
+      const seen = new Set(collected.map((e) => e.getId()));
+      for (const e of chunk) {
+        const id = e.getId();
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        collected.push(e);
+      }
+    } catch {
+      // Server may not support v1 relations or thread may simply not
+      // exist on the server yet (root just sent). Whatever we got
+      // from the in-memory store is still a valid answer.
+    }
+
+    // Oldest first. MatrixEvent.getTs() returns origin_server_ts in ms.
+    collected.sort((a, b) => (a.getTs() ?? 0) - (b.getTs() ?? 0));
+
+    return collected.map((e) => toTimelineEvent(e)).filter((e): e is TimelineEvent => e !== null);
+  }
+
+  // ---------------------------------------------------------------------------
   // SAS verification. Thin pass-through to VerificationService; we keep
   // SdkSession as the single bridge target so the RPC dispatcher in
   // bridge.ts doesn't have to know about service objects.
