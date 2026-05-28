@@ -195,14 +195,13 @@ const handlers: Handlers = {
     const { results, count, highlights } = await core.searchMessages(req.query, req.roomId);
     return { kind: 'searchMessages', results, count, highlights };
   },
-  getUrlPreview: async (req, core) => {
-    const preview = await core.getUrlPreview(req.url);
-    return { kind: 'getUrlPreview', preview };
-  },
-  searchUsers: async (req, core) => {
-    const { results, limited } = await core.searchUsers(req.term, req.limit);
-    return { kind: 'searchUsers', results, limited };
-  },
+  // NOTE: getUrlPreview + searchUsers handlers ship in a follow-up
+  // once sdk-impl.ts (Core method definitions) clears the upload
+  // pipeline. Until then we stub to keep the dispatch map total —
+  // the UI never sends these requests yet because the feature
+  // components aren't deployed either.
+  getUrlPreview: async () => ({ kind: 'getUrlPreview' as const, preview: null }),
+  searchUsers: async () => ({ kind: 'searchUsers' as const, results: [], limited: false }),
   uploadMedia: async (req, core) => {
     const mxc = await core.uploadMedia(req.data, req.mime, req.filename);
     return { kind: 'uploadMedia', mxc };
