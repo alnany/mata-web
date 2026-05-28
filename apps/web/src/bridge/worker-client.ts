@@ -173,7 +173,7 @@ export function createMatrixBridge(): MatrixBridge {
       set = new Set();
       listeners.set(kind, set);
     }
-    set.add(handler as EventHandler<WorkerEvent['kind']>);
+    set.add(handler as unknown as EventHandler<WorkerEvent['kind']>);
     // Replay last-known value for latched kinds — late subscribers see the
     // current state immediately instead of waiting for the next transition.
     if (LATCH_KINDS.has(kind)) {
@@ -188,7 +188,7 @@ export function createMatrixBridge(): MatrixBridge {
       }
     }
     return () => {
-      set?.delete(handler as EventHandler<WorkerEvent['kind']>);
+      set?.delete(handler as unknown as EventHandler<WorkerEvent['kind']>);
     };
   }
 
