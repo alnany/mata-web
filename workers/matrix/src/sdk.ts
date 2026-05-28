@@ -171,6 +171,10 @@ export class MatrixCore {
     return this.requireSession().inviteToRoom(roomId, userId);
   }
 
+  async forwardEvent(sourceRoomId: RoomId, sourceEventId: EventId, targetRoomId: RoomId) {
+    return this.requireSession().forwardEvent(sourceRoomId, sourceEventId, targetRoomId);
+  }
+
   async joinRoom(roomId: RoomId) {
     return this.requireSession().joinRoom(roomId);
   }

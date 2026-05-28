@@ -245,7 +245,25 @@ export type MainToWorkerRequest =
    * First page only — no `next_batch` round-trip yet. Server default
    * page size (~10) is fine for a "ctrl-F in this room" UX.
    */
-  | { kind: 'searchMessages'; query: string; roomId: RoomId | null };
+  | { kind: 'searchMessages'; query: string; roomId: RoomId | null }
+  /**
+   * Forward `sourceEventId` from `sourceRoomId` into `targetRoomId`.
+   * The worker grabs the decrypted content from the source event,
+   * strips relations (`m.relates_to`, `m.new_content`) and mentions
+   * (different audience), prepends a "[Forwarded from @sender]"
+   * header on text-class messages, and re-sends the cleaned content
+   * via `client.sendEvent`. Media (`m.image` / `m.video` / `m.audio`
+   * / `m.file`) is forwarded as-is — the AES-CTR key for encrypted
+   * media travels inside `content.file`, so any recipient with the
+   * megolm key for the TARGET room can decrypt the file without
+   * needing the source room's keys.
+   */
+  | {
+      kind: 'forwardEvent';
+      sourceRoomId: RoomId;
+      sourceEventId: EventId;
+      targetRoomId: RoomId;
+    };
 
 export type MainToWorkerResponse =
   | { kind: 'ping'; pong: true }
@@ -302,6 +320,7 @@ export type MainToWorkerResponse =
       /** Stemmed terms the server says match — used for client highlight. */
       highlights: string[];
     }
+  | { kind: 'forwardEvent'; eventId: EventId };
 
 // Compile-time guarantee: request kind ↔ response kind 1:1.
 export type ResponseFor<K extends MainToWorkerRequest['kind']> = Extract<

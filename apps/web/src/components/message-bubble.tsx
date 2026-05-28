@@ -33,6 +33,11 @@ export type MessageActions = {
    * threads per MSC3440).
    */
   onOpenThread: (rootEventId: EventId) => void;
+  /**
+   * Open the forward-target picker. The room-view owns the modal
+   * and the room list; the bubble just hands off the source event.
+   */
+  onForward: (ev: RoomMessageEvent) => void;
 };
 
 export function MessageBubble(props: {
@@ -217,6 +222,14 @@ export function MessageBubble(props: {
                 }}
               >
                 {msg.threadRoot ? 'Open thread' : 'Reply in thread'}
+              </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  props.actions.onForward(msg);
+                  setShowMenu(false);
+                }}
+              >
+                Forward
               </MenuItem>
               <MenuItem onClick={copyText}>Copy text</MenuItem>
               <MenuItem onClick={copyPermalink}>Copy link</MenuItem>

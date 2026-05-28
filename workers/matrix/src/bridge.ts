@@ -149,6 +149,14 @@ const handlers: Handlers = {
     await core.inviteToRoom(req.roomId, req.userId);
     return { kind: 'inviteToRoom' };
   },
+  forwardEvent: async (req, core) => {
+    const eventId = await core.forwardEvent(
+      req.sourceRoomId,
+      req.sourceEventId,
+      req.targetRoomId,
+    );
+    return { kind: 'forwardEvent', eventId };
+  },
   joinRoom: async (req, core) => {
     const roomId = await core.joinRoom(req.roomId);
     return { kind: 'joinRoom', roomId };
