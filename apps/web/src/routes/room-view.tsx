@@ -530,16 +530,32 @@ export function RoomView(props: {
       return;
     }
 
-    // The worker enriches the wire-format with the m.relates_to → in_reply_to
-    // reference when we pass it; for v1, we send the plain body. Reply
-    // metadata wiring through the RPC contract is a Phase 4B improvement;
-    // the reply context is preserved here as a UI hint until then.
+    // Reply wire-up. When the user clicked Reply on a message, attach
+    // the in-reply-to relation so the worker emits a proper Matrix
+    // rich-reply (`m.relates_to.m.in_reply_to` + quote-prefix fallback).
+    // The worker handles the fallback body construction and HTML
+    // wrapping; we just hand it the parent's eventId / sender / body.
     diag(`send-UI[${shortTxn}]: before-rpc dispatching bridge.request`);
+    const replyToParam =
+      replyTarget && replyTarget.content.msgtype === 'm.text'
+        ? {
+            eventId: replyTarget.eventId,
+            sender: replyTarget.sender,
+            body: replyTarget.content.body,
+          }
+        : replyTarget
+          ? {
+              eventId: replyTarget.eventId,
+              sender: replyTarget.sender,
+              body: replyTarget.content.body || '',
+            }
+          : undefined;
     const sendCall = bridge.request({
       kind: 'sendMessage',
       roomId: props.room.roomId,
       content: body,
       txnId,
+      ...(replyToParam ? { replyTo: replyToParam } : {}),
     });
     diag(`send-UI[${shortTxn}]: rpc-dispatched awaiting worker`);
     void sendCall
@@ -558,8 +574,6 @@ export function RoomView(props: {
         showToast('error', `Send failed: ${msgOf(err)}`);
       });
 
-    // Note: replyTarget currently used only for UX; full wire support tracked in 4B.
-    void replyTarget;
   };
 
   const cancelContext = () => {
@@ -737,7 +751,7 @@ export function RoomView(props: {
   });
 
   return (
-    <section class="relative grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-white dark:bg-neutral-950">
+    <section class="relative grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-conv">
       <RoomHeader
         room={props.room}
         typingUserIds={typingUsers()}

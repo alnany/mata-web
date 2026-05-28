@@ -3,8 +3,13 @@ import { For, Show, createSignal } from 'solid-js';
 /**
  * Tiny emoji picker — quick-reactions row + a categorized grid.
  *
- * A full emoji picker (Unicode 15.1 with skin tones + search) is Phase 4B
- * polish. This covers ~95% of real-world reaction usage.
+ * A full emoji picker (Unicode 15.1 with skin tones + search) is a
+ * later polish lap. This covers ~95% of real-world reaction usage and
+ * lives in two surfaces: hover-popover on bubbles (for reactions) and
+ * the composer smiley button (for inline insertion).
+ *
+ * Tokens: surface = bg-elev, lines = border-line. The accent tab is the
+ * canonical lime. Hover surfaces lift via line-2.
  */
 
 const QUICK = ['👍', '❤️', '😂', '🎉', '🔥', '😮', '😢', '🙏'];
@@ -21,11 +26,15 @@ export function EmojiPicker(props: { onPick: (emoji: string) => void; onClose?: 
   const [tab, setTab] = createSignal<string>('Smileys');
   return (
     <div
-      class="w-72 rounded-xl border border-neutral-200 bg-white p-2 shadow-xl dark:border-neutral-800 dark:bg-neutral-900"
+      class="w-72 rounded-[10px] border bg-elev p-2 shadow-xl"
+      style={{ 'border-color': 'var(--color-line)' }}
       role="dialog"
       aria-label="Emoji picker"
     >
-      <div class="mb-1 flex gap-1 border-b border-neutral-200 pb-2 dark:border-neutral-800">
+      <div
+        class="mb-1 flex gap-1 border-b pb-2"
+        style={{ 'border-color': 'var(--color-line)' }}
+      >
         <For each={QUICK}>
           {(e) => (
             <button
@@ -44,10 +53,10 @@ export function EmojiPicker(props: { onPick: (emoji: string) => void; onClose?: 
           {(c) => (
             <button
               type="button"
-              class={`shrink-0 rounded px-2 py-0.5 ${
+              class={`shrink-0 rounded-[6px] px-2 py-0.5 transition-colors ${
                 tab() === c
-                  ? 'bg-mata-500 text-white'
-                  : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700'
+                  ? 'bg-accent text-accent-ink'
+                  : 'bg-input text-fg-2 hover:text-fg'
               }`}
               onClick={() => setTab(c)}
             >
@@ -61,7 +70,7 @@ export function EmojiPicker(props: { onPick: (emoji: string) => void; onClose?: 
           {(e) => (
             <button
               type="button"
-              class="rounded p-1 text-lg leading-none hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              class="rounded-[6px] p-1 text-lg leading-none hover:bg-input"
               onClick={() => props.onPick(e)}
             >
               {e}
@@ -73,7 +82,7 @@ export function EmojiPicker(props: { onPick: (emoji: string) => void; onClose?: 
         <button
           type="button"
           onClick={props.onClose}
-          class="mt-1 w-full rounded py-1 text-[11px] text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+          class="mt-1 w-full rounded-[6px] py-1 text-[11px] text-fg-3 hover:bg-input hover:text-fg"
         >
           Close
         </button>

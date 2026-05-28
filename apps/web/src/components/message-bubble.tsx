@@ -118,7 +118,7 @@ export function MessageBubble(props: {
           class={`relative rounded-2xl px-3 py-2 text-sm leading-5 ${
             isMine()
               ? 'bg-accent text-accent-ink'
-              : 'bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100'
+              : 'bg-elev text-fg'
           }`}
         >
           {/* Reply preview strip */}
@@ -129,7 +129,7 @@ export function MessageBubble(props: {
               class={`-mx-1 mb-1.5 block w-[calc(100%+0.5rem)] truncate rounded-md border-l-2 px-2 py-1 text-left text-[11px] leading-4 transition-opacity hover:opacity-100 ${
                 isMine()
                   ? 'border-accent-ink/40 bg-accent-ink/10 opacity-90'
-                  : 'border-mata-500 bg-black/5 opacity-80 dark:bg-white/5'
+                  : 'border-accent bg-[var(--color-line)] opacity-80'
               }`}
               title="Jump to original message"
             >
@@ -162,7 +162,10 @@ export function MessageBubble(props: {
           <div
             class={`absolute -top-3 ${isMine() ? 'left-0 -translate-x-full pr-1' : 'right-0 translate-x-full pl-1'} hidden group-hover:flex`}
           >
-            <div class="flex items-center gap-0.5 rounded-full border border-neutral-200 bg-white px-1 py-0.5 shadow-sm dark:border-neutral-700 dark:bg-neutral-900">
+            <div
+              class="flex items-center gap-0.5 rounded-full border bg-elev px-1 py-0.5 shadow-sm"
+              style={{ 'border-color': 'var(--color-line)' }}
+            >
               <ActionBtn title="React" onClick={() => setShowEmoji((v) => !v)}>
                 😀
               </ActionBtn>
@@ -191,7 +194,8 @@ export function MessageBubble(props: {
           {/* Overflow menu */}
           <Show when={showMenu()}>
             <div
-              class={`absolute z-30 mt-1 min-w-[160px] rounded-lg border border-neutral-200 bg-white py-1 text-sm shadow-lg dark:border-neutral-700 dark:bg-neutral-900 ${
+              style={{ 'border-color': 'var(--color-line)' }}
+              class={`absolute z-30 mt-1 min-w-[160px] rounded-lg border bg-elev py-1 text-sm shadow-lg ${
                 isMine() ? 'right-0' : 'left-0'
               }`}
             >

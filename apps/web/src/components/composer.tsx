@@ -2,6 +2,7 @@ import { createEffect, createSignal, on, Show, type Accessor } from 'solid-js';
 import type { RoomMessageEvent, RoomMember, UserId } from '@mata/shared/matrix';
 import { prettyName } from './message-bubble.js';
 import { MentionPopover, matchMembers, type MentionMatch } from './mention-popover.js';
+import { EmojiPicker } from './emoji-picker.js';
 
 /**
  * Composer with reply/edit indicator strip + @mention autocomplete.
@@ -49,6 +50,38 @@ export function Composer(props: {
 }) {
   let textareaRef: HTMLTextAreaElement | undefined;
   let fileInputRef: HTMLInputElement | undefined;
+
+  // Emoji popover open state. We anchor it above the smiley button via
+  // a position:absolute element inside the composer frame so it
+  // automatically follows the composer when it grows.
+  const [emojiOpen, setEmojiOpen] = createSignal(false);
+
+  /**
+   * Insert `emoji` at the textarea caret, preserving selection and
+   * surrounding text. Triggers `setDraft` so the controlled value
+   * stays in sync, and refocuses the textarea so the user can keep
+   * typing.
+   */
+  const insertEmoji = (emoji: string) => {
+    const el = textareaRef;
+    const current = props.draft();
+    if (!el) {
+      props.setDraft(current + emoji);
+      return;
+    }
+    const start = el.selectionStart ?? current.length;
+    const end = el.selectionEnd ?? current.length;
+    const next = current.slice(0, start) + emoji + current.slice(end);
+    props.setDraft(next);
+    // After Solid flushes the new value, restore caret AFTER the emoji.
+    queueMicrotask(() => {
+      if (!textareaRef) return;
+      textareaRef.focus();
+      const caret = start + emoji.length;
+      textareaRef.setSelectionRange(caret, caret);
+      autosize();
+    });
+  };
 
   // ---- mention state ------------------------------------------------------
   // `mentionState` is null when no @ is active. When active it carries
@@ -335,14 +368,36 @@ export function Composer(props: {
             </ComposerIconButton>
           </Show>
 
-          <ComposerIconButton
-            label="Insert emoji"
-            onClick={() => {
-              /* TODO Phase B: open shared emoji picker positioned to composer. */
-            }}
-          >
-            <IconSmile class="h-[14px] w-[14px]" />
-          </ComposerIconButton>
+          <div class="relative">
+            <ComposerIconButton
+              label="Insert emoji"
+              onClick={() => setEmojiOpen((v) => !v)}
+            >
+              <IconSmile class="h-[14px] w-[14px]" />
+            </ComposerIconButton>
+            <Show when={emojiOpen()}>
+              <>
+                {/* Click-outside backdrop */}
+                <div
+                  class="fixed inset-0 z-30"
+                  onClick={() => setEmojiOpen(false)}
+                />
+                {/* Popover anchored above the smiley button. The
+                    EmojiPicker brings its own surface; we wrap it in
+                    a positioned shell so it doesn't push composer
+                    layout. */}
+                <div class="absolute bottom-full left-0 z-40 mb-2">
+                  <EmojiPicker
+                    onPick={(e) => {
+                      insertEmoji(e);
+                      setEmojiOpen(false);
+                    }}
+                    onClose={() => setEmojiOpen(false)}
+                  />
+                </div>
+              </>
+            </Show>
+          </div>
 
           <div class="flex-1" />
 
