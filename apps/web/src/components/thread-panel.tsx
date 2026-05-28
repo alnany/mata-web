@@ -272,7 +272,7 @@ export function ThreadPanel(props: Props) {
           <button
             type="submit"
             disabled={sending() || draft().trim().length === 0}
-            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-mata-500 text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:bg-input disabled:text-fg-3"
+            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink transition-[filter] hover:brightness-95 disabled:cursor-not-allowed disabled:bg-input disabled:text-fg-3"
             aria-label="Send reply"
             title="Send (Enter)"
           >

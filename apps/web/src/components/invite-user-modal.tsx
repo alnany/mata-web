@@ -124,7 +124,7 @@ export function InviteUserModal(props: {
               type="button"
               onClick={() => void submit()}
               disabled={submitting() || userId().trim().length === 0}
-              class="rounded-md bg-mata-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-mata-600 disabled:opacity-50"
+              class="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-ink transition-[filter] hover:brightness-95 disabled:opacity-50"
             >
               {submitting() ? 'Inviting…' : 'Invite'}
             </button>

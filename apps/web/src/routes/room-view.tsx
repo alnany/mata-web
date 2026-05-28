@@ -1249,7 +1249,7 @@ function UndecryptableGroupRow(props: {
           <button
             type="button"
             onClick={() => props.onRestore?.()}
-            class="ml-1 rounded-full bg-mata-500 px-2 py-0.5 text-[10px] font-medium not-italic text-white transition-colors hover:bg-mata-600"
+            class="ml-1 rounded-full bg-accent px-2 py-0.5 text-[10px] font-medium not-italic text-accent-ink transition-[filter] hover:brightness-95"
           >
             Restore from backup
           </button>

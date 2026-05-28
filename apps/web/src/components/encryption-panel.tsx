@@ -212,7 +212,7 @@ export function EncryptionPanel() {
               type="button"
               onClick={runSetup}
               disabled={busy()}
-              class="flex-1 rounded-md bg-mata-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-mata-600 disabled:opacity-60"
+              class="flex-1 rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-ink transition-[filter] hover:brightness-95 disabled:opacity-60"
             >
               {busy() ? 'Setting up…' : 'Set up backup'}
             </button>
@@ -300,7 +300,7 @@ export function EncryptionPanel() {
               type="button"
               onClick={runRestore}
               disabled={busy()}
-              class="flex-1 rounded-md bg-mata-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-mata-600 disabled:opacity-60"
+              class="flex-1 rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-ink transition-[filter] hover:brightness-95 disabled:opacity-60"
             >
               {busy() ? 'Restoring…' : 'Restore'}
             </button>
