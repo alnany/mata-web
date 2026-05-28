@@ -60,27 +60,17 @@ export default defineConfig({
     // crypto-wasm chunks. Local dev builds get them via vite serve.
     sourcemap: false,
     cssCodeSplit: true,
-    // terser hits ~20-30% smaller than the default esbuild minifier on
-    // matrix-js-sdk specifically. Historically (Composio deploy gateway,
-    // ~1 MB per request) we ran with `toplevel: true` on both mangle and
-    // compress; that broke cross-chunk references in the split matrix-a /
-    // matrix-b bundle ("c is not defined" at runtime on send/decrypt),
-    // because Terser renames top-level bindings inside each chunk
-    // independently while Rollup keeps the ESM import linkage. Vercel
-    // has no per-chunk ceiling, so we drop `toplevel` and keep the rest
-    // (dead-code + unused + pure_funcs across 3 passes still trims most
-    // of the win).
-    minify: 'terser',
-    terserOptions: {
-      compress: {
-        passes: 3,
-        pure_funcs: ['console.debug', 'console.log'],
-        dead_code: true,
-        unused: true,
-      },
-      mangle: {},
-      format: { comments: false },
-    },
+    // We tried terser with aggressive compress/mangle to squeeze under
+    // Composio's old 1MB-per-request deploy gateway. On Vercel that
+    // ceiling no longer exists, and terser's `compress.unused` keeps
+    // misanalyzing Babel's `_asyncToGenerator` helper (mutually-recursive
+    // `_next` / `_throw` function declarations inside a Promise
+    // executor) — eliminating one of the two declarations while the
+    // sibling still references it → `ReferenceError: c is not defined`
+    // at runtime on the first async-await call in the worker (sync /
+    // sendMessage / decrypt). esbuild's minifier handles this case
+    // correctly and is what Vite uses by default; we just opt back in.
+    minify: 'esbuild',
     rollupOptions: {
       output: {
         manualChunks(id) {
