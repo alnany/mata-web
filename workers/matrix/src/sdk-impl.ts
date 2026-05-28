@@ -652,11 +652,14 @@ export class SdkSession {
   // body the caller hands us, and the timeline tap above forwards
   // inbound m.call.* back to the main thread.
   //
-  // Note on encryption: per the Matrix spec, m.call.* events stay
-  // plaintext even in E2EE rooms (the SDP and ICE candidates are
-  // considered already-protected by the DTLS-SRTP handshake at the
-  // WebRTC layer). The default `client.sendEvent` path here respects
-  // that — we don't force `m.room.encrypted` wrapping.
+  // Note on encryption: in E2EE rooms matrix-js-sdk's sendEvent will
+  // wrap m.call.* in m.room.encrypted by default — and that's what
+  // we want. SDP/ICE candidates leak enough metadata (codecs, NAT
+  // topology, ports) that the privacy guarantee of an encrypted DM
+  // would be partially broken if we sent them in plaintext. The
+  // receiving side's MatrixEventEvent.Decrypted handler routes the
+  // post-decrypt m.call.* through to `callSignal` so the main thread
+  // sees it the same way it sees plaintext-room signals.
   async sendCallEvent(
     roomId: RoomId,
     eventType: string,
@@ -1465,11 +1468,22 @@ export class SdkSession {
       if (type.startsWith('m.call.')) {
         const content = event.getContent() as Record<string, unknown>;
         const sender = (event.getSender() ?? '') as UserId;
-        // Filter out our own echoes: matrix-js-sdk delivers our just-
-        // sent events back through sync. The main-thread call layer
-        // also dedupes by `party_id`, but pre-filtering here saves a
-        // worker→main hop.
-        if (sender === client.getUserId()) return;
+        // Drop local echoes only. matrix-js-sdk surfaces `Room.timeline`
+        // twice for each send: first as an unconfirmed local echo
+        // (event.status !== null), then as a server-confirmed sync
+        // delivery (event.status === null). We forward only the latter.
+        //
+        // Importantly we do NOT filter by sender MXID here. Previously
+        // we dropped all events where `sender === client.getUserId()`,
+        // which silently broke same-account multi-device testing — the
+        // user's other device's invites never reached the main thread.
+        // Same-device echo filtering is handled in the main-thread
+        // routeSignal layer by comparing the event's `party_id` against
+        // our active CallSession's partyId (which is the canonical
+        // per-device identity in MSC2746).
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const status = (event as any).status;
+        if (status != null) return;
         const partyId =
           typeof content.party_id === 'string' ? content.party_id : null;
         const ageMs = (() => {
@@ -1518,6 +1532,41 @@ export class SdkSession {
       if (!roomId) return;
       const room = client.getRoom(roomId);
       if (!room) return;
+
+      // Phase 14 — VoIP signaling tap (encrypted-room path). In an
+      // E2EE room m.call.* events ride inside m.room.encrypted; the
+      // RoomEvent.Timeline tap above sees the encrypted wrapper and
+      // skips it because `type !== m.call.*`. After matrix-js-sdk
+      // finishes wasm decrypt it flips the event type to its inner
+      // value and fires this Decrypted callback — that's the only
+      // place we can catch decrypted call signals. Without this branch
+      // calls in encrypted DMs simply never ring on the receiver: the
+      // invite arrives but nothing routes it to the main thread.
+      const type = event.getType();
+      if (type.startsWith('m.call.')) {
+        const content = event.getContent() as Record<string, unknown>;
+        const sender = (event.getSender() ?? '') as UserId;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const status = (event as any).status;
+        if (status != null) return;
+        const partyId =
+          typeof content.party_id === 'string' ? content.party_id : null;
+        const ageMs = (() => {
+          const ts = event.getTs();
+          return ts ? Math.max(0, Date.now() - ts) : 0;
+        })();
+        this.emit({
+          kind: 'callSignal',
+          roomId: roomId as RoomId,
+          eventType: type,
+          sender,
+          partyId,
+          ageMs,
+          content,
+        });
+        return;
+      }
+
       const tev = toTimelineEvent(event);
       if (!tev) return;
       this.emit({
