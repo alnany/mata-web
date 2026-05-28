@@ -50,6 +50,32 @@ export function MessageBubble(props: {
   const isMine = () => props.ev.sender === props.me;
   const [showMenu, setShowMenu] = createSignal(false);
   const [showEmoji, setShowEmoji] = createSignal(false);
+  // We pin the bubble container so click-outside / Escape can dismiss
+  // the popovers without piggybacking on `onMouseLeave` (which used
+  // to close the menu the instant the cursor crossed a 1-px gap on
+  // the way to clicking an item — terrible UX).
+  let bubbleRef: HTMLDivElement | undefined;
+  createEffect(() => {
+    if (!showMenu() && !showEmoji()) return;
+    const onDown = (e: MouseEvent) => {
+      if (bubbleRef && !bubbleRef.contains(e.target as Node)) {
+        setShowMenu(false);
+        setShowEmoji(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowMenu(false);
+        setShowEmoji(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    onCleanup(() => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    });
+  });
 
   // Most rendering only makes sense for m.room.message — others get a
   // muted system row.
@@ -93,10 +119,6 @@ export function MessageBubble(props: {
         props.showHeader ? 'mt-3' : 'mt-0.5'
       }`}
       data-event-id={msg.eventId}
-      onMouseLeave={() => {
-        setShowMenu(false);
-        setShowEmoji(false);
-      }}
     >
       {/* Left gutter avatar for non-mine */}
       <Show when={!isMine()}>
@@ -112,7 +134,7 @@ export function MessageBubble(props: {
         </div>
       </Show>
 
-      <div class="relative max-w-[78%]">
+      <div ref={bubbleRef} class="relative max-w-[78%]">
         <Show when={props.showHeader && !isMine()}>
           <div class="mb-0.5 text-[11px] font-semibold text-fg-2">
             {prettyName(msg.sender)}
@@ -167,29 +189,72 @@ export function MessageBubble(props: {
             <span>{shortTime(msg.originServerTs)}</span>
           </div>
 
-          {/* Hover actions */}
+          {/*
+           * Hover toolbar.
+           *
+           * Positioning rule: the toolbar's vertical center sits on
+           * the bubble's TOP edge (`top-0 -translate-y-1/2`). Half of
+           * the toolbar overlaps the bubble itself, the other half
+           * pokes above. That overlap is the trick — when the cursor
+           * moves from inside the bubble up toward the toolbar, it
+           * never crosses an unhovered region, so `group-hover`
+           * stays active and the toolbar doesn't flicker out from
+           * under the user.
+           *
+           * Horizontal anchor: floats toward the bubble's "outside"
+           * shoulder (left edge for own messages, right edge for
+           * others) so it never covers the timestamp / reply preview.
+           * Uses `opacity` + `pointer-events` rather than `hidden` —
+           * `hidden` causes the menu/emoji popovers to re-mount when
+           * the user moves the cursor away momentarily, losing their
+           * place. `focus-within` keeps the bar visible for keyboard
+           * users tabbing through actions.
+           */}
           <div
-            class={`absolute -top-3 ${isMine() ? 'left-0 -translate-x-full pr-1' : 'right-0 translate-x-full pl-1'} hidden group-hover:flex`}
+            class={`pointer-events-none absolute top-0 z-20 -translate-y-1/2 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${
+              isMine() ? 'left-2' : 'right-2'
+            }`}
           >
             <div
-              class="flex items-center gap-0.5 rounded-full border bg-elev px-1 py-0.5 shadow-sm"
+              class="flex items-center gap-0.5 rounded-full border bg-elev px-1 py-0.5 shadow-md"
               style={{ 'border-color': 'var(--color-line)' }}
             >
-              <ActionBtn title="React" onClick={() => setShowEmoji((v) => !v)}>
-                😀
+              <ActionBtn
+                title="React"
+                onClick={() => {
+                  setShowEmoji((v) => !v);
+                  setShowMenu(false);
+                }}
+              >
+                <span class="text-base leading-none">😊</span>
               </ActionBtn>
               <ActionBtn title="Reply" onClick={() => props.actions.onReply(msg)}>
-                ↩
+                <span class="text-base leading-none">↩</span>
               </ActionBtn>
-              <ActionBtn title="More" onClick={() => setShowMenu((v) => !v)}>
-                ⋯
+              <ActionBtn
+                title="More"
+                onClick={() => {
+                  setShowMenu((v) => !v);
+                  setShowEmoji(false);
+                }}
+              >
+                <span class="text-base leading-none">⋯</span>
               </ActionBtn>
             </div>
           </div>
 
-          {/* Quick emoji popover */}
+          {/*
+           * Quick emoji popover — anchored ABOVE the bubble, on the
+           * same shoulder as the toolbar so the picker visually
+           * "grows out of" the React button rather than appearing in
+           * a random corner of the bubble.
+           */}
           <Show when={showEmoji()}>
-            <div class={`absolute z-30 -top-2 ${isMine() ? 'right-0' : 'left-0'} translate-y-[-100%]`}>
+            <div
+              class={`absolute bottom-full z-30 mb-2 ${
+                isMine() ? 'left-0' : 'right-0'
+              }`}
+            >
               <EmojiPicker
                 onPick={(e) => {
                   props.actions.onReact(msg.eventId, e);
@@ -200,15 +265,28 @@ export function MessageBubble(props: {
             </div>
           </Show>
 
-          {/* Overflow menu */}
+          {/*
+           * Overflow menu — drops BELOW the bubble (`top-full mt-1`)
+           * anchored on the bubble's "inside" shoulder so it never
+           * extends past the viewport edge. Reactions row sits below
+           * the bubble too; z-30 lets the menu visually win without
+           * affecting click-through on the reactions when the menu is
+           * closed.
+           */}
           <Show when={showMenu()}>
             <div
               style={{ 'border-color': 'var(--color-line)' }}
-              class={`absolute z-30 mt-1 min-w-[160px] rounded-lg border bg-elev py-1 text-sm shadow-lg ${
+              role="menu"
+              class={`absolute top-full z-30 mt-1 min-w-[176px] rounded-lg border bg-elev py-1 text-sm shadow-lg ${
                 isMine() ? 'right-0' : 'left-0'
               }`}
             >
-              <MenuItem onClick={() => { props.actions.onReply(msg); setShowMenu(false); }}>
+              <MenuItem
+                onClick={() => {
+                  props.actions.onReply(msg);
+                  setShowMenu(false);
+                }}
+              >
                 Reply
               </MenuItem>
               <MenuItem
@@ -231,10 +309,17 @@ export function MessageBubble(props: {
               >
                 Forward
               </MenuItem>
+              <MenuDivider />
               <MenuItem onClick={copyText}>Copy text</MenuItem>
               <MenuItem onClick={copyPermalink}>Copy link</MenuItem>
               <Show when={isMine() && msg.content.msgtype === 'm.text'}>
-                <MenuItem onClick={() => { props.actions.onEdit(msg); setShowMenu(false); }}>
+                <MenuDivider />
+                <MenuItem
+                  onClick={() => {
+                    props.actions.onEdit(msg);
+                    setShowMenu(false);
+                  }}
+                >
                   Edit
                 </MenuItem>
                 <MenuItem
@@ -279,12 +364,17 @@ function ActionBtn(props: { title: string; onClick: () => void; children: any })
   );
 }
 
+function MenuDivider() {
+  return <div class="my-1 h-px" style={{ background: 'var(--color-line)' }} role="separator" />;
+}
+
 function MenuItem(props: { onClick: () => void; destructive?: boolean; children: any }) {
   return (
     <button
       type="button"
+      role="menuitem"
       onClick={props.onClick}
-      class={`block w-full px-3 py-1.5 text-left transition-colors ${
+      class={`block w-full px-3 py-1.5 text-left text-sm transition-colors ${
         props.destructive
           ? 'text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40'
           : 'text-fg hover:bg-input'
