@@ -535,6 +535,125 @@ export class SdkSession {
     await c.invite(roomId, userId);
   }
 
+  /**
+   * Forward `sourceEventId` from `sourceRoomId` into `targetRoomId`.
+   *
+   * Implementation notes:
+   *
+   * 1. We pull the source event via `room.findEventById` so we get
+   *    matrix-js-sdk's already-decrypted view (the UI displayed it
+   *    a moment ago, so megolm keys are guaranteed in scope). For
+   *    edited messages, `getEffectiveEvent().content` returns the
+   *    latest-replacement content; for plain messages it's identical
+   *    to `getContent()`. Using the effective content means the
+   *    forward carries the user's edited body, not the original.
+   *
+   * 2. We strip:
+   *    - `m.relates_to` (the original's reply/thread/edit relation —
+   *      meaningless in the target room)
+   *    - `m.new_content` (replacement-event side-channel for edits;
+   *      we already collapsed to the effective body above)
+   *    - `m.mentions` (different audience — never carry mentions
+   *      across rooms; the original author wouldn't have @-ed people
+   *      who aren't in the target)
+   *    - the rich-reply `> <@sender>` text fallback prefix (it's
+   *      decoration that points at an event the target room can't
+   *      resolve — leaving it produces "In reply to a message that
+   *      doesn't exist" garbage)
+   *
+   * 3. For text-class messages (`m.text` / `m.notice` / `m.emote`)
+   *    we prepend a "[Forwarded from @sender]" header so the
+   *    recipient knows this isn't the sender's own words. Media
+   *    messages don't get a prefix — the `body` field there is an
+   *    alt-text caption, not the message body.
+   *
+   * 4. We call `client.sendEvent` directly rather than threading
+   *    through `sendMessage` because:
+   *    - The status-trace / pending-bubble pipeline is wired to the
+   *      source room; forwarding sends to a DIFFERENT room and the
+   *      UI surfaces success via a toast, not an optimistic bubble.
+   *    - We need to pass raw IContent (with `file` for encrypted
+   *      media) — `encodeMessageBody` re-encodes from MessageBody
+   *      and currently only emits `url`, which would silently
+   *      strip the AES key from forwarded E2EE media.
+   *
+   * 5. Encryption works without re-uploading: for E2EE rooms the
+   *    AES-CTR key for media lives in `content.file.key` and is
+   *    re-encrypted by the TARGET room's megolm session as part
+   *    of the outer event. The recipient decrypts megolm → reads
+   *    `file.key` → fetches the encrypted blob from the (any)
+   *    homeserver → decrypts the bytes locally. No re-upload.
+   */
+  async forwardEvent(
+    sourceRoomId: RoomId,
+    sourceEventId: EventId,
+    targetRoomId: RoomId,
+  ): Promise<EventId> {
+    const c = this.requireClient();
+    const sourceRoom = c.getRoom(sourceRoomId);
+    if (!sourceRoom) {
+      throw new Error('Source room not loaded');
+    }
+    const ev = sourceRoom.findEventById(sourceEventId);
+    if (!ev) {
+      throw new Error('Source message not found in this room');
+    }
+    if (ev.getType() !== EventType.RoomMessage) {
+      throw new Error('Only chat messages can be forwarded');
+    }
+
+    // `getEffectiveEvent` collapses an edited message to its latest
+    // replacement content. For a non-edited message it's a no-op.
+    const effective = ev.getEffectiveEvent();
+    const original = (effective?.content ?? ev.getContent()) as IContent;
+    const cleaned: Record<string, unknown> = { ...original };
+
+    delete cleaned['m.relates_to'];
+    delete cleaned['m.new_content'];
+    delete cleaned['m.mentions'];
+
+    // Strip the `> <@sender> …\n\n` reply-fallback prefix from both
+    // plain and formatted bodies. The chip rendering it as a reply
+    // belongs to the relation — without the relation the text is
+    // just noise referring to an event the target can't resolve.
+    if (typeof cleaned['body'] === 'string') {
+      cleaned['body'] = stripReplyFallback(cleaned['body'] as string);
+    }
+    if (typeof cleaned['formatted_body'] === 'string') {
+      cleaned['formatted_body'] = (cleaned['formatted_body'] as string).replace(
+        /^<mx-reply>[\s\S]*?<\/mx-reply>/,
+        '',
+      );
+    }
+
+    // Prepend "Forwarded from" header for text-class messages only.
+    // Media bodies are alt-text captions, not message text, so a
+    // prefix there would corrupt accessibility metadata.
+    const msgtype = cleaned['msgtype'];
+    const senderId = ev.getSender() ?? 'someone';
+    if (
+      msgtype === MsgType.Text ||
+      msgtype === MsgType.Notice ||
+      msgtype === MsgType.Emote
+    ) {
+      const prefix = `[Forwarded from ${senderId}]\n`;
+      cleaned['body'] = prefix + (cleaned['body'] as string);
+      if (typeof cleaned['formatted_body'] === 'string') {
+        cleaned['format'] = 'org.matrix.custom.html';
+        cleaned['formatted_body'] =
+          `<em>Forwarded from ${escapeHtmlForForward(senderId)}</em><br/>` +
+          (cleaned['formatted_body'] as string);
+      }
+    }
+
+    const result = await c.sendEvent(
+      targetRoomId,
+      EventType.RoomMessage,
+      cleaned as IContent,
+    );
+    return result.event_id as EventId;
+  }
+
   async joinRoom(roomId: RoomId): Promise<RoomId> {
     const c = this.requireClient();
     const r = await c.joinRoom(roomId);
@@ -2127,6 +2246,20 @@ function buildReplyFallbackHtml(
     `${safe}` +
     `</blockquote></mx-reply>`
   );
+}
+
+/**
+ * Minimal HTML escape used when constructing the "Forwarded from"
+ * header in formatted bodies. The sender's Matrix ID is the only
+ * thing we interpolate here; we don't pull in a full HTML library
+ * for one substitution.
+ */
+function escapeHtmlForForward(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 /**
