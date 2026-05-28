@@ -49,6 +49,7 @@ import type {
   MxcUri,
   MediaInfo,
   RoomDelta,
+  SearchHit,
 } from '@mata/shared/matrix';
 import { authError, networkError, syncError } from '@mata/shared/errors';
 import type { WorkerEvent } from '@mata/shared/rpc';
@@ -736,6 +737,64 @@ export class SdkSession {
       // Server didn't expose turnServer — fall through to STUN-only.
     }
     return [{ urls: 'stun:turn.matrix.org' }];
+  }
+
+  // ---------------------------------------------------------------------------
+  // Message search.
+  //
+  // matrix-js-sdk wraps Synapse's POST /_matrix/client/v3/search under
+  // `searchRoomEvents({ term, filter })`. The response is an
+  // `ISearchResults` whose `results[]` items are `SearchResult`
+  // instances — each carries an `EventContext` (its own MatrixEvent +
+  // events before/after). We flatten each hit to the wire-format
+  // `SearchHit` so the UI doesn't have to know matrix-js-sdk shapes.
+  //
+  // Encrypted rooms: Synapse can't index ciphertext, so search is
+  // effectively plaintext-only. The server returns zero hits for
+  // encrypted rooms — that's a known Matrix limitation, not a Mata
+  // bug. We surface the empty result honestly rather than
+  // pretending to search.
+  //
+  // First page only. When the user crosses Synapse's default page
+  // size (~10) we'll wire `backPaginateRoomEventsSearch` behind a
+  // `next_batch` extension to this RPC.
+  // ---------------------------------------------------------------------------
+  async searchMessages(
+    query: string,
+    roomId: RoomId | null,
+  ): Promise<{ results: SearchHit[]; count: number; highlights: string[] }> {
+    const trimmed = query.trim();
+    if (!trimmed) return { results: [], count: 0, highlights: [] };
+    const client = this.requireClient();
+    try {
+      const opts: { term: string; filter?: { rooms: string[] } } = { term: trimmed };
+      if (roomId) opts.filter = { rooms: [roomId] };
+      const raw = await client.searchRoomEvents(opts);
+      const results = (raw.results ?? []).map((r): SearchHit => {
+        const ev = r.context.getEvent();
+        const timeline = r.context.getTimeline();
+        const idx = r.context.getOurEventIndex();
+        const prev = idx > 0 ? timeline[idx - 1] : undefined;
+        const next = idx >= 0 && idx + 1 < timeline.length ? timeline[idx + 1] : undefined;
+        const before = prev ? extractPreview(prev) : null;
+        const after = next ? extractPreview(next) : null;
+        const body = extractPreview(ev) ?? '';
+        return {
+          eventId: ev.getId() as EventId,
+          roomId: ev.getRoomId() as RoomId,
+          sender: (ev.getSender() ?? '') as UserId,
+          originServerTs: ev.getTs(),
+          body,
+          contextBefore: before,
+          contextAfter: after,
+        };
+      });
+      const count = typeof raw.count === 'number' ? raw.count : results.length;
+      const highlights = Array.isArray(raw.highlights) ? raw.highlights : [];
+      return { results, count, highlights };
+    } catch (err) {
+      throw networkError(`searchMessages failed: ${describe(err)}`);
+    }
   }
 
   async loadThread(roomId: RoomId, threadRootId: EventId): Promise<TimelineEvent[]> {
