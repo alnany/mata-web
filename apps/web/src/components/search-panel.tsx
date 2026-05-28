@@ -19,7 +19,7 @@
 // ============================================================================
 
 import { For, Match, Show, Switch, createEffect, createSignal, on } from 'solid-js';
-import type { RoomSummary, SearchHit } from '@mata/shared/matrix';
+import type { EventId, RoomSummary, SearchHit } from '@mata/shared/matrix';
 import { useBridge } from '../bridge/context.js';
 import { initials, prettyName } from './message-bubble.js';
 
@@ -33,6 +33,12 @@ export function SearchPanel(props: {
   room: RoomSummary;
   open: boolean;
   onClose: () => void;
+  // Click handler when the user picks a hit. The room view wires
+  // this to its existing jump-to-event scroller, so the conversation
+  // smooth-scrolls to the message and pulses a focus ring. We
+  // deliberately don't auto-close the panel — users typically want
+  // to scan the next hit after landing on one.
+  onSelect?: (eventId: EventId) => void;
 }) {
   const bridge = useBridge();
   const [query, setQuery] = createSignal('');
@@ -175,7 +181,13 @@ export function SearchPanel(props: {
                 >
                   <ul class="divide-y divide-line">
                     <For each={p().hits}>
-                      {(hit) => <HitRow hit={hit} highlights={p().highlights} />}
+                      {(hit) => (
+                        <HitRow
+                          hit={hit}
+                          highlights={p().highlights}
+                          onSelect={props.onSelect}
+                        />
+                      )}
                     </For>
                   </ul>
                 </Show>
@@ -192,7 +204,11 @@ function EmptyState(props: { text: string }) {
   return <p class="px-3 py-6 text-center text-[11.5px] text-fg-3">{props.text}</p>;
 }
 
-function HitRow(props: { hit: SearchHit; highlights: string[] }) {
+function HitRow(props: {
+  hit: SearchHit;
+  highlights: string[];
+  onSelect?: (eventId: EventId) => void;
+}) {
   const ts = () =>
     new Date(props.hit.originServerTs).toLocaleString(undefined, {
       month: 'short',
@@ -200,29 +216,39 @@ function HitRow(props: { hit: SearchHit; highlights: string[] }) {
       hour: '2-digit',
       minute: '2-digit',
     });
+  // Whole row is a button when onSelect is wired. We use a
+  // `<button>` inside the `<li>` (rather than putting the role on
+  // the `<li>` itself) so the focus ring + keyboard activation come
+  // from the browser for free.
   return (
-    <li class="px-3 py-2.5 hover:bg-input">
-      <div class="flex items-center gap-2">
-        <span
-          class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-input text-[9px] font-semibold text-fg-2"
-          aria-hidden="true"
-        >
-          {initials(props.hit.sender)}
-        </span>
-        <span class="truncate text-[11.5px] font-medium text-fg">
-          {prettyName(props.hit.sender)}
-        </span>
-        <span class="ml-auto shrink-0 text-[10px] text-fg-4">{ts()}</span>
-      </div>
-      <Show when={props.hit.contextBefore}>
-        <p class="mt-1.5 truncate text-[10.5px] text-fg-4">{props.hit.contextBefore}</p>
-      </Show>
-      <p class="mt-0.5 line-clamp-3 text-[12px] leading-snug text-fg-2">
-        <Highlighted text={props.hit.body} terms={props.highlights} />
-      </p>
-      <Show when={props.hit.contextAfter}>
-        <p class="mt-0.5 truncate text-[10.5px] text-fg-4">{props.hit.contextAfter}</p>
-      </Show>
+    <li>
+      <button
+        type="button"
+        onClick={() => props.onSelect?.(props.hit.eventId)}
+        class="block w-full cursor-pointer px-3 py-2.5 text-left hover:bg-input focus:bg-input focus:outline-none"
+      >
+        <div class="flex items-center gap-2">
+          <span
+            class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-input text-[9px] font-semibold text-fg-2"
+            aria-hidden="true"
+          >
+            {initials(props.hit.sender)}
+          </span>
+          <span class="truncate text-[11.5px] font-medium text-fg">
+            {prettyName(props.hit.sender)}
+          </span>
+          <span class="ml-auto shrink-0 text-[10px] text-fg-4">{ts()}</span>
+        </div>
+        <Show when={props.hit.contextBefore}>
+          <p class="mt-1.5 truncate text-[10.5px] text-fg-4">{props.hit.contextBefore}</p>
+        </Show>
+        <p class="mt-0.5 line-clamp-3 text-[12px] leading-snug text-fg-2">
+          <Highlighted text={props.hit.body} terms={props.highlights} />
+        </p>
+        <Show when={props.hit.contextAfter}>
+          <p class="mt-0.5 truncate text-[10.5px] text-fg-4">{props.hit.contextAfter}</p>
+        </Show>
+      </button>
     </li>
   );
 }

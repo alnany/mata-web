@@ -1035,6 +1035,7 @@ export function RoomView(props: {
         room={props.room}
         open={searchOpen()}
         onClose={() => setSearchOpen(false)}
+        onSelect={(eventId) => actions.onJumpTo(eventId)}
       />
       <Show when={openThread()}>
         {(rootId) => (
