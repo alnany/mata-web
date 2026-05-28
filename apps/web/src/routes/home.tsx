@@ -302,20 +302,16 @@ export function HomePage() {
         <Show
           when={joinedRooms().length > 0}
           fallback={
-            <div class="flex flex-1 items-center justify-center p-6 text-center">
-              <Show
-                when={rooms() !== null}
-                fallback={
-                  <span class="mono text-[10.5px] uppercase tracking-[0.08em] text-fg-4">
-                    Loading rooms…
-                  </span>
-                }
-              >
+            <Show
+              when={rooms() !== null}
+              fallback={<RoomListSkeleton />}
+            >
+              <div class="flex flex-1 items-center justify-center p-6 text-center">
                 <span class="mono text-[10.5px] uppercase tracking-[0.08em] text-fg-4">
                   No rooms yet
                 </span>
-              </Show>
-            </div>
+              </div>
+            </Show>
           }
         >
           <div class="flex-1 overflow-y-auto pb-2">
@@ -504,6 +500,55 @@ function SectionLabel(props: { label: string; count?: number; tone?: 'warn'; cla
       <Show when={props.count !== undefined}>
         <span class="mono text-[10.5px] text-fg-4">{props.count}</span>
       </Show>
+    </div>
+  );
+}
+
+/* =========================================================================
+   Room list skeleton — boot-time placeholder while we wait for the worker
+   to come up and first /sync to land. Mirrors the RoomRow grid geometry
+   (22px leader · 1fr name · auto meta, py-[7px]) so the real rows slot in
+   at identical positions when they arrive — no layout shift, no flash.
+
+   Per design motion rule (global.css §Motion: "only the composer e2ee dot
+   pulses"), this is STATIC — no shimmer, no opacity animation. We fake
+   depth with a per-row opacity falloff so the list visually "trails off"
+   the way Telegram's loading list does, without breaking the motion
+   contract.
+   ========================================================================= */
+function RoomListSkeleton() {
+  // Pseudo-random but deterministic width variance so the bars don't all
+  // line up to the same edge — looks like real names of varying length.
+  const rows = [0, 1, 2, 3, 4, 5, 6, 7];
+  const widthFor = (i: number) => 48 + ((i * 19 + 7) % 38); // 48–86%
+  return (
+    <div class="flex-1 overflow-hidden pt-[14px]" aria-hidden="true">
+      <ul class="px-[10px]">
+        <For each={rows}>
+          {(i) => (
+            <li
+              class="grid grid-cols-[22px_1fr_auto] items-center gap-[10px] rounded-[7px] px-[10px] py-[7px]"
+              style={{ opacity: Math.max(0.18, 1 - i * 0.11) }}
+            >
+              <span
+                class="h-[10px] w-[10px] rounded-full"
+                style={{ background: 'var(--color-elev)' }}
+              />
+              <span
+                class="h-[10px] rounded-[3px]"
+                style={{
+                  width: `${widthFor(i)}%`,
+                  background: 'var(--color-elev)',
+                }}
+              />
+              <span
+                class="h-[8px] w-[26px] rounded-[3px]"
+                style={{ background: 'var(--color-elev)' }}
+              />
+            </li>
+          )}
+        </For>
+      </ul>
     </div>
   );
 }
