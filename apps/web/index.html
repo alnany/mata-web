@@ -1,14 +1,42 @@
 <!doctype html>
-<html lang="en" class="h-full">
+<html lang="en" class="h-full dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="color-scheme" content="light dark" />
+    <meta name="color-scheme" content="dark light" />
     <title>Mata</title>
-    <meta name="description" content="Element's security, Telegram's silk, your server." />
+    <meta name="description" content="The eye of the day. Encrypted, end to end." />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+
+    <!-- Theme bootstrap: applies persisted choice before the JS bundle
+         loads so we never paint the wrong palette and then flip. -->
+    <script>
+      (function () {
+        try {
+          var v = localStorage.getItem('mata.theme');
+          var isDark =
+            v === 'dark' ||
+            (v !== 'light' && (v === null || v === 'system'));
+          var html = document.documentElement;
+          html.classList.toggle('dark', isDark);
+          html.classList.toggle('light', !isDark);
+        } catch (e) {
+          /* SSR / private mode fallback: assume dark (design default). */
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
+
+    <!-- Fonts: Geist (UI), Geist Mono (metadata), Instrument Serif (the M
+         glyph on the workspace-rail brand square). -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap"
+      rel="stylesheet"
+    />
   </head>
-  <body class="h-full bg-neutral-50 text-neutral-900 antialiased dark:bg-neutral-950 dark:text-neutral-50">
+  <body class="h-full antialiased">
     <div id="root" class="h-full"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

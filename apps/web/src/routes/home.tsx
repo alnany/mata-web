@@ -2,7 +2,6 @@ import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-j
 import { createStore, produce } from 'solid-js/store';
 import { useNavigate } from '@solidjs/router';
 import { useBridge } from '../bridge/context.js';
-import { bridgeDiag } from '../bridge/worker-client.js';
 import { session, setSession } from '../stores/session.js';
 import { showToast } from '../stores/toast.js';
 import { activeCall } from '../stores/call.js';
@@ -13,34 +12,37 @@ import { dispatchSyncDeltas, setRoomCounts } from '../stores/notifications.js';
 import { NewRoomModal } from '../components/new-room-modal.js';
 import { readRoomList, writeRoomList } from '../lib/persistent-cache.js';
 import { listTime } from '../lib/date-buckets.js';
-import { initials } from '../components/message-bubble.js';
+import { initials, gradientForUser } from '../components/message-bubble.js';
+import { BrandSquare, Mark } from '../components/logo.js';
 
+/**
+ * Three-column shell: rail (64) · room list (296) · conversation (flex).
+ *
+ * Side panel is NOT a permanent fourth column — it slides in on demand
+ * via thread-panel / members-panel components owned by RoomView. Per the
+ * user's directive (msg-cGZsaJps5Lj4T7hG): only apply the design style to
+ * features we ship today. Workspace squares (multi-workspace switcher),
+ * fake titlebar chrome, and Files/Pinned tabs are intentionally absent.
+ */
 export function HomePage() {
   const bridge = useBridge();
   const navigate = useNavigate();
 
-  // -------- Room list with persistent cache for instant first paint -------
+  // -------- Room list ----------------------------------------------------
   const [rooms, setRooms] = createSignal<RoomSummary[] | null>(null);
   const [filter, setFilter] = createSignal('');
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [newRoomOpen, setNewRoomOpen] = createSignal(false);
 
   // ---- Invite accept/decline -------------------------------------------
-  // `acting` indexes by roomId so the Accept/Decline buttons can show
-  // their per-row pending state without a heavier component split.
   const [acting, setActing] = createSignal<Record<string, 'join' | 'leave'>>({});
   const respondToInvite = async (roomId: RoomId, action: 'join' | 'leave') => {
     if (acting()[roomId]) return;
     setActing({ ...acting(), [roomId]: action });
     try {
       if (action === 'join') {
-        const res = await bridge.request({ kind: 'joinRoom', roomId });
+        await bridge.request({ kind: 'joinRoom', roomId });
         showToast('success', 'Joined room');
-        // Don't force-open — let the sync delta promote it into the
-        // joined list, then the user clicks normally. Forcing open
-        // before the room exists in our cache causes a flash of
-        // "Loading…" that we'd rather avoid.
-        void res;
       } else {
         await bridge.request({ kind: 'leaveRoom', roomId });
         showToast('info', 'Invite declined');
@@ -55,74 +57,17 @@ export function HomePage() {
     }
   };
 
-  // Sync state pill ('idle' | 'connecting' | 'syncing' | 'reconnecting' | 'error')
+  // Sync state — surfaced as the rail's brand-square underline accent.
   const [syncState, setSyncState] = createSignal<string>('connecting');
-  // Stage hint (e.g., 'loading crypto (~9MB)') — shown next to the pill so
-  // a stuck startup is observable, not silent.
   const [syncReason, setSyncReason] = createSignal<string>('');
-  // Append-only log of every distinct (state, reason) pair the worker has
-  // emitted, in time order. The pill / single-reason banner is useless for
-  // debugging a startup hang because the 4-second heartbeat overwrites
-  // every interesting trace within 4s with "sdk sync state: null". This
-  // log preserves every emit so the user can SEE the worker's progress
-  // (or the exact point at which it stops emitting) without DevTools.
-  // Bounded ring buffer so a long-running session can't OOM.
-  type SyncLogEntry = { at: number; state: string; reason: string };
-  const [syncLog, setSyncLog] = createSignal<SyncLogEntry[]>([]);
-  const SYNC_LOG_MAX = 30;
-  // Diagnostic tick that re-reads bridgeDiag counters every 500ms. The
-  // bridgeDiag object is mutated by the bridge message handler regardless
-  // of whether any handler is attached, so this surfaces the raw
-  // worker→main message flow even if the syncStatus subscription path is
-  // broken. Stays in the DOM as a single line we can read via the
-  // browser tool's read_page_text.
-  const [diagTick, setDiagTick] = createSignal(0);
-  const diagInterval = window.setInterval(() => setDiagTick((n) => n + 1), 500);
-  onCleanup(() => window.clearInterval(diagInterval));
 
   onCleanup(
     bridge.on('syncStatus', (e) => {
       setSyncState(e.status);
       setSyncReason(e.reason ?? '');
-      const reason = e.reason ?? '<no reason>';
-      setSyncLog((prev) => {
-        // Dedup against most recent entry: the heartbeat emits the same
-        // "sdk sync state: null" line every 4s; we only want one copy.
-        const last = prev[prev.length - 1];
-        if (last && last.state === e.status && last.reason === reason) {
-          return prev;
-        }
-        const next = [...prev, { at: Date.now(), state: e.status, reason }];
-        return next.length > SYNC_LOG_MAX
-          ? next.slice(next.length - SYNC_LOG_MAX)
-          : next;
-      });
       if (e.status === 'error' && e.reason) {
         showToast('error', `Sync error: ${e.reason}`, 8000);
       }
-    }),
-  );
-
-  // `diagNote` is the noise-only diagnostic feed (send-pipeline phase
-  // markers, watchdog beacons, etc.). It lands in the same syncLog
-  // panel the user sees but explicitly does NOT touch the sync-state
-  // pill — otherwise every send / decrypt cycle would drag the pill
-  // back to "connecting" forever even after sync reached `syncing`.
-  // Logged with state='diag' so the row renders distinct from real
-  // state transitions.
-  onCleanup(
-    bridge.on('diagNote', (e) => {
-      const reason = e.note;
-      setSyncLog((prev) => {
-        const last = prev[prev.length - 1];
-        if (last && last.state === 'diag' && last.reason === reason) {
-          return prev;
-        }
-        const next = [...prev, { at: Date.now(), state: 'diag', reason }];
-        return next.length > SYNC_LOG_MAX
-          ? next.slice(next.length - SYNC_LOG_MAX)
-          : next;
-      });
     }),
   );
 
@@ -131,30 +76,24 @@ export function HomePage() {
       navigate('/login', { replace: true });
       return;
     }
-    // 1) Instant: paint from persisted cache if we have one.
     const cached = await readRoomList();
-    if (cached && !rooms()) {
-      setRooms(sortRooms(cached.rooms));
-    }
-    // 2) Live: ask the worker. Replaces cached snapshot once ready.
+    if (cached && !rooms()) setRooms(sortRooms(cached.rooms));
     void refetchRooms();
   });
 
   const refetchRooms = async () => {
     try {
       const res = await bridge.request({ kind: 'loadRoomList' });
-      // Stable-reference merge: <For> in Solid keys by reference. If we
-      // hand it a brand-new RoomSummary object on every sync, every row
-      // re-mounts — that's the visible flashing. Preserve identity for
-      // rooms whose fields are unchanged.
       const prev = rooms() ?? [];
       const merged = mergeRooms(prev, res.rooms);
       setRooms(merged);
-      // Phase 11: push aggregate unread/highlight to notifications store
-      // so the tab title reflects ground-truth server counts instead of
-      // a session-wide accumulator.
       let u = 0, h = 0;
-      for (const r of merged) { if (r.membership === 'join') { u += r.unreadCount; h += r.highlightCount; } }
+      for (const r of merged) {
+        if (r.membership === 'join') {
+          u += r.unreadCount;
+          h += r.highlightCount;
+        }
+      }
       setRoomCounts({ unread: u, highlights: h });
       void writeRoomList(merged);
     } catch (err) {
@@ -163,13 +102,9 @@ export function HomePage() {
     }
   };
 
-  // Refresh on every sync delta. Worker holds canonical state; this is cheap.
   onCleanup(
     bridge.on('syncUpdate', (e) => {
       refetchRooms();
-      // Drive desktop notifications + chime + tab badge tally off the
-      // same delta stream. Active room + focused window short-circuit
-      // inside dispatchSyncDeltas, so no need to gate at the caller.
       const me = (() => {
         const s = session();
         return s.phase === 'authenticated' ? s.userId : null;
@@ -189,7 +124,7 @@ export function HomePage() {
     }),
   );
 
-  // -------- Active room + per-room cache (silky switch) -------------------
+  // -------- Active room + per-room cache --------------------------------
   const [activeId, setActiveId] = createSignal<RoomId | null>(null);
   const [caches, setCaches] = createStore<Record<string, RoomCache>>({});
   const updateCache = (roomId: RoomId, updater: (c: RoomCache) => void) => {
@@ -206,19 +141,13 @@ export function HomePage() {
     setActiveId(room.roomId);
   };
 
-  /**
-   * Stable reference: only changes when the underlying roomId changes.
-   * Without this memo, every sync delta rebuilt the RoomSummary object
-   * and propagated through to RoomView, even when the room's data was
-   * actually unchanged. The visible flash on click came from here.
-   */
   const activeRoom = createMemo<RoomSummary | null>(() => {
     const id = activeId();
     if (!id) return null;
     return (rooms() ?? []).find((r) => r.roomId === id) ?? null;
   });
 
-  // -------- Filtered room list ------------------------------------------
+  // -------- Filtered & grouped list -------------------------------------
   const joinedRooms = (): RoomSummary[] =>
     (rooms() ?? []).filter((r) => r.membership === 'join');
   const invitedRooms = (): RoomSummary[] =>
@@ -236,6 +165,10 @@ export function HomePage() {
     );
   };
 
+  // Direct/Rooms partition — DMs first, then named rooms.
+  const directList = createMemo(() => filteredRooms().filter((r) => r.type === 'direct'));
+  const roomsList = createMemo(() => filteredRooms().filter((r) => r.type !== 'direct'));
+
   // -------- Keyboard shortcuts ------------------------------------------
   const onKey = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -248,152 +181,189 @@ export function HomePage() {
   onMount(() => window.addEventListener('keydown', onKey));
   onCleanup(() => window.removeEventListener('keydown', onKey));
 
-  return (
-    <div class="grid h-full min-h-0 w-full grid-cols-[320px_1fr]">
-      {/* Sidebar */}
-      <aside class="flex h-full min-h-0 flex-col border-r border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950">
-        <header class="flex items-center gap-2 border-b border-neutral-200 px-3 py-3 dark:border-neutral-800">
-          <button
-            type="button"
-            onClick={() => setSettingsOpen(true)}
-            class="flex h-8 w-8 items-center justify-center rounded-lg text-neutral-500 hover:bg-neutral-200 hover:text-neutral-900 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
-            aria-label="Settings"
-            title="Settings"
-          >
-            ☰
-          </button>
-          <span class="text-sm font-semibold tracking-tight">Mata</span>
-          <SyncPill state={syncState()} reason={syncReason()} />
-          <button
-            type="button"
-            onClick={() => setNewRoomOpen(true)}
-            class="ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-neutral-500 hover:bg-neutral-200 hover:text-neutral-900 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
-            aria-label="New conversation"
-            title="New conversation"
-          >
-            ✎
-          </button>
-        </header>
-        <SyncBanner
-          state={syncState()}
-          reason={syncReason()}
-          log={syncLog()}
-        />
-        <BridgeDiagBanner ticks={diagTick()} />
+  // -------- Derived bits for the me-bar ---------------------------------
+  const myId = () => {
+    const s = session();
+    return s.phase === 'authenticated' ? s.userId : '';
+  };
+  const myHandle = () => {
+    const id = myId();
+    return id;
+  };
+  const myName = () => {
+    const id = myId();
+    if (!id) return '';
+    const m = id.match(/^@([^:]+):/);
+    return m ? m[1] : id;
+  };
+  const homeserverLabel = () => {
+    const id = myId();
+    const m = id.match(/^@[^:]+:(.+)$/);
+    return m ? m[1] : 'matrix.org';
+  };
 
-        <div class="border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
-          <div class="relative">
+  return (
+    <div class="grid h-full min-h-0 w-full grid-cols-[64px_296px_1fr] bg-app">
+      <Rail
+        syncState={syncState()}
+        syncReason={syncReason()}
+        onSettings={() => setSettingsOpen(true)}
+        myName={myName()}
+      />
+
+      {/* -------- Room list column (296px) ---------------------------- */}
+      <aside
+        class="flex h-full min-h-0 flex-col border-r bg-list"
+        style={{ 'border-color': 'var(--color-line)' }}
+      >
+        {/* Header */}
+        <header
+          class="flex items-center justify-between px-[18px] pb-[12px] pt-[18px]"
+        >
+          <div class="flex items-baseline gap-1">
+            <span
+              class="text-[19px] leading-none text-fg"
+              style={{ 'font-weight': 500, 'letter-spacing': '-0.025em' }}
+            >
+              mata
+            </span>
+            <span class="mono text-[10.5px] text-fg-4" style={{ position: 'relative', top: '-1px' }}>
+              /personal
+            </span>
+          </div>
+          <span
+            class="mono rounded-[4px] border px-1.5 py-[3px] text-[10px] text-fg-3"
+            style={{ 'border-color': 'var(--color-line)' }}
+            title="Home server"
+          >
+            {homeserverLabel()}
+          </span>
+        </header>
+
+        {/* Search */}
+        <div class="px-[14px] pb-2">
+          <div
+            class="relative flex items-center gap-2 rounded-[8px] border bg-input px-[10px] py-[7px]"
+            style={{ 'border-color': 'var(--color-line)' }}
+          >
+            <IconSearch class="h-[13px] w-[13px] text-fg-3" />
             <input
               id="mata-room-search"
               type="text"
-              placeholder="Search rooms (⌘K)"
+              placeholder="Search or jump to…"
               value={filter()}
               onInput={(e) => setFilter(e.currentTarget.value)}
-              class="w-full rounded-lg border border-neutral-200 bg-white py-1.5 pl-8 pr-3 text-sm placeholder:text-neutral-400 focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20 dark:border-neutral-800 dark:bg-neutral-900"
+              class="min-w-0 flex-1 bg-transparent text-[12.5px] text-fg placeholder:text-fg-3 focus:outline-none"
             />
-            <span class="pointer-events-none absolute left-2.5 top-1.5 text-neutral-400">🔍</span>
+            <span
+              class="mono rounded-[4px] border px-1 py-[1px] text-[10px] text-fg-4"
+              style={{ 'border-color': 'var(--color-line)' }}
+            >
+              ⌘K
+            </span>
           </div>
         </div>
 
+        {/* Pending invites — minimal sleeve, sized to count */}
         <Show when={invitedRooms().length > 0}>
-          <div class="border-b border-neutral-200 bg-amber-50/60 px-3 py-2 dark:border-neutral-800 dark:bg-amber-950/30">
-            <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-              Pending invites · {invitedRooms().length}
-            </div>
+          <section class="px-[14px] pt-2">
+            <SectionLabel
+              label="Invites"
+              count={invitedRooms().length}
+              tone="warn"
+            />
             <ul class="space-y-1.5">
               <For each={invitedRooms()}>
                 {(r) => (
-                  <li class="flex items-center gap-2 rounded-md bg-white/70 px-2 py-1.5 text-xs dark:bg-neutral-900/70">
-                    <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-[10px] font-semibold text-amber-800 dark:bg-amber-900 dark:text-amber-100">
-                      {initials(r.name || r.roomId)}
-                    </div>
-                    <div class="min-w-0 flex-1">
-                      <div class="truncate font-medium">{r.name || r.roomId}</div>
-                      <Show when={r.topic}>
-                        <div class="truncate text-[10px] text-neutral-500">{r.topic}</div>
-                      </Show>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => respondToInvite(r.roomId, 'join')}
-                      disabled={!!acting()[r.roomId]}
-                      class="rounded-md bg-mata-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-mata-500 disabled:opacity-50"
-                    >
-                      {acting()[r.roomId] === 'join' ? '…' : 'Accept'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => respondToInvite(r.roomId, 'leave')}
-                      disabled={!!acting()[r.roomId]}
-                      class="rounded-md border border-neutral-300 px-2 py-1 text-[10px] font-medium text-neutral-700 hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                    >
-                      {acting()[r.roomId] === 'leave' ? '…' : 'Decline'}
-                    </button>
-                  </li>
+                  <InviteRow
+                    room={r}
+                    pending={acting()[r.roomId]}
+                    onAction={(action) => respondToInvite(r.roomId, action)}
+                  />
                 )}
               </For>
             </ul>
-          </div>
+          </section>
         </Show>
 
+        {/* Joined rooms — partitioned by type */}
         <Show
           when={joinedRooms().length > 0}
           fallback={
-            <div class="flex flex-1 items-center justify-center p-6 text-center text-xs text-neutral-500">
+            <div class="flex flex-1 items-center justify-center p-6 text-center">
               <Show
                 when={rooms() !== null}
-                fallback={<span>Loading rooms…</span>}
+                fallback={
+                  <span class="mono text-[10.5px] uppercase tracking-[0.08em] text-fg-4">
+                    Loading rooms…
+                  </span>
+                }
               >
-                <span>No rooms yet.</span>
+                <span class="mono text-[10.5px] uppercase tracking-[0.08em] text-fg-4">
+                  No rooms yet
+                </span>
               </Show>
             </div>
           }
         >
-          <ul class="flex-1 overflow-y-auto">
-            <For
-              each={filteredRooms()}
-              fallback={
-                <li class="p-4 text-center text-xs text-neutral-500">No rooms match</li>
-              }
-            >
-              {(room) => (
-                <RoomRow
-                  room={room}
-                  active={activeId() === room.roomId}
-                  onSelect={() => openRoom(room)}
-                  callBusyHere={activeCall()?.roomId === room.roomId}
-                />
-              )}
-            </For>
-          </ul>
+          <div class="flex-1 overflow-y-auto pb-2">
+            <Show when={directList().length > 0}>
+              <SectionLabel label="Direct" count={directList().length} class="mt-3" />
+              <ul class="px-[10px]">
+                <For each={directList()}>
+                  {(room) => (
+                    <RoomRow
+                      room={room}
+                      active={activeId() === room.roomId}
+                      onSelect={() => openRoom(room)}
+                      callBusyHere={activeCall()?.roomId === room.roomId}
+                      myId={myId()}
+                    />
+                  )}
+                </For>
+              </ul>
+            </Show>
+            <Show when={roomsList().length > 0}>
+              <SectionLabel label="Rooms" count={roomsList().length} class="mt-4" />
+              <ul class="px-[10px]">
+                <For
+                  each={roomsList()}
+                  fallback={
+                    <li class="px-3 py-2 text-[12px] text-fg-4">No rooms match</li>
+                  }
+                >
+                  {(room) => (
+                    <RoomRow
+                      room={room}
+                      active={activeId() === room.roomId}
+                      onSelect={() => openRoom(room)}
+                      callBusyHere={activeCall()?.roomId === room.roomId}
+                      myId={myId()}
+                    />
+                  )}
+                </For>
+              </ul>
+            </Show>
+          </div>
         </Show>
 
-        <footer class="border-t border-neutral-200 px-3 py-2 text-[10px] text-neutral-500 dark:border-neutral-800">
-          {session().phase === 'authenticated' ? meLine() : '—'}
-        </footer>
+        {/* Me-bar (sticky bottom) */}
+        <MeBar
+          name={myName()}
+          handle={myHandle()}
+          syncState={syncState()}
+          syncReason={syncReason()}
+          onNewRoom={() => setNewRoomOpen(true)}
+        />
       </aside>
 
-      {/* Main pane */}
-      <div class="min-h-0">
+      {/* -------- Conversation column ---------------------------------- */}
+      <div class="min-h-0 bg-conv">
         <Show
           when={activeRoom()}
-          fallback={
-            <section class="flex h-full items-center justify-center p-12 text-sm text-neutral-500">
-              <div class="text-center">
-                <div class="mb-3 text-4xl">💬</div>
-                <p class="font-medium">Select a room to start chatting</p>
-                <p class="mt-1 text-xs">Click any chat on the left, or press ⌘K to search.</p>
-              </div>
-            </section>
-          }
+          fallback={<EmptyConv />}
         >
           {(room) => {
-            // Ensure the cache exists before RoomView reads it. Without
-            // this guard, `caches[id] ?? createRoomCache(id)` produced a
-            // transient `loaded:false` cache on every reactive read,
-            // resetting RoomView's loaded state and dropping the
-            // pending-send bubble during a sync delta — which is why
-            // sends felt broken.
             if (!caches[room().roomId]) {
               setCaches(room().roomId, createRoomCache(room().roomId));
             }
@@ -413,10 +383,6 @@ export function HomePage() {
         open={newRoomOpen()}
         onClose={() => setNewRoomOpen(false)}
         onCreated={(roomId) => {
-          // The sync delta will land the room in our list shortly; once
-          // it does the route param triggers RoomView. Pushing the
-          // route immediately works because openRoom only looks up by
-          // id and falls back gracefully if the row isn't there yet.
           navigate(`/rooms/${encodeURIComponent(roomId)}`);
           setActiveId(roomId);
         }}
@@ -425,184 +391,389 @@ export function HomePage() {
   );
 }
 
-function meLine(): string {
-  const s = session();
-  if (s.phase !== 'authenticated') return '';
-  return s.userId;
+/* =========================================================================
+   Workspace rail — 64px column.
+   Per user rule (msg-cGZsaJps5Lj4T7hG): NO multi-workspace squares.
+   ========================================================================= */
+
+function Rail(props: {
+  syncState: string;
+  syncReason?: string;
+  onSettings: () => void;
+  myName: string;
+}) {
+  return (
+    <nav
+      class="flex h-full flex-col items-center border-r bg-rail py-3"
+      style={{ 'border-color': 'var(--color-line)' }}
+      aria-label="Primary navigation"
+    >
+      {/* Brand */}
+      <div title="Mata" class="mb-4">
+        <BrandSquare />
+      </div>
+
+      {/* Sync indicator — repurposes the e2ee pulse pattern as the only
+          rail-level status surface (since we strip the design's titlebar
+          breadcrumb per the project-scope rule). */}
+      <SyncDot state={props.syncState} reason={props.syncReason} />
+
+      <div class="flex-1" />
+
+      {/* Settings */}
+      <button
+        type="button"
+        onClick={props.onSettings}
+        class="flex h-[38px] w-[38px] items-center justify-center rounded-[10px] text-fg-3 transition-colors hover:bg-elev hover:text-fg"
+        aria-label="Settings"
+        title="Settings"
+      >
+        <IconSettings class="h-[15px] w-[15px]" />
+      </button>
+
+      {/* User avatar (lime gradient for self) */}
+      <div
+        class="mt-2 flex h-[30px] w-[30px] items-center justify-center rounded-[8px] text-[11px]"
+        style={{
+          background: 'linear-gradient(135deg, #c8f64d, #98c233)',
+          color: '#0a0a0b',
+          'font-weight': 600,
+        }}
+        title={props.myName}
+      >
+        {initials(props.myName || '?')}
+      </div>
+    </nav>
+  );
 }
 
-function SyncPill(props: { state: string; reason?: string }) {
-  const map: Record<string, { color: string; label: string }> = {
-    idle: { color: 'bg-neutral-400', label: 'idle' },
-    connecting: { color: 'bg-amber-500 animate-pulse', label: 'connecting' },
-    syncing: { color: 'bg-emerald-500', label: 'synced' },
-    reconnecting: { color: 'bg-amber-500 animate-pulse', label: 'reconnecting' },
-    error: { color: 'bg-red-500', label: 'error' },
+function SyncDot(props: { state: string; reason?: string }) {
+  const tone = () => {
+    switch (props.state) {
+      case 'syncing':
+        return { color: 'var(--color-accent)', pulse: false, label: 'synced' };
+      case 'error':
+        return { color: 'var(--color-danger)', pulse: false, label: 'sync error' };
+      case 'reconnecting':
+      case 'connecting':
+        return { color: 'var(--color-warn)', pulse: true, label: props.state };
+      default:
+        return { color: 'var(--color-fg-4)', pulse: false, label: 'idle' };
+    }
   };
-  const m = map[props.state] ?? map.idle;
   return (
     <span
-      class="ml-auto inline-flex items-center gap-1 text-[10px] text-neutral-500"
-      title={props.reason || m.label}
-    >
-      <span class={`inline-block h-1.5 w-1.5 rounded-full ${m.color}`} />
-      {m.label}
-    </span>
+      class={`my-1 inline-block h-1.5 w-1.5 rounded-full ${tone().pulse ? 'mata-pulse' : ''}`}
+      style={{
+        background: tone().color,
+        'box-shadow': props.state === 'syncing' ? '0 0 6px var(--color-accent)' : 'none',
+      }}
+      title={`${tone().label}${props.reason ? ` · ${props.reason}` : ''}`}
+      aria-label={tone().label}
+    />
   );
 }
 
-// Dedicated diagnostic banner — full-width under the sidebar header — so
-// stage hints / errors are readable instead of getting truncated in the
-// 130-ish-pixel slot the pill has. Renders a SCROLLING LOG of every
-// distinct syncStatus emit so a stuck startup is fully observable: the
-// user can see the worker's last successful step, the exact point it
-// stopped emitting, and any HTTP traces from the fetch interceptor.
-// Only renders when sync is not healthy.
-function SyncBanner(props: {
-  state: string;
-  reason?: string;
-  log: ReadonlyArray<{ at: number; state: string; reason: string }>;
-}) {
-  const visible = () =>
-    props.state !== 'syncing' &&
-    props.state !== 'idle';
-  const tone = () =>
-    props.state === 'error'
-      ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300'
-      : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300';
-  const t0 = () => props.log[0]?.at ?? Date.now();
-  const dt = (at: number) => {
-    const ms = at - t0();
-    return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
-  };
-  const copyLog = () => {
-    const lines = props.log.map(
-      (e) => `+${dt(e.at)}\t[${e.state}]\t${e.reason}`,
-    );
-    void navigator.clipboard?.writeText(lines.join('\n'));
-  };
+/* =========================================================================
+   Section label
+   ========================================================================= */
+
+function SectionLabel(props: { label: string; count?: number; tone?: 'warn'; class?: string }) {
   return (
-    <Show when={visible()}>
-      <div class={`border-b ${tone()}`}>
-        <div class="flex items-center justify-between px-3 py-1 text-[10px] uppercase tracking-wider opacity-70">
-          <span>
-            sync log · {props.log.length} entries · latest: {props.state}
-            {props.reason ? ` · ${props.reason.slice(0, 80)}` : ' · <no reason>'}
-          </span>
-          <button
-            type="button"
-            onClick={copyLog}
-            class="rounded border border-current/30 px-1.5 py-0.5 text-[10px] hover:bg-current/10"
-            title="Copy full log to clipboard"
-          >
-            copy
-          </button>
-        </div>
-        <ol class="max-h-40 overflow-y-auto px-3 pb-1.5 text-[11px] leading-snug font-mono">
-          <For each={props.log}>
-            {(entry) => (
-              <li class="flex gap-2 break-words">
-                <span class="shrink-0 tabular-nums opacity-60">
-                  +{dt(entry.at)}
-                </span>
-                <span class="shrink-0 font-medium">[{entry.state}]</span>
-                <span class="min-w-0 break-all">{entry.reason}</span>
-              </li>
-            )}
-          </For>
-        </ol>
-      </div>
-    </Show>
+    <div
+      class={`flex items-baseline justify-between px-[14px] pb-[6px] pt-[14px] ${props.class ?? ''}`}
+    >
+      <span
+        class="mono text-[10.5px] uppercase tracking-[0.08em]"
+        style={{ color: props.tone === 'warn' ? 'var(--color-warn)' : 'var(--color-fg-4)' }}
+      >
+        {props.label}
+      </span>
+      <Show when={props.count !== undefined}>
+        <span class="mono text-[10.5px] text-fg-4">{props.count}</span>
+      </Show>
+    </div>
   );
 }
+
+/* =========================================================================
+   Room row — design-spec layout: leader glyph · name (+ federated suffix) · meta
+   ========================================================================= */
 
 function RoomRow(props: {
   room: RoomSummary;
   active: boolean;
   onSelect: () => void;
-  /**
-   * True when this room is the current active call's room. Drives the
-   * Phase 14.1 busy-line indicator. Computed by the parent against
-   * `activeCall()` so this component stays presentation-only and the
-   * Solid reactivity graph correctly invalidates the row when the
-   * call ends.
-   */
   callBusyHere: boolean;
+  myId: string;
 }) {
   const r = props.room;
+  const isUnread = () => r.unreadCount > 0;
+  const isHighlight = () => r.highlightCount > 0;
+  const isMuted = () => r.isMuted;
+
   return (
-    <li>
+    <li class="relative">
+      {/* Active rail */}
+      <Show when={props.active}>
+        <span
+          class="pointer-events-none absolute left-0 top-2 bottom-2 w-[2px] rounded-r-[2px]"
+          style={{ background: 'var(--color-accent)' }}
+        />
+      </Show>
       <button
         type="button"
         onClick={props.onSelect}
-        class={`row-vis flex w-full items-start gap-3 border-b border-neutral-100 px-3 py-2.5 text-left transition-colors dark:border-neutral-900 ${
-          props.active
-            ? 'bg-mata-500/10 hover:bg-mata-500/15 dark:bg-mata-500/15'
-            : 'hover:bg-neutral-100 dark:hover:bg-neutral-900'
-        }`}
+        class="row-vis grid w-full grid-cols-[22px_1fr_auto] items-center gap-[10px] rounded-[7px] px-[10px] py-[7px] text-left transition-colors hover:bg-elev"
+        style={{
+          background: props.active ? 'var(--color-elev)' : 'transparent',
+        }}
       >
-        <div class="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral-200 text-sm font-semibold text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
-          {initials(r.name)}
-          <Show when={r.isEncrypted}>
-            <span class="absolute -bottom-0.5 -right-0.5 text-[10px]" title="Encrypted">
-              🔒
-            </span>
-          </Show>
-          {/* Phase 14.1 — busy-line indicator. A small green dot
-              with a phone glyph sits on the avatar of any room that
-              currently hosts our active call. We do NOT show this for
-              every room with VoIP traffic on the homeserver (we have
-              no way to know), only the one we ourselves are talking
-              in — that's the one the user might switch away from and
-              forget. The pulsing animation is `animate-pulse` from
-              Tailwind, kept subtle so it doesn't drag attention from
-              unread badges. */}
-          <Show when={props.callBusyHere}>
-            <span
-              class="absolute -top-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-[8px] text-white ring-2 ring-white animate-pulse dark:ring-neutral-950"
-              title="Call in progress"
-              aria-label="Call in progress in this room"
-            >
-              📞
-            </span>
-          </Show>
-        </div>
-        <div class="min-w-0 flex-1">
-          <div class="flex items-baseline justify-between gap-2">
-            <span class="truncate text-sm font-medium">{r.name}</span>
-            <span class="shrink-0 text-[10px] text-neutral-500">{listTime(r.lastActivityTs)}</span>
-          </div>
-          <div class="mt-0.5 flex items-baseline gap-2">
-            <p class="flex-1 truncate text-xs text-neutral-500 dark:text-neutral-400">
-              {r.lastEventPreview ?? <em>No messages yet</em>}
-            </p>
-            <Show when={r.unreadCount > 0}>
+        {/* Leader column */}
+        <span class="flex h-[22px] w-[22px] items-center justify-center">
+          <Show
+            when={r.type === 'direct'}
+            fallback={
               <span
-                class={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold text-white ${
-                  r.highlightCount > 0 ? 'bg-red-500' : 'bg-mata-500'
-                }`}
+                class="text-[14px] leading-none"
+                style={{
+                  color: props.active || isUnread() ? 'var(--color-fg)' : 'var(--color-fg-4)',
+                  'font-weight': 400,
+                }}
               >
-                {r.unreadCount > 99 ? '99+' : r.unreadCount}
+                #
+              </span>
+            }
+          >
+            <span class="dot-accent" style={{ opacity: 0.85 }} title="DM" />
+          </Show>
+        </span>
+
+        {/* Name */}
+        <span
+          class="min-w-0 truncate text-[13.5px]"
+          style={{
+            color: isMuted()
+              ? 'var(--color-fg-4)'
+              : props.active || isUnread()
+                ? 'var(--color-fg)'
+                : 'var(--color-fg-2)',
+            'font-weight': isUnread() && !isMuted() ? 500 : 400,
+          }}
+        >
+          {r.name}
+          <Show when={isMuted()}>
+            <span class="ml-1 text-fg-4" title="Muted">
+              🔕
+            </span>
+          </Show>
+          <Show when={props.callBusyHere}>
+            <span class="ml-1.5 inline-flex items-center text-[10px] text-accent" title="Call in progress">
+              ●
+            </span>
+          </Show>
+        </span>
+
+        {/* Meta */}
+        <span
+          class="mono shrink-0 text-[10.5px]"
+          style={{
+            color: isMuted()
+              ? 'var(--color-fg-4)'
+              : isUnread() && !isMuted()
+                ? 'var(--color-accent)'
+                : 'var(--color-fg-4)',
+          }}
+        >
+          <Show
+            when={isUnread() && !isMuted()}
+            fallback={listTime(r.lastActivityTs)}
+          >
+            <Show
+              when={isHighlight()}
+              fallback={`${r.unreadCount > 99 ? '99+' : r.unreadCount} new`}
+            >
+              <span style={{ color: 'var(--color-danger)' }}>
+                {r.unreadCount > 99 ? '99+' : r.unreadCount} new
               </span>
             </Show>
-          </div>
-        </div>
+          </Show>
+        </span>
       </button>
     </li>
   );
 }
 
+/* =========================================================================
+   Invite row
+   ========================================================================= */
+
+function InviteRow(props: {
+  room: RoomSummary;
+  pending: 'join' | 'leave' | undefined;
+  onAction: (action: 'join' | 'leave') => void;
+}) {
+  const r = props.room;
+  return (
+    <li
+      class="flex items-center gap-2 rounded-[8px] border px-[10px] py-[7px]"
+      style={{ 'border-color': 'var(--color-line)', background: 'var(--color-elev)' }}
+    >
+      <div
+        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[7px] text-[10px]"
+        style={{
+          background: gradientForUser(r.roomId).background,
+          color: gradientForUser(r.roomId).color,
+          'font-weight': 600,
+        }}
+      >
+        {initials(r.name || r.roomId)}
+      </div>
+      <div class="min-w-0 flex-1">
+        <div class="truncate text-[12.5px] text-fg" style={{ 'font-weight': 500 }}>
+          {r.name || r.roomId}
+        </div>
+        <Show when={r.topic}>
+          <div class="truncate text-[10.5px] text-fg-3">{r.topic}</div>
+        </Show>
+      </div>
+      <button
+        type="button"
+        onClick={() => props.onAction('join')}
+        disabled={!!props.pending}
+        class="mono rounded-[5px] bg-accent px-2 py-[3px] text-[10px] text-accent-ink hover:brightness-95 disabled:opacity-50"
+        style={{ 'font-weight': 600 }}
+      >
+        {props.pending === 'join' ? '…' : 'Accept'}
+      </button>
+      <button
+        type="button"
+        onClick={() => props.onAction('leave')}
+        disabled={!!props.pending}
+        class="mono rounded-[5px] border px-2 py-[3px] text-[10px] text-fg-2 hover:bg-elev disabled:opacity-50"
+        style={{ 'border-color': 'var(--color-line)' }}
+      >
+        {props.pending === 'leave' ? '…' : 'Decline'}
+      </button>
+    </li>
+  );
+}
+
+/* =========================================================================
+   Me-bar
+   ========================================================================= */
+
+function MeBar(props: {
+  name: string;
+  handle: string;
+  syncState: string;
+  syncReason?: string;
+  onNewRoom: () => void;
+}) {
+  return (
+    <footer
+      class="grid grid-cols-[28px_1fr_auto] items-center gap-[10px] border-t bg-list px-[14px] py-[10px]"
+      style={{ 'border-color': 'var(--color-line)' }}
+    >
+      <div class="relative">
+        <div
+          class="flex h-[28px] w-[28px] items-center justify-center rounded-[8px] text-[11px]"
+          style={{
+            background: 'linear-gradient(135deg, #c8f64d, #98c233)',
+            color: '#0a0a0b',
+            'font-weight': 600,
+          }}
+        >
+          {initials(props.name || '?')}
+        </div>
+        <span
+          class="absolute -bottom-0.5 -right-0.5 h-[9px] w-[9px] rounded-full"
+          style={{
+            background: 'var(--color-accent)',
+            'box-shadow': '0 0 0 2px var(--color-list)',
+          }}
+          title={props.syncReason || props.syncState}
+        />
+      </div>
+      <div class="min-w-0">
+        <div class="truncate text-[13px] text-fg" style={{ 'font-weight': 500 }}>
+          {props.name || 'You'}
+        </div>
+        <div class="mono truncate text-[10.5px] text-fg-4">{props.handle}</div>
+      </div>
+      <button
+        type="button"
+        onClick={props.onNewRoom}
+        class="flex h-[26px] w-[26px] items-center justify-center rounded-[6px] text-fg-3 hover:bg-elev hover:text-fg"
+        aria-label="New conversation"
+        title="New conversation"
+      >
+        <IconPlus class="h-[14px] w-[14px]" />
+      </button>
+    </footer>
+  );
+}
+
+/* =========================================================================
+   Empty state
+   ========================================================================= */
+
+function EmptyConv() {
+  return (
+    <section class="flex h-full items-center justify-center p-12 text-center">
+      <div class="space-y-3">
+        <div class="mx-auto h-10 w-10 text-fg-3">
+          <Mark size="display" />
+        </div>
+        <div class="text-[14px] text-fg" style={{ 'font-weight': 500 }}>
+          Pick a conversation
+        </div>
+        <div class="mono text-[10.5px] uppercase tracking-[0.08em] text-fg-4">
+          ⌘K to jump · click any room
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* =========================================================================
+   Icons — small, stroked, currentColor (Lucide-equivalent paths)
+   ========================================================================= */
+
+function IconSearch(props: { class?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class={props.class}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="M21 21l-4.3-4.3" />
+    </svg>
+  );
+}
+
+function IconSettings(props: { class?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class={props.class}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
+function IconPlus(props: { class?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class={props.class}>
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+/* =========================================================================
+   Helpers
+   ========================================================================= */
+
 function sortRooms(list: RoomSummary[]): RoomSummary[] {
   return [...list].sort((a, b) => b.lastActivityTs - a.lastActivityTs);
 }
 
-/**
- * Merge a fresh RoomSummary[] from the worker with the previously rendered
- * list, preserving object identity for rooms whose fields are unchanged.
- *
- * <For> in Solid keys by reference. Returning a new object for every row
- * on every sync causes every list item to re-mount — the visible flash.
- */
 function mergeRooms(prev: RoomSummary[], next: RoomSummary[]): RoomSummary[] {
   const byId = new Map(prev.map((r) => [r.roomId, r]));
   const out = next.map((nr) => {
@@ -619,48 +790,15 @@ function shallowRoomEqual(a: RoomSummary, b: RoomSummary): boolean {
     a.topic === b.topic &&
     a.type === b.type &&
     a.isEncrypted === b.isEncrypted &&
-    // CRITICAL: membership must be in the equality gate. A room
-    // transitioning invite→join (user accepted) or join→leave (kick /
-    // self-leave) is otherwise identical in name/topic/avatar at the
-    // moment of transition — every other field equates true, mergeRooms
-    // returns the OLD object reference, and the invite list filter
-    // (r.membership === 'invite') keeps rendering the row forever. Also
-    // poisons the persisted IDB cache because we writeRoomList(merged)
-    // with the stale membership. Same applies to isMuted: mute toggle
-    // would silently render no-op for unchanged-activity rooms.
+    // Membership + mute must be in the equality gate — see commit 102e341
+    // for the long form. Invite→join transitions otherwise leave the old
+    // object reference in place and the membership filter keeps showing
+    // a stale invite even after Accept succeeded.
     a.membership === b.membership &&
     a.isMuted === b.isMuted &&
     a.unreadCount === b.unreadCount &&
     a.highlightCount === b.highlightCount &&
     a.lastActivityTs === b.lastActivityTs &&
     a.lastEventPreview === b.lastEventPreview
-  );
-}
-
-/**
- * Permanently visible diagnostic strip surfacing the raw bridge counters.
- *
- * Phase 5 sync-hang investigation: the SyncBanner only updates when a
- * `syncStatus` handler fires. If no handler fires at all (latch empty +
- * subscription too late or worker→main channel silent), the banner stays
- * frozen with no signal as to whether the worker even sent anything. This
- * strip reads bridgeDiag (mutated by the bridge's message handler
- * regardless of any subscriber) every 500ms via the `ticks` prop, so the
- * user can SEE whether envelopes are arriving, which kinds, and whether
- * syncStatus is in the latched set.
- *
- * Once Phase 5 is closed out cleanly this strip can be removed, but it's
- * cheap and useful while we still don't have a reliable observability
- * surface for the worker pipeline.
- */
-function BridgeDiagBanner(props: { ticks: number }) {
-  // The `ticks` prop forces re-render every 500ms even though we read the
-  // raw module state (which is plain JS, not a Solid signal).
-  return (
-    <div class="border-b border-neutral-200 bg-neutral-50 px-3 py-1 text-[10px] font-mono uppercase tracking-tight text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
-      <span data-tick={props.ticks}>
-        bridge · env={bridgeDiag.envelopes} · resp={bridgeDiag.responses} · evt={bridgeDiag.events} · err={bridgeDiag.errors} · latched=[{bridgeDiag.latchKinds.join(',') || '-'}] · last={bridgeDiag.lastEvent?.kind ?? '-'}@{bridgeDiag.lastEvent ? Math.floor((Date.now() - bridgeDiag.lastEvent.at) / 1000) + 's' : '-'} · kinds={Object.entries(bridgeDiag.byKind).map(([k, v]) => `${k}:${v}`).join(' ') || '-'}
-      </span>
-    </div>
   );
 }

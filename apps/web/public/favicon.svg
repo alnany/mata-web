@@ -1,4 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#0f172a"/>
-  <path d="M14 46V20l9 11 9-11 9 11 9-11v26" stroke="#f8fafc" stroke-width="4" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" role="img" aria-label="Mata">
+  <title>Mata</title>
+  <!-- Rounded surface anchors the mark to a brand square so the favicon
+       reads at every browser-chrome tint (light tab, dark tab, sidebar). -->
+  <rect width="320" height="320" rx="56" fill="#0a0a0b"/>
+  <!-- Optical variant (14–40px tier) per LOGO.md §"Optical variants": ring
+       r=116, stroke-width=22; bar 280×24 at y=148, overhanging the ring
+       by R/6 each side. -->
+  <circle cx="160" cy="160" r="116" fill="none" stroke="#ededee" stroke-width="22"/>
+  <rect x="20" y="148" width="280" height="24" fill="#c8f64d"/>
 </svg>

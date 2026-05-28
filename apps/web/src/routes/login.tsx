@@ -2,6 +2,7 @@ import { createSignal, Show } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
 import { useBridge } from '../bridge/context.js';
 import { setSession } from '../stores/session.js';
+import { Mark } from '../components/logo.js';
 
 const DEFAULT_HOMESERVER = 'https://matrix.org';
 
@@ -44,17 +45,34 @@ export function LoginPage() {
   };
 
   return (
-    <main class="flex h-full w-full items-center justify-center p-6">
+    <main class="flex h-full w-full items-center justify-center bg-app p-6">
       <form
         onSubmit={onSubmit}
-        class="w-full max-w-sm space-y-4 rounded-2xl border border-neutral-200 bg-white p-8 shadow-sm dark:border-neutral-800 dark:bg-neutral-900"
+        class="w-full max-w-sm space-y-5 rounded-[14px] border bg-elev p-8"
+        style={{ 'border-color': 'var(--color-line)' }}
       >
-        <header class="space-y-1">
-          <h1 class="text-2xl font-semibold tracking-tight">Sign in to Mata</h1>
-          <p class="text-xs text-neutral-500 dark:text-neutral-400">
-            Bring your own homeserver. Mata is the client, never the host.
-          </p>
+        <header class="flex items-center gap-3">
+          {/* Standalone mark — display tier (32px container). Color
+              inherits via currentColor so the ring picks up `text-fg`. */}
+          <div class="h-8 w-8 shrink-0 text-fg">
+            <Mark size="display" />
+          </div>
+          <div class="space-y-0.5">
+            <div
+              class="text-[19px] leading-none text-fg"
+              style={{ 'font-weight': 500, 'letter-spacing': '-0.025em' }}
+            >
+              mata
+            </div>
+            <div class="mono text-[10.5px] uppercase tracking-[0.08em] text-fg-4">
+              sign in
+            </div>
+          </div>
         </header>
+
+        <p class="text-[12.5px] leading-snug text-fg-3">
+          Bring your own homeserver. Mata is the client, never the host.
+        </p>
 
         <Field
           label="Homeserver"
@@ -89,7 +107,8 @@ export function LoginPage() {
           {(msg) => (
             <div
               role="alert"
-              class="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950 dark:text-red-200"
+              class="rounded-[6px] border px-3 py-2 text-[12px] text-danger"
+              style={{ 'border-color': 'color-mix(in oklab, var(--color-danger) 35%, transparent)', background: 'color-mix(in oklab, var(--color-danger) 8%, transparent)' }}
             >
               {msg()}
             </div>
@@ -99,10 +118,23 @@ export function LoginPage() {
         <button
           type="submit"
           disabled={submitting()}
-          class="w-full rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
+          class="flex h-[34px] w-full items-center justify-center gap-2 rounded-[7px] bg-accent text-[12px] font-medium text-accent-ink transition-[filter] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {submitting() ? 'Signing in…' : 'Sign in'}
+          <span>{submitting() ? 'Signing in…' : 'Sign in'}</span>
+          <span
+            class="mono rounded-[4px] px-1 py-[1px] text-[10px]"
+            style={{ background: 'rgba(0,0,0,0.18)' }}
+          >
+            ⌘↩
+          </span>
         </button>
+
+        <div class="flex items-center justify-center gap-2 pt-1 text-fg-4">
+          <span class="dot-accent mata-pulse" />
+          <span class="mono text-[10.5px] uppercase tracking-[0.08em]">
+            encrypted, end to end
+          </span>
+        </div>
       </form>
     </main>
   );
@@ -121,8 +153,10 @@ interface FieldProps {
 
 function Field(props: FieldProps) {
   return (
-    <label class="block space-y-1">
-      <span class="text-xs font-medium text-neutral-700 dark:text-neutral-300">{props.label}</span>
+    <label class="block space-y-1.5">
+      <span class="mono block text-[10.5px] uppercase tracking-[0.08em] text-fg-4">
+        {props.label}
+      </span>
       <input
         type={props.type}
         name={props.name}
@@ -131,7 +165,10 @@ function Field(props: FieldProps) {
         placeholder={props.placeholder}
         autocomplete={props.autocomplete}
         onInput={(e) => props.onInput(e.currentTarget.value)}
-        class="w-full rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm shadow-inner focus:border-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-400 dark:border-neutral-800 dark:bg-neutral-950 dark:focus:border-neutral-600 dark:focus:ring-neutral-600"
+        class="w-full rounded-[8px] border bg-input px-3 py-2 text-[14px] text-fg placeholder:text-fg-4 focus:outline-none"
+        style={{ 'border-color': 'var(--color-line)' }}
+        onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-line-2)'}
+        onBlur={(e) => e.currentTarget.style.borderColor = 'var(--color-line)'}
       />
     </label>
   );

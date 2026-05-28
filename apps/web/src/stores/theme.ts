@@ -16,7 +16,10 @@ function readPersisted(): ThemeMode {
   } catch {
     // ignore
   }
-  return 'system';
+  // Design spec (HANDOFF.md §"Themes"): default theme is dark. The HTML
+  // bootstrap script already paints `.dark` before this module loads, so
+  // returning 'dark' here keeps subsequent reactive applies idempotent.
+  return 'dark';
 }
 
 const [themeMode, setThemeMode] = createSignal<ThemeMode>(readPersisted());
@@ -25,7 +28,13 @@ function applyTheme(mode: ThemeMode) {
   const isDark =
     mode === 'dark' ||
     (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  document.documentElement.classList.toggle('dark', isDark);
+  const html = document.documentElement;
+  html.classList.toggle('dark', isDark);
+  // The design tokens (global.css) key off `html.light` for the override
+  // selector; keep the two classes mutually exclusive so the explicit
+  // light theme never sits underneath a stale `dark` class from the
+  // bootstrap script.
+  html.classList.toggle('light', !isDark);
 }
 
 createEffect(() => {

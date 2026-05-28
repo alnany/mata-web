@@ -10,6 +10,7 @@ import { attachVerificationStore } from './stores/verification.js';
 import { notifyTotals } from './stores/notifications.js';
 import { initCallStore } from './stores/call.js';
 import { CallOverlay } from './components/call-overlay.js';
+import { Mark } from './components/logo.js';
 // Side-effect: bootstrap the theme classes on <html> at app load.
 import './stores/theme.js';
 import type { MatrixBridge } from '@mata/shared/rpc';
@@ -134,36 +135,42 @@ function SessionRouter(props: ParentProps) {
 
 function RestoreScreen() {
   return (
-    <div class="flex h-full w-full items-center justify-center p-8">
-      <div class="text-sm text-neutral-500" aria-live="polite">
-        Restoring session…
-      </div>
+    <div class="flex h-full w-full items-center justify-center bg-app p-8">
+      <BrandedLoader label="Restoring session…" />
     </div>
   );
 }
 
 function BootScreen(props: { error: string | null; onRetry: () => void }) {
   return (
-    <div class="flex h-full w-full items-center justify-center p-8">
+    <div class="flex h-full w-full items-center justify-center bg-app p-8">
       <div class="max-w-sm text-center">
-        <div class="mb-4 text-3xl font-semibold tracking-tight">Mata</div>
+        {/* Standalone mark — display optical tier per LOGO.md. */}
+        <div class="mx-auto mb-5 h-12 w-12 text-fg">
+          <Mark size="display" />
+        </div>
+        <div
+          class="mb-1 text-[28px] leading-none text-fg"
+          style={{ 'font-weight': 400, 'letter-spacing': '-0.06em' }}
+        >
+          mata
+        </div>
+        <div class="mono mb-6 text-[11px] uppercase tracking-[0.08em] text-fg-4">
+          the eye of the day
+        </div>
         <Show
           when={props.error}
-          fallback={
-            <div class="text-sm text-neutral-500" aria-live="polite">
-              Starting worker…
-            </div>
-          }
+          fallback={<BrandedLoader label="Starting worker…" />}
         >
           {(err) => (
             <div class="space-y-3">
-              <div class="text-sm text-red-600 dark:text-red-400" aria-live="assertive">
+              <div class="text-sm text-danger" aria-live="assertive">
                 Worker failed to start: {err()}
               </div>
               <button
                 type="button"
                 onClick={props.onRetry}
-                class="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
+                class="rounded-[7px] bg-accent px-3 py-2 text-[12px] font-medium text-accent-ink hover:brightness-95 focus:outline-none focus:ring-2 focus:ring-accent/40"
               >
                 Retry
               </button>
@@ -171,6 +178,20 @@ function BootScreen(props: { error: string | null; onRetry: () => void }) {
           )}
         </Show>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Branded loader — the e2ee pulse dot pattern (the design's only ambient
+ * motion) gets repurposed as the boot indicator so loading screens feel
+ * native to the rest of the product.
+ */
+function BrandedLoader(props: { label: string }) {
+  return (
+    <div class="flex items-center justify-center gap-2 text-fg-3" aria-live="polite">
+      <span class="dot-accent mata-pulse" />
+      <span class="mono text-[11px] uppercase tracking-[0.08em]">{props.label}</span>
     </div>
   );
 }
