@@ -53,6 +53,38 @@ import type {
 // Request / Response (main → worker → main)
 // -----------------------------------------------------------------------------
 
+/**
+ * Normalized URL preview shape sent to the UI. Built from the
+ * server's OG response on the worker side so the main thread
+ * doesn't need to know about Matrix's `og:*` key convention. All
+ * fields except `url` are optional — the homeserver may return
+ * just a title, just an image, or any combination.
+ */
+export interface UrlPreview {
+  url: string;
+  title?: string;
+  description?: string;
+  /** Already-resolved http(s) image URL — mxc rewriting happens on the worker. */
+  image?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  siteName?: string;
+}
+
+/**
+ * Single user-directory hit. `userId` is the canonical Matrix ID
+ * (`@alice:server`); `displayName` is the server's claim about the
+ * user's preferred name and may be missing on minimally-configured
+ * homeservers. `avatarUrl` is an already-resolved http(s) URL — the
+ * worker rewrites `mxc://` to an authenticated thumbnail before
+ * sending across the boundary so the UI doesn't need a client.
+ */
+export interface UserSearchHit {
+  userId: UserId;
+  displayName?: string;
+  avatarUrl?: string;
+}
+
 export type MainToWorkerRequest =
   | { kind: 'ping' }
   | { kind: 'diagLog'; note: string }
@@ -263,7 +295,29 @@ export type MainToWorkerRequest =
       sourceRoomId: RoomId;
       sourceEventId: EventId;
       targetRoomId: RoomId;
-    };
+    }
+  /**
+   * Fetch OG metadata for a URL via the homeserver's
+   * /_matrix/media/v3/preview_url endpoint. The homeserver itself
+   * fetches the page server-side and returns OpenGraph tags — this
+   * is the only privacy-respecting way to do link previews in a
+   * Matrix client (the client never hits the third-party URL with
+   * the user's IP).
+   *
+   * Why route through the worker, not the main thread: media auth
+   * is on the SDK client, which lives in the worker. The endpoint
+   * also requires auth in modern Synapse (MSC3916).
+   */
+  | { kind: 'getUrlPreview'; url: string }
+  /**
+   * Live user-directory search for the "start a chat" surface.
+   * Hits POST `/_matrix/client/v3/user_directory/search` via
+   * matrix-js-sdk `searchUserDirectory`. The server scopes the
+   * scan to users this account can plausibly contact — public
+   * directory entries + shared-room members on Synapse — so
+   * results stay useful without requiring federation-wide enum.
+   */
+  | { kind: 'searchUsers'; term: string; limit: number };
 
 export type MainToWorkerResponse =
   | { kind: 'ping'; pong: true }
@@ -320,7 +374,19 @@ export type MainToWorkerResponse =
       /** Stemmed terms the server says match — used for client highlight. */
       highlights: string[];
     }
-  | { kind: 'forwardEvent'; eventId: EventId };
+  | { kind: 'forwardEvent'; eventId: EventId }
+  /**
+   * `null` when the homeserver returns no usable preview (404,
+   * empty body, blacklisted URL, network error). The UI treats
+   * null as "skip — render the link as plain text".
+   */
+  | { kind: 'getUrlPreview'; preview: UrlPreview | null }
+  | {
+      kind: 'searchUsers';
+      results: UserSearchHit[];
+      /** Server hit the cap and may be hiding more matches — UI shows "+ more". */
+      limited: boolean;
+    };
 
 // Compile-time guarantee: request kind ↔ response kind 1:1.
 export type ResponseFor<K extends MainToWorkerRequest['kind']> = Extract<
