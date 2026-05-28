@@ -243,6 +243,7 @@ export class SdkSession {
     content: MessageBody,
     txnId: string,
     threadRoot?: EventId,
+    replyTo?: { eventId: EventId; sender: UserId; body: string },
   ): Promise<void> {
     // INSTRUMENTATION (send-pipeline trace).
     // Phase markers go through the `diagNote` event channel — they land
@@ -305,12 +306,44 @@ export class SdkSession {
       // without thread support still see a reply chain rather than
       // an orphan message.
       const wirePayload: Record<string, unknown> = encodeMessageBody(content);
+
+      // Reply fallback prefix per Matrix spec v1.4 (rich replies). For
+      // text-class messages we prepend a quoted block referencing the
+      // parent so clients without rich-reply support still see context.
+      // We mutate the body field in-place on the wire payload — the
+      // local-echo body stays clean (no `>` prefix) because we only
+      // round-trip the original `content` upward; the wire-only prefix
+      // is decoded back into a clean body via `stripReplyFallback` in
+      // `decodeMessageBody` on receive.
+      if (replyTo && typeof wirePayload['body'] === 'string') {
+        const quoted = buildReplyFallback(replyTo.sender, replyTo.body);
+        wirePayload['body'] = `${quoted}${wirePayload['body'] as string}`;
+        if (typeof wirePayload['formatted_body'] === 'string') {
+          wirePayload['format'] = 'org.matrix.custom.html';
+          wirePayload['formatted_body'] = buildReplyFallbackHtml(
+            roomId,
+            replyTo.eventId,
+            replyTo.sender,
+            replyTo.body,
+          ) + (wirePayload['formatted_body'] as string);
+        }
+      }
+
       if (threadRoot) {
+        // Threaded reply. The in-reply-to fallback target is the
+        // immediate parent if the user clicked Reply on a thread
+        // message; otherwise we fall back to the thread root so
+        // unthreaded clients still see a chain.
         wirePayload['m.relates_to'] = {
           rel_type: 'm.thread',
           event_id: threadRoot,
-          is_falling_back: true,
-          'm.in_reply_to': { event_id: threadRoot },
+          is_falling_back: !replyTo,
+          'm.in_reply_to': { event_id: replyTo?.eventId ?? threadRoot },
+        };
+      } else if (replyTo) {
+        // Plain (non-thread) rich reply.
+        wirePayload['m.relates_to'] = {
+          'm.in_reply_to': { event_id: replyTo.eventId },
         };
       }
       const sendPromise = c.sendEvent(
@@ -1925,6 +1958,69 @@ function toTimelineEvent(ev: MatrixEvent): TimelineEvent | null {
   return null;
 }
 
+/**
+ * Build the Matrix reply-fallback prefix per spec v1.4 §"Rich replies".
+ * Format:
+ *   > <@sender:server> first-line-of-original
+ *   > more-lines-of-original
+ *   \n
+ * Multi-line originals each get their own `> ` quote line; subsequent
+ * lines after the first do NOT repeat the sender pill (only the first
+ * line carries it). Returns the prefix INCLUDING the trailing `\n\n`
+ * separator.
+ */
+function buildReplyFallback(sender: UserId, body: string): string {
+  const lines = body.split('\n');
+  if (lines.length === 0) return `> <${sender}>\n\n`;
+  const head = `> <${sender}> ${lines[0]}`;
+  const rest = lines.slice(1).map((l) => `> ${l}`);
+  return [head, ...rest].join('\n') + '\n\n';
+}
+
+/**
+ * HTML reply fallback. Wraps the parent reference in a permalink
+ * inside an `<mx-reply>` element — clients with rich-reply support
+ * hide this element and render their own reply preview chip.
+ */
+function buildReplyFallbackHtml(
+  roomId: RoomId,
+  eventId: EventId,
+  sender: UserId,
+  body: string,
+): string {
+  const linkRoom = encodeURIComponent(roomId);
+  const linkEvent = encodeURIComponent(eventId);
+  const linkSender = encodeURIComponent(sender);
+  const safe = body
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .slice(0, 400);
+  return (
+    `<mx-reply><blockquote>` +
+    `<a href="https://matrix.to/#/${linkRoom}/${linkEvent}">In reply to</a> ` +
+    `<a href="https://matrix.to/#/${linkSender}">${sender}</a><br />` +
+    `${safe}` +
+    `</blockquote></mx-reply>`
+  );
+}
+
+/**
+ * Strip the reply-fallback prefix from an incoming wire body so the UI
+ * renders only the user's actual text. The reply chip is rendered
+ * separately from the `inReplyTo` relation.
+ */
+function stripReplyFallback(body: string): string {
+  // Drop leading `> ...` lines plus the one blank separator line.
+  const lines = body.split('\n');
+  let i = 0;
+  while (i < lines.length && lines[i].startsWith('> ')) i++;
+  if (i === 0) return body;
+  // Eat the single blank separator if present.
+  if (i < lines.length && lines[i] === '') i++;
+  return lines.slice(i).join('\n');
+}
+
 function encodeMessageBody(body: MessageBody): IContent {
   // MSC3952 intentional mentions: attach as `m.mentions` when present,
   // so push rules on the homeserver fire correctly even when the body
@@ -1987,7 +2083,17 @@ function mediaInfo(info: MediaInfo): Record<string, unknown> {
 
 function decodeMessageBody(c: IContent): MessageBody {
   const msgtype = (c.msgtype ?? MsgType.Text) as string;
-  const body = typeof c.body === 'string' ? c.body : '';
+  // Strip Matrix reply-fallback `> <@sender> ...\n\n` prefix from the
+  // wire body so the UI shows only the user's actual text. The reply
+  // chip is rendered separately from the `m.relates_to.m.in_reply_to`
+  // relation, which is decoded into `inReplyTo` upstream.
+  const rawBody = typeof c.body === 'string' ? c.body : '';
+  const isReply =
+    !!(c as Record<string, unknown>)['m.relates_to'] &&
+    !!((c as Record<string, unknown>)['m.relates_to'] as Record<string, unknown> | undefined)?.[
+      'm.in_reply_to'
+    ];
+  const body = isReply ? stripReplyFallback(rawBody) : rawBody;
   // MSC3952 mentions on the receive side. We pluck this out once and
   // merge it into the structured text variants; matrix-js-sdk does
   // *not* surface this field at the typed-event layer, so the cast
@@ -2008,13 +2114,21 @@ function decodeMessageBody(c: IContent): MessageBody {
   switch (msgtype) {
     case MsgType.Text: {
       const mentions = decodeMentions();
+      const rawFormatted =
+        c.format === 'org.matrix.custom.html' && typeof c.formatted_body === 'string'
+          ? c.formatted_body
+          : null;
+      // Strip leading <mx-reply>...</mx-reply> fallback block when the
+      // event carries a rich-reply relation. The reply chip is rendered
+      // from `inReplyTo` separately.
+      const formattedBody =
+        rawFormatted && isReply
+          ? rawFormatted.replace(/^\s*<mx-reply>[\s\S]*?<\/mx-reply>\s*/i, '')
+          : rawFormatted;
       const base: MessageBody = {
         msgtype: 'm.text',
         body,
-        formattedBody:
-          c.format === 'org.matrix.custom.html' && typeof c.formatted_body === 'string'
-            ? c.formatted_body
-            : null,
+        formattedBody,
       };
       if (mentions) (base as { mentions?: typeof mentions }).mentions = mentions;
       return base;
