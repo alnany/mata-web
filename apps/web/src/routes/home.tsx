@@ -398,6 +398,15 @@ export function HomePage() {
                 cache={caches[room().roomId]}
                 setCache={updateCache}
                 rooms={joinedRooms()}
+                onRoomUnavailable={(rid) => {
+                  // Drop the stale list entry locally so the user
+                  // doesn't immediately click it again, then refetch
+                  // against live SDK state — that pass authoritatively
+                  // reconciles what actually exists server-side.
+                  setRooms((rs) => (rs ?? []).filter((r) => r.roomId !== rid));
+                  setActiveId(null);
+                  void refetchRooms();
+                }}
               />
             );
           }}
