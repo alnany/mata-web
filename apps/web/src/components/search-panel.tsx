@@ -140,8 +140,8 @@ export function SearchPanel(props: {
           />
           <Show when={props.room.isEncrypted}>
             <p class="mt-1.5 text-[10.5px] leading-snug text-fg-4">
-              This room is end-to-end encrypted. The server can't index ciphertext, so search
-              may return no results.
+              Encrypted room — searching messages already loaded on this device. Scroll up to
+              load more history into the search window.
             </p>
           </Show>
         </div>
