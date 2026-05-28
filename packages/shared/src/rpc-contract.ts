@@ -166,7 +166,23 @@ export type MainToWorkerRequest =
       kind: 'loadRoomMembers';
       roomId: RoomId;
     }
-  | { kind: 'kickFromRoom'; roomId: RoomId; userId: UserId; reason: string | null };
+  | { kind: 'kickFromRoom'; roomId: RoomId; userId: UserId; reason: string | null }
+  /**
+   * Set/clear the per-room mute push rule (`global.room` override).
+   * Server-side: matrix-js-sdk's `setRoomMutePushRule('global', roomId, muted)`.
+   * Returns the resulting muted state so the UI can confirm before
+   * the next sync delta reaches `RoomSummary.isMuted`.
+   */
+  | { kind: 'setRoomMuted'; roomId: RoomId; muted: boolean }
+  /**
+   * Load every event in a Matrix thread (rel_type `m.thread`) plus
+   * the root itself. Worker fetches via `client.relations` and the
+   * fallback `/rooms/{roomId}/relations/{eventId}/m.thread` endpoint
+   * for clients/servers without thread-aware sync. Returns events
+   * sorted oldest-first so the thread panel can render them in
+   * timeline order.
+   */
+  | { kind: 'loadThread'; roomId: RoomId; threadRootId: EventId };
 
 export type MainToWorkerResponse =
   | { kind: 'ping'; pong: true }
@@ -205,6 +221,8 @@ export type MainToWorkerResponse =
   | { kind: 'leaveRoom' }
   | { kind: 'loadRoomMembers'; members: RoomMember[] }
   | { kind: 'kickFromRoom' }
+  | { kind: 'setRoomMuted'; muted: boolean }
+  | { kind: 'loadThread'; events: TimelineEvent[] }
 
 // Compile-time guarantee: request kind ↔ response kind 1:1.
 export type ResponseFor<K extends MainToWorkerRequest['kind']> = Extract<

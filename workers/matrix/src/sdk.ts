@@ -92,6 +92,14 @@ export class MatrixCore {
     return this.requireSession().sendMessage(roomId, content, txnId, threadRoot);
   }
 
+  async setRoomMuted(roomId: RoomId, muted: boolean): Promise<boolean> {
+    return this.requireSession().setRoomMuted(roomId, muted);
+  }
+
+  async loadThread(roomId: RoomId, threadRootId: EventId): Promise<TimelineEvent[]> {
+    return this.requireSession().loadThread(roomId, threadRootId);
+  }
+
   async editMessage(
     roomId: RoomId,
     eventId: EventId,
