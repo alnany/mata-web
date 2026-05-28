@@ -125,7 +125,7 @@ export function MessageBubble(props: {
           </Show>
 
           <span class="whitespace-pre-wrap break-words">
-            <Body msg={msg} />
+            <Body msg={msg} me={props.me} />
           </span>
 
           <div
@@ -265,15 +265,106 @@ function ReactionPill(props: { r: ReactionAggregate; me: UserId | null; onToggle
   );
 }
 
-function Body(props: { msg: RoomMessageEvent }) {
+function Body(props: { msg: RoomMessageEvent; me: UserId | null }) {
   const c = props.msg.content;
   if (c.msgtype === 'm.text' || c.msgtype === 'm.notice' || c.msgtype === 'm.emote') {
-    return c.body;
+    return <TextWithMentions text={c.body} mentions={c.mentions ?? null} me={props.me} />;
   }
   if (c.msgtype === 'm.image' || c.msgtype === 'm.video' || c.msgtype === 'm.audio' || c.msgtype === 'm.file') {
     return <MediaContent body={c} />;
   }
   return `[${c.msgtype}] ${c.body}`;
+}
+
+/**
+ * Render plain text with `@mention` segments highlighted.
+ *
+ * We tokenize by the conservative pattern that matches what the
+ * composer inserts: `@<word>` where <word> is one or more characters
+ * in [A-Za-z0-9._-]. This intentionally does NOT try to resolve the
+ * token back to a userId — the canonical source of truth for "is this
+ * a real mention" is the event's `m.mentions.user_ids` list (per
+ * MSC3952). When that list is present and non-empty, ALL `@word`
+ * tokens in the body are rendered as pills; otherwise we fall back to
+ * a heuristic "looks like a mention" highlight that just colors the
+ * token without making any trust claim.
+ *
+ * Self-mention check: a body is treated as a self-mention if the
+ * mentions list explicitly includes `me`, OR (heuristically) if any
+ * `@<word>` matches the localpart of the current user id. Self-mention
+ * triggers a stronger pill style on EVERY mention pill in the message
+ * — same convention Element follows.
+ */
+function TextWithMentions(props: {
+  text: string;
+  mentions: { userIds: UserId[]; room?: boolean } | null;
+  me: UserId | null;
+}) {
+  const segments = () => splitMentions(props.text);
+  const meLocal = (): string | null => {
+    if (!props.me) return null;
+    const local = props.me.slice(1).split(':')[0];
+    return local ? local.toLowerCase() : null;
+  };
+  const isSelfMentioned = () => {
+    if (props.me && props.mentions?.userIds.includes(props.me)) return true;
+    if (props.mentions?.room) return true;
+    const ml = meLocal();
+    if (!ml) return false;
+    for (const seg of segments()) {
+      if (seg.kind !== 'mention') continue;
+      if (seg.handle.toLowerCase() === ml) return true;
+    }
+    return false;
+  };
+  const treatAsRealMention = !!props.mentions && props.mentions.userIds.length > 0;
+  const self = isSelfMentioned();
+  return (
+    <>
+      {segments().map((seg) => {
+        if (seg.kind === 'text') return seg.text;
+        // Tone gradient:
+        //   real-mention + self => bold mata pill
+        //   real-mention        => mata pill
+        //   heuristic           => subtle neutral pill
+        const tone = treatAsRealMention
+          ? self
+            ? 'bg-mata-100 font-semibold text-mata-800 dark:bg-mata-900/60 dark:text-mata-200'
+            : 'bg-mata-50 text-mata-700 dark:bg-mata-950/40 dark:text-mata-300'
+          : 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300';
+        return (
+          <span class={`rounded px-1 ${tone}`} title={`@${seg.handle}`}>
+            @{seg.handle}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+type MentionSeg = { kind: 'text'; text: string } | { kind: 'mention'; handle: string };
+
+/**
+ * Split a string by `@<word>` mention tokens. We never split inside an
+ * email-style `@` (preceded by alphanumeric) — that's how we keep
+ * "foo@bar.com" rendering as plain text.
+ */
+function splitMentions(text: string): MentionSeg[] {
+  const re = /(^|[\s,.;:!?\n])@([A-Za-z0-9._-]+)/g;
+  const out: MentionSeg[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  // eslint-disable-next-line no-cond-assign
+  while ((m = re.exec(text))) {
+    const lead = m[1] ?? '';
+    const handle = m[2] ?? '';
+    const tokenStart = m.index + lead.length;
+    if (tokenStart > last) out.push({ kind: 'text', text: text.slice(last, tokenStart) });
+    out.push({ kind: 'mention', handle });
+    last = tokenStart + 1 + handle.length;
+  }
+  if (last < text.length) out.push({ kind: 'text', text: text.slice(last) });
+  return out;
 }
 
 function SystemRow(props: { ev: TimelineEvent }) {

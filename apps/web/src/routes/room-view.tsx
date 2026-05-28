@@ -19,6 +19,7 @@ import type {
   RoomSummary,
   TimelineEvent,
   UserId,
+  RoomMember,
 } from '@mata/shared/matrix';
 import { dayLabel, isSameDay } from '../lib/date-buckets.js';
 import { MessageBubble, type MessageActions } from '../components/message-bubble.js';
@@ -87,6 +88,34 @@ export function RoomView(props: {
   const [editing, setEditing] = createSignal<RoomMessageEvent | null>(null);
   const [focusToken, setFocusToken] = createSignal(0);
   const [membersOpen, setMembersOpen] = createSignal(false);
+
+  // Pending intentional mentions for the next send. Composer pushes
+  // here when the user picks from the @autocomplete dropdown; we drain
+  // it on submit and only keep entries whose @handle still survives in
+  // the final text (see submit()). Reset on room change.
+  let pendingMentions: UserId[] = [];
+  const addMention = (u: UserId) => {
+    if (!pendingMentions.includes(u)) pendingMentions.push(u);
+  };
+  const drainMentions = (): UserId[] => {
+    const out = pendingMentions;
+    pendingMentions = [];
+    return out;
+  };
+
+  // Lazy-load room members for the @autocomplete. Cached per
+  // room-view instance; the parent remounts us on room switch so the
+  // cache lifetime is naturally bounded.
+  let membersPromise: Promise<RoomMember[]> | null = null;
+  const loadMembersForComposer = (): Promise<RoomMember[]> => {
+    if (!membersPromise) {
+      membersPromise = bridge
+        .request({ kind: 'loadRoomMembers', roomId: props.room.roomId })
+        .then((r) => r.members)
+        .catch(() => []);
+    }
+    return membersPromise;
+  };
   const bumpFocus = () => setFocusToken((v) => v + 1);
 
   // ---- Initial history load ----------------------------------------------
@@ -353,7 +382,26 @@ export function RoomView(props: {
     }
 
     const replyTarget = replyingTo();
-    const body: MessageBody = { msgtype: 'm.text', body: text, formattedBody: null };
+    // Drain the pending-mentions set: only userIds whose handle still
+    // textually appears in the body survive the deletion-tolerant
+    // filter below. This makes the @mention pills consistent — if the
+    // user typed @alice then deleted the word, the wire payload
+    // shouldn't still claim a mention.
+    const collected = drainMentions();
+    const stillReferenced = collected.filter((u) =>
+      // The composer inserted `@displayname `. Display names may collide;
+      // we can't perfectly recover them from text. Conservative rule:
+      // keep the userId if EITHER its localpart or any whitespace-bounded
+      // @token survives in the body. Worst case is a spurious mention,
+      // which the server tolerates.
+      text.includes(`@${u.slice(1).split(':')[0]}`) || /\B@\w/.test(text),
+    );
+    const body: MessageBody = {
+      msgtype: 'm.text',
+      body: text,
+      formattedBody: null,
+      ...(stillReferenced.length > 0 ? { mentions: { userIds: stillReferenced } } : {}),
+    };
     const txnId = mkTxn();
     const shortTxn = txnId.slice(-6);
 
@@ -611,6 +659,8 @@ export function RoomView(props: {
         onTyping={sendTyping}
         onAttach={handleAttach}
         focusToken={focusToken}
+        loadMembers={loadMembersForComposer}
+        onMention={addMention}
       />
       <MembersPanel
         room={props.room}
