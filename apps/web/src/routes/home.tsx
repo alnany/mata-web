@@ -619,6 +619,17 @@ function shallowRoomEqual(a: RoomSummary, b: RoomSummary): boolean {
     a.topic === b.topic &&
     a.type === b.type &&
     a.isEncrypted === b.isEncrypted &&
+    // CRITICAL: membership must be in the equality gate. A room
+    // transitioning invite→join (user accepted) or join→leave (kick /
+    // self-leave) is otherwise identical in name/topic/avatar at the
+    // moment of transition — every other field equates true, mergeRooms
+    // returns the OLD object reference, and the invite list filter
+    // (r.membership === 'invite') keeps rendering the row forever. Also
+    // poisons the persisted IDB cache because we writeRoomList(merged)
+    // with the stale membership. Same applies to isMuted: mute toggle
+    // would silently render no-op for unchanged-activity rooms.
+    a.membership === b.membership &&
+    a.isMuted === b.isMuted &&
     a.unreadCount === b.unreadCount &&
     a.highlightCount === b.highlightCount &&
     a.lastActivityTs === b.lastActivityTs &&
