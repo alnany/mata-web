@@ -49,6 +49,7 @@ import type {
 } from '@mata/shared/matrix';
 import { authError, networkError, syncError } from '@mata/shared/errors';
 import type { WorkerEvent } from '@mata/shared/rpc';
+import type { IceServer } from '@mata/shared/rpc';
 import { VerificationService } from './verification.js';
 import {
   type SessionRecord,
@@ -637,6 +638,66 @@ export class SdkSession {
   // the panel can open immediately without waiting on the SDK's lazy
   // path.
   // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------
+  // Phase 14 — VoIP signaling helpers (worker side)
+  // ---------------------------------------------------------------
+  //
+  // We deliberately do NOT route through matrix-js-sdk's MatrixCall
+  // here. MatrixCall expects a `RTCPeerConnection` to exist, which it
+  // doesn't in a Web Worker — `supportsMatrixCall()` returns false
+  // and `placeVoiceCall()` would throw. Instead, the main thread owns
+  // the peer connection and uses the worker as a thin signaling
+  // pipe: this method calls `client.sendEvent()` with the m.call.*
+  // body the caller hands us, and the timeline tap above forwards
+  // inbound m.call.* back to the main thread.
+  //
+  // Note on encryption: per the Matrix spec, m.call.* events stay
+  // plaintext even in E2EE rooms (the SDP and ICE candidates are
+  // considered already-protected by the DTLS-SRTP handshake at the
+  // WebRTC layer). The default `client.sendEvent` path here respects
+  // that — we don't force `m.room.encrypted` wrapping.
+  async sendCallEvent(
+    roomId: RoomId,
+    eventType: string,
+    content: Record<string, unknown>,
+  ): Promise<EventId> {
+    const client = this.requireClient();
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await (client.sendEvent as any)(roomId, eventType, content);
+      return res.event_id as EventId;
+    } catch (err) {
+      throw networkError(`sendCallEvent(${eventType}) failed: ${describe(err)}`);
+    }
+  }
+
+  // /voip/turnServer is best-effort. Some homeservers (Synapse with
+  // no TURN configured, Dendrite vanilla, conduit) return 404 or an
+  // empty response. We fall back to the spec's public STUN list so
+  // calls between hosts on the same NAT type can still try. If even
+  // STUN-only fails the user sees "Couldn't connect — please share a
+  // network with the other side" in the UI; that's a known TURN-less
+  // limitation, not a Mata bug.
+  async getTurnServers(): Promise<IceServer[]> {
+    const client = this.requireClient();
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const raw = await (client as any).turnServer();
+      if (raw && Array.isArray(raw.uris) && raw.uris.length > 0) {
+        return [
+          {
+            urls: raw.uris as string[],
+            username: typeof raw.username === 'string' ? raw.username : undefined,
+            credential: typeof raw.password === 'string' ? raw.password : undefined,
+          },
+        ];
+      }
+    } catch {
+      // Server didn't expose turnServer — fall through to STUN-only.
+    }
+    return [{ urls: 'stun:turn.matrix.org' }];
+  }
 
   async loadThread(roomId: RoomId, threadRootId: EventId): Promise<TimelineEvent[]> {
     const c = this.requireClient();
@@ -1390,6 +1451,43 @@ export class SdkSession {
     ) => {
       if (!room || toStartOfTimeline) return;
       if (!data.liveEvent) return;
+
+      // Phase 14 — VoIP signaling tap. We catch m.call.* events
+      // BEFORE they hit `toTimelineEvent` (which only knows about
+      // message / member / redaction shapes) and forward them to the
+      // main thread, where the actual peer connection lives. We
+      // include encrypted-room re-deliveries: in an E2EE room, the
+      // call signaling body lives inside the decrypted m.room.message
+      // wrapper... wait, no — by spec m.call.* events are NOT wrapped
+      // in m.room.encrypted; they're sent as plaintext top-level
+      // events even in E2EE rooms. Element matches; we follow suit.
+      const type = event.getType();
+      if (type.startsWith('m.call.')) {
+        const content = event.getContent() as Record<string, unknown>;
+        const sender = (event.getSender() ?? '') as UserId;
+        // Filter out our own echoes: matrix-js-sdk delivers our just-
+        // sent events back through sync. The main-thread call layer
+        // also dedupes by `party_id`, but pre-filtering here saves a
+        // worker→main hop.
+        if (sender === client.getUserId()) return;
+        const partyId =
+          typeof content.party_id === 'string' ? content.party_id : null;
+        const ageMs = (() => {
+          const ts = event.getTs();
+          return ts ? Math.max(0, Date.now() - ts) : 0;
+        })();
+        this.emit({
+          kind: 'callSignal',
+          roomId: room.roomId as RoomId,
+          eventType: type,
+          sender,
+          partyId,
+          ageMs,
+          content,
+        });
+        return;
+      }
+
       const tev = toTimelineEvent(event);
       if (!tev) return;
       this.emit({
