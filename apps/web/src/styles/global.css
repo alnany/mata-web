@@ -1,6 +1,18 @@
 @import 'tailwindcss';
 
 /* =========================================================================
+   Tailwind v4 dark-mode opt-in.
+
+   v4 ships with `dark:` keyed to `prefers-color-scheme` by default. We use
+   a class on <html> (set by stores/theme.ts + the bootstrap script in
+   index.html) so the user's explicit choice wins over the OS setting.
+   Without this declaration every legacy `dark:bg-neutral-900` style in
+   components that haven't been re-tokenized yet stays inert, producing a
+   half-dark / half-light UI.
+   ========================================================================= */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* =========================================================================
    Mata design tokens (Claude Design handoff, 2026-05-28)
    Persisted authoritatively at /agents/<id>/skills/mata-design/HANDOFF.md
    Do NOT edit values here without updating that source of truth.
