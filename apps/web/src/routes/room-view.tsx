@@ -162,6 +162,39 @@ export function RoomView(props: {
   const [openThread, setOpenThread] = createSignal<EventId | null>(null);
   const [focusToken, setFocusToken] = createSignal(0);
   const [membersOpen, setMembersOpen] = createSignal(false);
+  // Staged attachments — the user has pasted / dropped a file but
+  // hasn't pressed Send yet. Pre-staging fixes the worst paste-image
+  // friction: previously the file uploaded and sent immediately, so
+  // a "let me paste that screenshot" reflex was instant exfiltration
+  // with no chance to crop, caption, or back out. Each entry owns an
+  // ObjectURL for preview that we revoke on remove / send / unmount.
+  type StagedAttachment = { id: string; file: File; previewUrl: string | null };
+  const [staged, setStaged] = createSignal<StagedAttachment[]>([]);
+  const revokeStaged = (s: StagedAttachment): void => {
+    if (s.previewUrl) URL.revokeObjectURL(s.previewUrl);
+  };
+  const stageAttachment = (file: File): void => {
+    const isImage = file.type.startsWith('image/');
+    const entry: StagedAttachment = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      previewUrl: isImage ? URL.createObjectURL(file) : null,
+    };
+    setStaged((prev) => [...prev, entry]);
+    // Pull focus into the composer so the user can immediately add
+    // a caption / hit Enter to send.
+    setFocusToken((n) => n + 1);
+  };
+  const unstage = (id: string): void => {
+    setStaged((prev) => {
+      const drop = prev.find((s) => s.id === id);
+      if (drop) revokeStaged(drop);
+      return prev.filter((s) => s.id !== id);
+    });
+  };
+  onCleanup(() => {
+    for (const s of staged()) revokeStaged(s);
+  });
   // Forward-target picker. Holds the source message until the user
   // either picks a target (modal closes via its own success path) or
   // dismisses (we clear via onClose).
@@ -548,9 +581,40 @@ export function RoomView(props: {
 
   const submit = () => {
     const text = draft().trim();
-    diag(`send-UI: submit-entered chars=${text.length} editing=${editing() !== null}`);
+    const stagedNow = staged();
+    diag(
+      `send-UI: submit-entered chars=${text.length} editing=${
+        editing() !== null
+      } staged=${stagedNow.length}`,
+    );
+
+    // Edit mode does NOT accept attachments — Matrix edits replace a
+    // text event's body and can't morph a text into a file message.
+    // If the user staged something while in edit mode, prioritize the
+    // edit and leave the staged list alone for them to send after.
+    if (editing()) {
+      if (!text) return; // can't submit an empty edit
+      // falls through to edit branch below
+    } else {
+      // Drain staged attachments first so files render in the timeline
+      // BEFORE any caption text — same order Telegram / iMessage use.
+      if (stagedNow.length > 0) {
+        for (const s of stagedNow) {
+          // Revoke preview URL: the worker owns the data now and we
+          // no longer need the browser-side blob mapping.
+          if (s.previewUrl) URL.revokeObjectURL(s.previewUrl);
+          void uploadAndSendFile(s.file);
+        }
+        setStaged([]);
+      }
+    }
+
     if (!text) {
-      diag('send-UI: empty-or-noop — exit');
+      // Pure attachment send is legal — staged files were drained
+      // above; nothing else to do.
+      if (stagedNow.length === 0) {
+        diag('send-UI: empty-or-noop — exit');
+      }
       return;
     }
 
@@ -751,39 +815,55 @@ export function RoomView(props: {
   // pending row for now — a real file blob doesn't compress well into a
   // PendingMessage, and the event ID comes back fast enough that the
   // toast carries the user through the gap.
-  const handleAttach = (file: File) => {
+  /**
+   * Drains the staged attachment list to the worker (encrypt + upload
+   * + send file event per file). Runs in parallel — file uploads are
+   * independent and the worker queues them onto its own sender. We
+   * intentionally do NOT await this from the caller; the submit path
+   * fires-and-forgets so the composer clears immediately and the
+   * optimistic UI from sendStatus drives the timeline.
+   */
+  const uploadAndSendFile = async (file: File): Promise<void> => {
     const shortName = file.name.length > 32 ? `${file.name.slice(0, 30)}…` : file.name;
     const toastId = showToast('info', `Uploading ${shortName}…`);
-    void (async () => {
-      try {
-        const data = await file.arrayBuffer();
-        const info: {
-          mimetype: string;
-          size: number;
-          w?: number;
-          h?: number;
-        } = { mimetype: file.type || 'application/octet-stream', size: file.size };
-        if (file.type.startsWith('image/')) {
-          const dims = await readImageDimensions(file);
-          if (dims) {
-            info.w = dims.w;
-            info.h = dims.h;
-          }
+    try {
+      const data = await file.arrayBuffer();
+      const info: {
+        mimetype: string;
+        size: number;
+        w?: number;
+        h?: number;
+      } = { mimetype: file.type || 'application/octet-stream', size: file.size };
+      if (file.type.startsWith('image/')) {
+        const dims = await readImageDimensions(file);
+        if (dims) {
+          info.w = dims.w;
+          info.h = dims.h;
         }
-        await bridge.request({
-          kind: 'sendFileMessage',
-          roomId: props.room.roomId,
-          data,
-          filename: file.name,
-          info,
-          txnId: mkTxn(),
-        });
-        dismissToast(toastId);
-      } catch (err) {
-        dismissToast(toastId);
-        showToast('error', `Upload failed: ${msgOf(err)}`);
       }
-    })();
+      await bridge.request({
+        kind: 'sendFileMessage',
+        roomId: props.room.roomId,
+        data,
+        filename: file.name,
+        info,
+        txnId: mkTxn(),
+      });
+      dismissToast(toastId);
+    } catch (err) {
+      dismissToast(toastId);
+      showToast('error', `Upload failed: ${msgOf(err)}`);
+    }
+  };
+
+  /**
+   * Public entry point for the attach button and drop/paste handlers.
+   * Stages the file for preview instead of sending immediately — the
+   * user must press Send (or Enter) to commit. This is the single
+   * biggest UX safety net for "I pasted the wrong screenshot."
+   */
+  const handleAttach = (file: File): void => {
+    stageAttachment(file);
   };
 
   // ---- Message action wiring ---------------------------------------------
@@ -1072,22 +1152,29 @@ export function RoomView(props: {
     e.preventDefault();
     dragDepth.count = 0;
     setIsDragOver(false);
-    const file = e.dataTransfer?.files?.[0];
-    if (file) handleAttach(file);
+    const files = e.dataTransfer?.files;
+    if (!files) return;
+    // Stage every dropped file — multi-file drag (a folder of
+    // screenshots, a batch of PDFs) is common and silently dropping
+    // all but the first is the kind of small thing that erodes trust.
+    for (const file of Array.from(files)) handleAttach(file);
   };
   const onPaste = (e: ClipboardEvent) => {
     const items = e.clipboardData?.items;
     if (!items) return;
-    for (const it of items) {
+    let staged = false;
+    for (const it of Array.from(items)) {
       if (it.kind === 'file') {
         const file = it.getAsFile();
         if (file) {
-          e.preventDefault();
           handleAttach(file);
-          return;
+          staged = true;
         }
       }
     }
+    // Only swallow the paste event when we actually staged a file —
+    // otherwise we'd block plain text paste into the composer.
+    if (staged) e.preventDefault();
   };
 
   return (
@@ -1202,6 +1289,54 @@ export function RoomView(props: {
         </Show>
       </div>
 
+      <Show when={staged().length > 0}>
+        <div class="flex flex-wrap gap-[8px] border-t border-line-1 bg-elev px-[12px] py-[8px]">
+          <For each={staged()}>
+            {(s) => {
+              const isImage = s.file.type.startsWith('image/');
+              return (
+                <div class="group relative flex items-center gap-[8px] rounded-[8px] border border-line-2 bg-app px-[8px] py-[6px] pr-[28px]">
+                  {isImage && s.previewUrl ? (
+                    <img
+                      src={s.previewUrl}
+                      alt=""
+                      class="h-[40px] w-[40px] rounded-[5px] object-cover"
+                    />
+                  ) : (
+                    <div class="flex h-[40px] w-[40px] items-center justify-center rounded-[5px] bg-elev text-fg-3">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <path d="M14 2v6h6" />
+                      </svg>
+                    </div>
+                  )}
+                  <div class="flex max-w-[160px] flex-col gap-[2px]">
+                    <div class="truncate text-[12px] text-fg" style={{ 'font-weight': 500 }}>
+                      {s.file.name}
+                    </div>
+                    <div class="mono text-[10px] uppercase tracking-[0.06em] text-fg-4">
+                      {(s.file.size / 1024 < 1024
+                        ? `${(s.file.size / 1024).toFixed(0)} KB`
+                        : `${(s.file.size / 1024 / 1024).toFixed(1)} MB`)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => unstage(s.id)}
+                    aria-label={`Remove ${s.file.name}`}
+                    title="Remove"
+                    class="absolute right-[4px] top-[4px] flex h-[20px] w-[20px] items-center justify-center rounded-full text-fg-4 hover:bg-elev hover:text-fg focus:outline-none focus:ring-2 focus:ring-accent/40"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                      <path d="M4 4l8 8M12 4l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
       <Composer
         draft={draft}
         setDraft={setDraft}
@@ -1211,6 +1346,7 @@ export function RoomView(props: {
         onSubmit={submit}
         onTyping={sendTyping}
         onAttach={handleAttach}
+        hasStagedAttachments={() => staged().length > 0}
         focusToken={focusToken}
         loadMembers={loadMembersForComposer}
         onMention={addMention}
