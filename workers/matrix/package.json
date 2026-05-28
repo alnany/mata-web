@@ -15,6 +15,7 @@
   "dependencies": {
     "@mata/shared": "workspace:*",
     "@matrix-org/matrix-sdk-crypto-wasm": "9.1.0",
+    "buffer": "6.0.3",
     "idb": "8.0.0",
     "matrix-js-sdk": "34.11.1"
   },
