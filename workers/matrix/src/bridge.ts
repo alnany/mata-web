@@ -88,7 +88,7 @@ const handlers: Handlers = {
     // narrow it down further once we see which CORE phase is last.
     core.diagLog(`send-RPC: handler entered txn=${req.txnId.slice(-6)} room=${req.roomId.slice(0, 24)}`);
     try {
-      await core.sendMessage(req.roomId, req.content, req.txnId);
+      await core.sendMessage(req.roomId, req.content, req.txnId, req.threadRoot);
       core.diagLog(`send-RPC: core returned ok txn=${req.txnId.slice(-6)}`);
       return { kind: 'sendMessage', queued: true };
     } catch (err) {
@@ -164,6 +164,16 @@ const handlers: Handlers = {
   kickFromRoom: async (req, core) => {
     await core.kickFromRoom(req.roomId, req.userId, req.reason);
     return { kind: 'kickFromRoom' };
+  },
+  setRoomMuted: async (req, core) => {
+    // Returns the resulting boolean so the UI doesn't have to wait
+    // for the next sync delta to flip RoomSummary.isMuted in place.
+    const muted = await core.setRoomMuted(req.roomId, req.muted);
+    return { kind: 'setRoomMuted', muted };
+  },
+  loadThread: async (req, core) => {
+    const events = await core.loadThread(req.roomId, req.threadRootId);
+    return { kind: 'loadThread', events };
   },
   uploadMedia: async (req, core) => {
     const mxc = await core.uploadMedia(req.data, req.mime, req.filename);

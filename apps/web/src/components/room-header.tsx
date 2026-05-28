@@ -1,6 +1,7 @@
 import { createSignal, Show } from 'solid-js';
 import type { RoomSummary } from '@mata/shared/matrix';
 import { initials, prettyName } from './message-bubble.js';
+import { useBridge } from '../bridge/context.js';
 
 /**
  * Header for the active room: avatar (initials placeholder), name + member
@@ -16,6 +17,30 @@ export function RoomHeader(props: {
 }) {
   const [menuOpen, setMenuOpen] = createSignal(false);
   const [infoOpen, setInfoOpen] = createSignal(false);
+  const [muting, setMuting] = createSignal(false);
+  const bridge = useBridge();
+
+  // Phase 12: server-driven mute toggle. We call the RPC, then trust
+  // the next sync delta to refresh `RoomSummary.isMuted` (toSummary
+  // re-reads the push rule). The local `muting` flag covers the
+  // round-trip so the menu item shows a transitional disabled state.
+  const toggleMute = async () => {
+    if (muting()) return;
+    setMuting(true);
+    setMenuOpen(false);
+    try {
+      await bridge.request({
+        kind: 'setRoomMuted',
+        roomId: props.room.roomId,
+        muted: !props.room.isMuted,
+      });
+    } catch {
+      // Quietly. The next sync delta will reveal the real state; no
+      // value in surfacing a network/permission error mid-menu.
+    } finally {
+      setMuting(false);
+    }
+  };
 
   const subtitle = () => {
     const typers = props.typingUserIds.filter((u) => u !== ''); // safety
@@ -39,6 +64,11 @@ export function RoomHeader(props: {
           <Show when={props.room.isEncrypted}>
             <span title="Encrypted room" class="text-[11px] text-emerald-600 dark:text-emerald-400">
               🔒
+            </span>
+          </Show>
+          <Show when={props.room.isMuted}>
+            <span title="Muted" class="text-[11px] text-neutral-500">
+              🔕
             </span>
           </Show>
         </div>
@@ -85,11 +115,11 @@ export function RoomHeader(props: {
           </button>
           <button
             type="button"
-            disabled
-            class="block w-full cursor-not-allowed px-3 py-1.5 text-left text-neutral-400"
-            title="Coming with notifications phase"
+            onClick={toggleMute}
+            disabled={muting()}
+            class="block w-full px-3 py-1.5 text-left text-neutral-800 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-400 dark:text-neutral-200 dark:hover:bg-neutral-800"
           >
-            Mute notifications
+            {props.room.isMuted ? 'Unmute notifications' : 'Mute notifications'}
           </button>
           <button
             type="button"
