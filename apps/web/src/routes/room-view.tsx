@@ -109,6 +109,15 @@ export function RoomView(props: {
    * without the user hunting through settings.
    */
   onOpenEncryptionSettings?: () => void;
+  /**
+   * Called when the SDK reports this room is unknown (left, forgotten,
+   * or never made it to local state) after we've already exhausted the
+   * cold-start retry window inside the worker. The home view uses this
+   * to close the column and trigger a room-list refetch — the stale
+   * IndexedDB cache entry that lit up the click will be dropped on the
+   * next /sync delta merge.
+   */
+  onRoomUnavailable?: (roomId: RoomId) => void;
 }) {
   const bridge = useBridge();
   const me = (): UserId | null => {
@@ -214,7 +223,19 @@ export function RoomView(props: {
       props.setCache(props.room.roomId, (c) => {
         c.loading = false;
       });
-      showToast('error', `Could not load messages: ${msgOf(err)}`);
+      const m = msgOf(err);
+      if (/Unknown room/i.test(m)) {
+        // Stale cache row pointing at a room the SDK does not have
+        // (left/forgotten/never-synced). Don't ship the raw error to
+        // the user — close the column and let home.tsx drop the row.
+        showToast(
+          'error',
+          'This room is not available. It may have been left, or sync is still catching up.',
+        );
+        props.onRoomUnavailable?.(props.room.roomId);
+      } else {
+        showToast('error', `Could not load messages: ${m}`);
+      }
     }
   };
 
