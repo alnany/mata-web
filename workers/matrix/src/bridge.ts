@@ -18,6 +18,7 @@ import type {
 } from '@mata/shared/rpc';
 import { type SerializedError, MataError } from '@mata/shared/errors';
 import { MatrixCore } from './sdk.js';
+import { searchUsers as runUserSearch } from './user-search.js';
 
 type Handlers = {
   [K in MainToWorkerRequest['kind']]: (
@@ -199,10 +200,15 @@ const handlers: Handlers = {
     const preview = await core.getUrlPreview(req.url);
     return { kind: 'getUrlPreview', preview };
   },
-  // searchUsers handler stubbed pending sdk-impl upload (file size
-  // exceeds the commit pipeline's argv limit). UI not deployed yet,
-  // so no real request reaches this stub.
-  searchUsers: async () => ({ kind: 'searchUsers' as const, results: [], limited: false }),
+  searchUsers: async (req, core) => {
+    // Routed through `user-search.ts` (sibling utility) instead of
+    // through MatrixCore directly so we can iterate on this surface
+    // without re-uploading the large sdk-impl module. See
+    // `MatrixCore.getMatrixClient` for the typed-leak seam.
+    const client = core.getMatrixClient() as Parameters<typeof runUserSearch>[0];
+    const { results, limited } = await runUserSearch(client, req.term, req.limit);
+    return { kind: 'searchUsers', results, limited };
+  },
   uploadMedia: async (req, core) => {
     const mxc = await core.uploadMedia(req.data, req.mime, req.filename);
     return { kind: 'uploadMedia', mxc };
