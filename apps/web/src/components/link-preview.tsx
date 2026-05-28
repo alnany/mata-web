@@ -19,7 +19,7 @@
 // URLs we already know it can't preview (404s, opaque images, etc.).
 // ============================================================================
 
-import { createSignal, onMount, Show, type JSX } from 'solid-js';
+import { createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import type { UrlPreview } from '@mata/shared/rpc';
 import { useBridge } from '../bridge/context.js';
 
@@ -141,22 +141,84 @@ function Card(props: { preview: UrlPreview; isMine: boolean }): JSX.Element {
             <div class="min-w-0 flex-1">
               <Meta preview={p} host={host} isMine={props.isMine} />
             </div>
-            <img
-              src={img()}
-              alt=""
-              loading="lazy"
-              referrerpolicy="no-referrer"
-              class="h-16 w-16 shrink-0 rounded-md object-cover"
-              onError={(e) => {
-                // Hide broken images silently — the text card alone
-                // still gives the user the context they need.
-                e.currentTarget.style.display = 'none';
-              }}
-            />
+            <PreviewImage src={img()} />
           </div>
         )}
       </Show>
     </a>
+  );
+}
+
+/**
+ * Image renderer that handles both `http(s)://` (use directly) and
+ * `mxc://` (fetch authenticated bytes via the worker, render as
+ * Blob URL — same pipeline as message images). Synapse's
+ * authenticated-media mode requires a bearer token on every media
+ * GET; a plain `<img>` tag can't attach one, so the only path that
+ * actually renders is fetch-then-blob.
+ *
+ * Errors are silenced — a missing preview thumbnail is not worth
+ * showing the user a broken-image glyph for. The text card alone
+ * still gives them enough context.
+ */
+function PreviewImage(props: { src: string }): JSX.Element {
+  const bridge = useBridge();
+  const isMxc = props.src.startsWith('mxc://');
+
+  if (!isMxc) {
+    return (
+      <img
+        src={props.src}
+        alt=""
+        loading="lazy"
+        referrerpolicy="no-referrer"
+        class="h-16 w-16 shrink-0 rounded-md object-cover"
+        onError={(e) => {
+          e.currentTarget.style.display = 'none';
+        }}
+      />
+    );
+  }
+
+  // mxc:// path — fetch via authenticated worker pipeline.
+  const [blobUrl, setBlobUrl] = createSignal<string | null>(null);
+  let revokable: string | null = null;
+
+  onMount(async () => {
+    try {
+      const res = await bridge.request({
+        kind: 'loadMedia',
+        mxc: props.src,
+        encryptedFile: null, // OG thumbnails are always plaintext
+        mime: 'image/*',
+      });
+      const blob = new Blob([res.data], { type: res.mime || 'image/jpeg' });
+      const url = URL.createObjectURL(blob);
+      revokable = url;
+      setBlobUrl(url);
+    } catch {
+      // Swallow — card collapses to text-only via onError below.
+    }
+  });
+
+  onCleanup(() => {
+    if (revokable) URL.revokeObjectURL(revokable);
+  });
+
+  return (
+    <Show when={blobUrl()}>
+      {(u) => (
+        <img
+          src={u()}
+          alt=""
+          loading="lazy"
+          class="h-16 w-16 shrink-0 rounded-md object-cover"
+          onError={(e) => {
+            e.currentTarget.style.display = 'none';
+          }}
+        />
+      )}
+    </Show>
   );
 }
 
