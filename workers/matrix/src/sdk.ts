@@ -100,6 +100,18 @@ export class MatrixCore {
     return this.requireSession().loadThread(roomId, threadRootId);
   }
 
+  async sendCallEvent(
+    roomId: RoomId,
+    eventType: string,
+    content: Record<string, unknown>,
+  ): Promise<EventId> {
+    return this.requireSession().sendCallEvent(roomId, eventType, content);
+  }
+
+  async getTurnServers(): Promise<import('@mata/shared/rpc').IceServer[]> {
+    return this.requireSession().getTurnServers();
+  }
+
   async editMessage(
     roomId: RoomId,
     eventId: EventId,

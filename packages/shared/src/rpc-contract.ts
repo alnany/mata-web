@@ -16,6 +16,19 @@
  */
 
 import type { SerializedError } from './errors.js';
+
+/**
+ * RTCIceServer (lib.dom.d.ts) shaped JSON-safely so we can ship it
+ * across the worker boundary. WebRTC accepts this verbatim — the
+ * worker pulls credentials from /voip/turnServer; the main thread
+ * passes them to `new RTCPeerConnection({ iceServers })`. `ttl` is
+ * advisory; we refresh well before it.
+ */
+export interface IceServer {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
 import type {
   Device,
   DeviceId,
@@ -182,7 +195,33 @@ export type MainToWorkerRequest =
    * sorted oldest-first so the thread panel can render them in
    * timeline order.
    */
-  | { kind: 'loadThread'; roomId: RoomId; threadRootId: EventId };
+  | { kind: 'loadThread'; roomId: RoomId; threadRootId: EventId }
+  /**
+   * Send a Matrix VoIP signaling event (m.call.invite / m.call.answer
+   * / m.call.candidates / m.call.hangup / m.call.select_answer …) on
+   * behalf of the main thread. WebRTC itself lives on the main thread
+   * (Web Workers don't expose `RTCPeerConnection` or
+   * `navigator.mediaDevices`), so the worker's job is purely the
+   * signaling relay: it puts the event on the wire, encrypted-or-not
+   * per room policy, with the SDK-managed access token. `content` is
+   * the raw m.call.* JSON body — we keep this untyped at the RPC
+   * boundary so we don't have to mirror the entire VoIP spec in our
+   * shared types (and so we can adopt MSC3401 fields later without a
+   * contract bump).
+   */
+  | {
+      kind: 'sendCallEvent';
+      roomId: RoomId;
+      eventType: string;
+      content: Record<string, unknown>;
+    }
+  /**
+   * Pull the homeserver's TURN credentials so the main-thread peer
+   * connection can configure its ICE servers. Falls back to the
+   * spec's public STUN list when the server doesn't expose
+   * /voip/turnServer (older or self-hosted setups).
+   */
+  | { kind: 'getTurnServers' };
 
 export type MainToWorkerResponse =
   | { kind: 'ping'; pong: true }
@@ -223,6 +262,14 @@ export type MainToWorkerResponse =
   | { kind: 'kickFromRoom' }
   | { kind: 'setRoomMuted'; muted: boolean }
   | { kind: 'loadThread'; events: TimelineEvent[] }
+  | { kind: 'sendCallEvent'; eventId: EventId }
+  /**
+   * RTCIceServer list (the shape WebRTC's RTCPeerConnection accepts
+   * verbatim). Empty when the homeserver returns no servers and the
+   * fallback list is also empty — the caller treats that as "STUN-
+   * only, host-to-host" and accepts the higher failure rate.
+   */
+  | { kind: 'getTurnServers'; iceServers: IceServer[] }
 
 // Compile-time guarantee: request kind ↔ response kind 1:1.
 export type ResponseFor<K extends MainToWorkerRequest['kind']> = Extract<
@@ -320,6 +367,33 @@ export type WorkerEvent =
   | {
       kind: 'workerCrashed';
       message: string;
+    }
+  /**
+   * Inbound VoIP signaling event (m.call.invite / m.call.answer /
+   * m.call.candidates / m.call.hangup / m.call.select_answer /
+   * m.call.reject / m.call.negotiate). The worker fishes these out of
+   * timeline + to-device sync deltas and forwards them verbatim;
+   * everything WebRTC-specific (SDP parsing, ICE candidate
+   * application, mute) is the main thread's job.
+   *
+   * `sender` is the MXID of the originating user — useful for ringer
+   * UX and for filtering out our own echoes (Matrix delivers our
+   * sent signaling events back to us on next sync).
+   *
+   * `partyId` (MSC2746) disambiguates which device on the remote side
+   * is participating; null for legacy clients that don't set it.
+   *
+   * `content` is the raw m.call.* body. The main-thread call layer
+   * narrows it by `eventType`.
+   */
+  | {
+      kind: 'callSignal';
+      roomId: RoomId;
+      eventType: string;
+      sender: UserId;
+      partyId: string | null;
+      ageMs: number;
+      content: Record<string, unknown>;
     };
 
 export interface EventEnvelope {
