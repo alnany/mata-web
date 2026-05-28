@@ -44,6 +44,8 @@ import type {
   RoomId,
   EventId,
   MessageBody,
+  MediaMessageBody,
+  EncryptedFile,
   MxcUri,
   MediaInfo,
   RoomDelta,
@@ -2030,36 +2032,49 @@ function decodeMessageBody(c: IContent): MessageBody {
       return base;
     }
     case MsgType.Image:
-      return {
-        msgtype: 'm.image',
-        body,
-        url: (c.url ?? '') as MxcUri,
-        info: decodeMediaInfo(c.info),
-      };
     case MsgType.Video:
-      return {
-        msgtype: 'm.video',
-        body,
-        url: (c.url ?? '') as MxcUri,
-        info: decodeMediaInfo(c.info),
-      };
     case MsgType.Audio:
-      return {
-        msgtype: 'm.audio',
+    case MsgType.File: {
+      const file = decodeEncryptedFile(c);
+      const base: MediaMessageBody = {
+        msgtype: msgtype as MediaMessageBody['msgtype'],
         body,
         url: (c.url ?? '') as MxcUri,
         info: decodeMediaInfo(c.info),
       };
-    case MsgType.File:
-      return {
-        msgtype: 'm.file',
-        body,
-        url: (c.url ?? '') as MxcUri,
-        info: decodeMediaInfo(c.info),
-      };
+      if (file) (base as MediaMessageBody).file = file;
+      return base;
+    }
     default:
       return { msgtype: 'm.text', body, formattedBody: null };
   }
+}
+
+/**
+ * Pull the EncryptedFile payload off a wire `m.room.message` content for
+ * encrypted-room media events (spec §11.x — `content.file` carries the
+ * mxc + AES-CTR JWK + IV + ciphertext SHA-256 hash). Returns `null` for
+ * plain media events (which use top-level `content.url`) or malformed
+ * payloads — the renderer falls back to `body.url` in that case.
+ *
+ * This was previously dropped at decode, which made every encrypted
+ * image / video / audio / file render as "image unavailable" since the
+ * UI had no mxc to fetch from. The encrypted-attachment send side was
+ * always correct.
+ */
+function decodeEncryptedFile(c: IContent): EncryptedFile | null {
+  const raw = (c as Record<string, unknown>).file;
+  if (!raw || typeof raw !== 'object') return null;
+  const f = raw as Record<string, unknown>;
+  if (typeof f.url !== 'string' || !f.url.startsWith('mxc://')) return null;
+  if (typeof f.iv !== 'string') return null;
+  const key = f.key as Record<string, unknown> | undefined;
+  if (!key || typeof key.k !== 'string') return null;
+  const hashes = f.hashes as Record<string, unknown> | undefined;
+  if (!hashes || typeof hashes.sha256 !== 'string') return null;
+  // Pass the wire payload through verbatim — the decryption pipeline in
+  // attachments.ts expects this exact shape (JWK + base64-unpadded iv).
+  return raw as unknown as EncryptedFile;
 }
 
 function decodeMediaInfo(info: unknown): MediaInfo {
