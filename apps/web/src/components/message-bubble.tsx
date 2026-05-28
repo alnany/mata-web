@@ -108,7 +108,7 @@ export function MessageBubble(props: {
         <div
           class={`relative rounded-2xl px-3 py-2 text-sm leading-5 ${
             isMine()
-              ? 'bg-mata-500 text-white'
+              ? 'bg-accent text-accent-ink'
               : 'bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100'
           }`}
         >
@@ -119,7 +119,7 @@ export function MessageBubble(props: {
               onClick={() => props.actions.onJumpTo(msg.inReplyTo as EventId)}
               class={`-mx-1 mb-1.5 block w-[calc(100%+0.5rem)] truncate rounded-md border-l-2 px-2 py-1 text-left text-[11px] leading-4 transition-opacity hover:opacity-100 ${
                 isMine()
-                  ? 'border-white/70 bg-white/10 opacity-90'
+                  ? 'border-accent-ink/40 bg-accent-ink/10 opacity-90'
                   : 'border-mata-500 bg-black/5 opacity-80 dark:bg-white/5'
               }`}
               title="Jump to original message"
@@ -137,7 +137,7 @@ export function MessageBubble(props: {
 
           <div
             class={`mt-1 flex items-center justify-end gap-1 text-[10px] ${
-              isMine() ? 'text-white/70' : 'text-neutral-500'
+              isMine() ? 'text-accent-ink/70' : 'text-neutral-500'
             }`}
           >
             <Show when={edited}>
