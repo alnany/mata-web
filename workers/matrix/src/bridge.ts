@@ -175,6 +175,14 @@ const handlers: Handlers = {
     const events = await core.loadThread(req.roomId, req.threadRootId);
     return { kind: 'loadThread', events };
   },
+  sendCallEvent: async (req, core) => {
+    const eventId = await core.sendCallEvent(req.roomId, req.eventType, req.content);
+    return { kind: 'sendCallEvent', eventId };
+  },
+  getTurnServers: async (_req, core) => {
+    const iceServers = await core.getTurnServers();
+    return { kind: 'getTurnServers', iceServers };
+  },
   uploadMedia: async (req, core) => {
     const mxc = await core.uploadMedia(req.data, req.mime, req.filename);
     return { kind: 'uploadMedia', mxc };

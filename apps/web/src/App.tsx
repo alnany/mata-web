@@ -8,6 +8,8 @@ import { ToastRoot } from './components/toast-root.js';
 import { VerificationModal } from './components/verification-modal.js';
 import { attachVerificationStore } from './stores/verification.js';
 import { notifyTotals } from './stores/notifications.js';
+import { initCallStore } from './stores/call.js';
+import { CallOverlay } from './components/call-overlay.js';
 // Side-effect: bootstrap the theme classes on <html> at app load.
 import './stores/theme.js';
 import type { MatrixBridge } from '@mata/shared/rpc';
@@ -44,6 +46,19 @@ export function App(props: ParentProps) {
 
   onCleanup(() => {
     bridge()?.dispose();
+  });
+
+  // Phase 14 — bring up the call store as soon as we have both a
+  // bridge AND a known MXID. We can't initialize earlier because the
+  // store needs `myUserId` to route inbound signaling (we filter out
+  // our own echoes by sender). Safe to re-run on session change; the
+  // store deduplicates the internal `initialized` flag.
+  createEffect(() => {
+    const b = bridge();
+    const s = session();
+    if (!b) return;
+    if (s.phase !== 'authenticated') return;
+    initCallStore(b, s.userId);
   });
 
   // Tab title reflects unread / highlight tallies driven by the
@@ -87,6 +102,7 @@ export function App(props: ParentProps) {
         {/* biome-ignore lint/style/noNonNullAssertion: guarded by Show */}
         <BridgeContext.Provider value={bridge()!}>
           <VerificationModal />
+          <CallOverlay />
         </BridgeContext.Provider>
       </Show>
     </>
