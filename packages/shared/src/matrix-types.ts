@@ -24,6 +24,13 @@ export interface RoomSummary {
   lastActivityTs: number;
   lastEventPreview: string | null;
   isEncrypted: boolean;
+  /**
+   * Server-driven mute state, derived from this room's push rule
+   * override on the client. `true` when a `m.room.rule` override with
+   * `notify:false` is present for `roomId`; toggled via the
+   * `setRoomMuted` RPC. Default `false`.
+   */
+  isMuted: boolean;
   membership: 'join' | 'invite' | 'leave';
 }
 

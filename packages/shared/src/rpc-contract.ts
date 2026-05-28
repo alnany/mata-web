@@ -60,6 +60,15 @@ export type MainToWorkerRequest =
       content: MessageBody;
       /** Client-generated transaction id. The worker echoes it on `sendStatus`. */
       txnId: string;
+      /**
+       * When set, the outgoing event is decorated with
+       * `m.relates_to: { rel_type: "m.thread", event_id: threadRoot, ... }`
+       * — wire format defined by MSC3440 / spec v1.4. Threaded replies
+       * also get an in-reply-to fallback pointing at the latest event
+       * in the thread (handled in the worker) so unthreaded clients
+       * still see a reply chain.
+       */
+      threadRoot?: EventId;
     }
   | { kind: 'editMessage'; roomId: RoomId; eventId: EventId; content: MessageBody; txnId: string }
   | { kind: 'redactMessage'; roomId: RoomId; eventId: EventId; reason: string | null }
@@ -195,7 +204,7 @@ export type MainToWorkerResponse =
   | { kind: 'joinRoom'; roomId: RoomId }
   | { kind: 'leaveRoom' }
   | { kind: 'loadRoomMembers'; members: RoomMember[] }
-  | { kind: 'kickFromRoom' };
+  | { kind: 'kickFromRoom' }
 
 // Compile-time guarantee: request kind ↔ response kind 1:1.
 export type ResponseFor<K extends MainToWorkerRequest['kind']> = Extract<
