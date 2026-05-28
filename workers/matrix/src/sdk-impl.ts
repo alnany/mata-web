@@ -983,65 +983,111 @@ export class SdkSession {
   }
 
   /**
-   * Fetch URL preview via /_matrix/media/v3/preview_url. The
-   * homeserver server-side-fetches the page so the user's IP/UA
+   * Fetch URL preview via the homeserver's media preview endpoint.
+   * The homeserver server-side-fetches the page so the user's IP/UA
    * never reach the third-party host — that's the privacy story
-   * for link previews in Matrix. We normalize the OG response
-   * (`og:title`, `og:image`, …) into a flat shape the UI can
-   * render without knowing about Matrix conventions, and resolve
-   * any `mxc://` image to an authenticated http URL on this side
-   * where the client lives.
+   * for link previews in Matrix.
    *
-   * Returns null instead of throwing on any error — the UI
-   * fallback is "render the link as plain text", which is
-   * already the default behavior, so we never surface a preview
-   * failure to the user.
+   * Two endpoints are tried, in order of "modernness":
+   *
+   *   1. /_matrix/client/v1/media/preview_url (MSC3916, authenticated
+   *      media). Synapse 1.100+ with `enable_authenticated_media: true`
+   *      requires this path; the legacy v3 endpoint returns
+   *      M_UNRECOGNIZED / 404 on those servers.
+   *   2. /_matrix/media/v3/preview_url (legacy). Older homeservers,
+   *      including Synapse before 1.100 and most non-Synapse
+   *      implementations, only expose this path.
+   *
+   * On a server-error response (preview disabled, opaque page, etc.)
+   * we return null and the UI falls back to plain link text. We do
+   * NOT swallow logic errors — if something blows up in our own
+   * normalization, that's a bug we want to see in tests.
+   *
+   * Image normalization: we leave `mxc://` URIs as-is and let the
+   * main thread fetch the bytes via the authenticated `loadMedia`
+   * RPC (same pipeline as message images). Rewriting to an http URL
+   * here doesn't help because a plain `<img>` tag can't attach the
+   * bearer token that authenticated media requires.
    */
   async getUrlPreview(url: string): Promise<UrlPreview | null> {
     const client = this.requireClient();
-    try {
-      const raw = await client.getUrlPreview(url, Date.now());
-      if (!raw || typeof raw !== 'object') return null;
+    const ts = Math.floor(Date.now() / 60000) * 60000; // 60s bucket — match SDK behaviour
 
-      const pick = (k: string): string | undefined => {
-        const v = raw[k];
-        return typeof v === 'string' && v.length > 0 ? v : undefined;
-      };
-      const pickNum = (k: string): number | undefined => {
-        const v = raw[k];
-        return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
-      };
+    const raw = await this.fetchPreviewRaw(client, url, ts);
+    if (!raw || typeof raw !== 'object') return null;
 
-      let image = pick('og:image');
-      if (image && image.startsWith('mxc://')) {
-        // Use a sensible bounded size — the card renders at 80px
-        // tall on small previews and full-width on large ones.
-        // 600×600 covers both cases without round-tripping a giant
-        // original through the worker.
-        const http = client.mxcUrlToHttp(image, 600, 600, 'scale', false, true, true);
-        image = http ?? undefined;
+    const pick = (k: string): string | undefined => {
+      const v = raw[k];
+      return typeof v === 'string' && v.length > 0 ? v : undefined;
+    };
+    const pickNum = (k: string): number | undefined => {
+      const v = raw[k];
+      return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+    };
+
+    const image = pick('og:image'); // may be mxc:// or http(s):// — UI handles both
+    const title = pick('og:title');
+    const description = pick('og:description');
+    const siteName = pick('og:site_name');
+
+    // If nothing useful came back, treat it as no preview rather
+    // than render an empty card with just the URL.
+    if (!title && !description && !image) return null;
+
+    return {
+      url,
+      title,
+      description,
+      image,
+      imageWidth: pickNum('og:image:width'),
+      imageHeight: pickNum('og:image:height'),
+      siteName,
+    };
+  }
+
+  /**
+   * Two-pass fetch: authenticated media first (modern Synapse), legacy
+   * v3 fallback (everything else). Either side returning null/error is
+   * silenced — there's no UX signal we can give beyond "no card".
+   *
+   * We bypass the SDK's `client.getUrlPreview()` cache because it
+   * uniquely keys on `(ts, url)` per process and the worker already
+   * sits behind a per-URL bridge cache.
+   */
+  private async fetchPreviewRaw(
+    client: MatrixClient,
+    url: string,
+    ts: number,
+  ): Promise<Record<string, unknown> | null> {
+    const accessToken = client.getAccessToken();
+    const base = client.baseUrl;
+    if (!accessToken || !base) return null;
+
+    const qs = `url=${encodeURIComponent(url)}&ts=${ts}`;
+    const paths = [
+      `${base}/_matrix/client/v1/media/preview_url?${qs}`, // MSC3916 authed
+      `${base}/_matrix/media/v3/preview_url?${qs}`, // legacy
+    ];
+
+    for (const fullUrl of paths) {
+      try {
+        const res = await fetch(fullUrl, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json && typeof json === 'object') return json as Record<string, unknown>;
+          continue;
+        }
+        // 404 / M_UNRECOGNIZED on the v1 path is "server doesn't speak
+        // MSC3916"; try the next path. Any other status means the
+        // server gave us a real answer and we shouldn't double-fetch.
+        if (res.status !== 404 && res.status !== 400) return null;
+      } catch {
+        // Network / parse error — try the next path.
       }
-
-      const title = pick('og:title');
-      const description = pick('og:description');
-      const siteName = pick('og:site_name');
-
-      // If nothing useful came back, treat it as no preview rather
-      // than render an empty card with just the URL.
-      if (!title && !description && !image) return null;
-
-      return {
-        url,
-        title,
-        description,
-        image,
-        imageWidth: pickNum('og:image:width'),
-        imageHeight: pickNum('og:image:height'),
-        siteName,
-      };
-    } catch {
-      return null;
     }
+    return null;
   }
 
   /**
