@@ -71,26 +71,43 @@ export function HomePage() {
     }),
   );
 
-  // Boot sequence is gated on the session phase, not onMount, because the
-  // worker's session restore is async and finishes AFTER this page mounts.
-  // If we fire `loadRoomList` while phase is still `restoring` / `unknown`,
-  // the worker throws "Not logged in" and the toast fires before login
-  // even completes. Wait for `authenticated`, run once, then let the
-  // syncUpdate listener take over for live refetches.
-  let booted = false;
+  // Boot is split into TWO independent phases so the user sees their
+  // familiar room list immediately, not after the worker finishes
+  // rehydrating crypto + SQLite.
+  //
+  //   Phase 1 (cache paint) — fires on the very first effect run,
+  //     regardless of session.phase. Reads the IndexedDB cache
+  //     synchronously-ish (single keyval read) and paints whatever
+  //     was there last time. No bridge calls. The worker can still
+  //     be in 'restoring' while this happens — that's the point.
+  //
+  //   Phase 2 (live refetch) — only runs once the worker reports
+  //     phase === 'authenticated'. This is where we hit the bridge,
+  //     reconcile against live state, and start the syncUpdate
+  //     listener taking over for incremental updates.
+  //
+  // This shape is what Element does and is the source of its
+  // "chats appear instantly on reload" feel — the cached UI is
+  // already on screen before the homeserver has even responded.
+  let cachePainted = false;
+  let liveBooted = false;
   createEffect(() => {
     const s = session();
     if (s.phase === 'anonymous') {
       navigate('/login', { replace: true });
       return;
     }
-    if (s.phase !== 'authenticated' || booted) return;
-    booted = true;
-    void (async () => {
-      const cached = await readRoomList();
-      if (cached && !rooms()) setRooms(sortRooms(cached.rooms));
+    if (!cachePainted) {
+      cachePainted = true;
+      void (async () => {
+        const cached = await readRoomList();
+        if (cached && !rooms()) setRooms(sortRooms(cached.rooms));
+      })();
+    }
+    if (s.phase === 'authenticated' && !liveBooted) {
+      liveBooted = true;
       void refetchRooms();
-    })();
+    }
   });
 
   const refetchRooms = async () => {
