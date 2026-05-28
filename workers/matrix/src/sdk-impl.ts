@@ -209,7 +209,7 @@ export class SdkSession {
 
   async listRoomSummaries(): Promise<RoomSummary[]> {
     const c = this.requireClient();
-    return c.getRooms().map((r) => toSummary(r));
+    return c.getRooms().map((r) => toSummary(r, c));
   }
 
   async loadRoomHistory(
@@ -234,7 +234,12 @@ export class SdkSession {
     };
   }
 
-  async sendMessage(roomId: RoomId, content: MessageBody, txnId: string): Promise<void> {
+  async sendMessage(
+    roomId: RoomId,
+    content: MessageBody,
+    txnId: string,
+    threadRoot?: EventId,
+  ): Promise<void> {
     // INSTRUMENTATION (send-pipeline trace).
     // Phase markers go through the `diagNote` event channel — they land
     // in the user's sync log feed but do NOT touch the sync-state pill.
@@ -289,10 +294,25 @@ export class SdkSession {
       // is generous enough for first-message megolm setup but short
       // enough to surface a real hang.
       tag('before-send', 'calling c.sendEvent now');
+      // Compose the wire payload. When `threadRoot` is provided we
+      // attach an `m.relates_to` for `m.thread` per MSC3440 / spec
+      // v1.4. The `is_falling_back: true` + `m.in_reply_to` to the
+      // thread root is the documented fallback that lets clients
+      // without thread support still see a reply chain rather than
+      // an orphan message.
+      const wirePayload: Record<string, unknown> = encodeMessageBody(content);
+      if (threadRoot) {
+        wirePayload['m.relates_to'] = {
+          rel_type: 'm.thread',
+          event_id: threadRoot,
+          is_falling_back: true,
+          'm.in_reply_to': { event_id: threadRoot },
+        };
+      }
       const sendPromise = c.sendEvent(
         roomId,
         EventType.RoomMessage,
-        encodeMessageBody(content),
+        wirePayload,
         txnId,
       );
       const result = await Promise.race([
@@ -1253,7 +1273,7 @@ export class SdkSession {
         deltas: [
           {
             roomId: room.roomId as RoomId,
-            summary: partialSummary(room),
+            summary: partialSummary(room, c),
             newEvents: [tev],
           },
         ],
@@ -1283,7 +1303,7 @@ export class SdkSession {
         deltas: [
           {
             roomId: roomId as RoomId,
-            summary: partialSummary(room),
+            summary: partialSummary(room, c),
             newEvents: [tev],
           },
         ],
@@ -1316,7 +1336,7 @@ export class SdkSession {
   private emitInitialRooms(client: MatrixClient): void {
     const deltas: RoomDelta[] = client.getRooms().map((r) => ({
       roomId: r.roomId as RoomId,
-      summary: toSummary(r),
+      summary: toSummary(r, client),
       newEvents: [],
     }));
     if (deltas.length === 0) return;
@@ -1335,7 +1355,7 @@ export class SdkSession {
       deltas: [
         {
           roomId: room.roomId as RoomId,
-          summary: partialSummary(room),
+          summary: partialSummary(room, c),
           newEvents: [],
         },
       ],
@@ -1461,7 +1481,7 @@ function classifyRoom(room: Room): 'dm' | 'room' | 'space' {
   return 'room';
 }
 
-function toSummary(room: Room): RoomSummary {
+function toSummary(room: Room, client: MatrixClient): RoomSummary {
   const last = room.getLiveTimeline().getEvents().slice(-1)[0];
   return {
     roomId: room.roomId as RoomId,
@@ -1474,12 +1494,40 @@ function toSummary(room: Room): RoomSummary {
     lastActivityTs: last?.getTs() ?? 0,
     lastEventPreview: last ? extractPreview(last) : null,
     isEncrypted: room.hasEncryptionStateEvent(),
+    isMuted: isRoomMuted(client, room.roomId as RoomId),
     membership: (room.getMyMembership() as 'join' | 'invite' | 'leave') ?? 'leave',
   };
 }
 
-function partialSummary(room: Room): Partial<RoomSummary> {
-  return toSummary(room);
+/**
+ * Detect mute via the canonical Matrix push rule: a room-override
+ * rule under `global.room` whose rule_id matches the roomId and whose
+ * actions list does NOT include `notify`. matrix-js-sdk surfaces these
+ * through `client.getRoomPushRule('global', roomId)`. Returns false
+ * for any error / missing rule (the default), so an unconfigured room
+ * reads as unmuted.
+ */
+function isRoomMuted(client: MatrixClient, roomId: RoomId): boolean {
+  try {
+    // getRoomPushRule has been on matrix-js-sdk's Client for a long
+    // time but isn't in its public typings; cast through unknown to
+    // reach the runtime method without weakening the rest of the file.
+    const rule = (client as unknown as {
+      getRoomPushRule?: (scope: 'global', roomId: string) => { actions?: unknown[] } | undefined;
+    }).getRoomPushRule?.('global', roomId);
+    if (!rule) return false;
+    const actions = Array.isArray(rule.actions) ? rule.actions : [];
+    // Per Matrix spec: a rule notifies iff its actions list contains
+    // the bare string `'notify'`. Anything else (`'dont_notify'`,
+    // empty list, `set_tweak` entries only) is muted.
+    return !actions.some((a) => a === 'notify');
+  } catch {
+    return false;
+  }
+}
+
+function partialSummary(room: Room, client: MatrixClient): Partial<RoomSummary> {
+  return toSummary(room, client);
 }
 
 function extractPreview(ev: MatrixEvent): string | null {
@@ -1524,8 +1572,16 @@ function toTimelineEvent(ev: MatrixEvent): TimelineEvent | null {
       content: body,
       reactions: [],
       edits: ev.replacingEventId() ? [ev.replacingEventId() as EventId] : [],
+      // `inReplyTo` is set whenever the event carries an
+      // m.in_reply_to relation, including the fallback chain inside a
+      // thread. `threadRoot` is set ONLY when rel_type is m.thread —
+      // otherwise it would collide with regular reply chains, which
+      // use the same `event_id` key under `m.relates_to`.
       inReplyTo: (c['m.relates_to']?.['m.in_reply_to']?.event_id as EventId | undefined) ?? null,
-      threadRoot: (c['m.relates_to']?.event_id as EventId | undefined) ?? null,
+      threadRoot:
+        c['m.relates_to']?.rel_type === 'm.thread'
+          ? ((c['m.relates_to']?.event_id as EventId | undefined) ?? null)
+          : null,
     };
   }
   if (type === EventType.RoomEncrypted) {
