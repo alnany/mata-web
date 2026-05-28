@@ -195,6 +195,14 @@ const handlers: Handlers = {
     const { results, count, highlights } = await core.searchMessages(req.query, req.roomId);
     return { kind: 'searchMessages', results, count, highlights };
   },
+  getUrlPreview: async (req, core) => {
+    const preview = await core.getUrlPreview(req.url);
+    return { kind: 'getUrlPreview', preview };
+  },
+  searchUsers: async (req, core) => {
+    const { results, limited } = await core.searchUsers(req.term, req.limit);
+    return { kind: 'searchUsers', results, limited };
+  },
   uploadMedia: async (req, core) => {
     const mxc = await core.uploadMedia(req.data, req.mime, req.filename);
     return { kind: 'uploadMedia', mxc };
