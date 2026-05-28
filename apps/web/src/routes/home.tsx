@@ -32,6 +32,14 @@ export function HomePage() {
   const [rooms, setRooms] = createSignal<RoomSummary[] | null>(null);
   const [filter, setFilter] = createSignal('');
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+  // When the timeline's "Restore from backup" CTA opens settings, we
+  // jump straight to the Encryption tab instead of the default Profile
+  // tab — otherwise the user lands on the wrong panel and the click
+  // feels like a no-op. Reset back to null when the drawer closes so a
+  // subsequent manual ⚙️ open lands on Profile again.
+  const [settingsInitialTab, setSettingsInitialTab] = createSignal<
+    'profile' | 'appearance' | 'encryption' | 'devices' | null
+  >(null);
   const [newRoomOpen, setNewRoomOpen] = createSignal(false);
 
   // ---- Invite accept/decline -------------------------------------------
@@ -398,6 +406,10 @@ export function HomePage() {
                 cache={caches[room().roomId]}
                 setCache={updateCache}
                 rooms={joinedRooms()}
+                onOpenEncryptionSettings={() => {
+                  setSettingsInitialTab('encryption');
+                  setSettingsOpen(true);
+                }}
                 onRoomUnavailable={(rid) => {
                   // Drop the stale list entry locally so the user
                   // doesn't immediately click it again, then refetch
@@ -413,7 +425,14 @@ export function HomePage() {
         </Show>
       </div>
 
-      <SettingsDrawer open={settingsOpen()} onClose={() => setSettingsOpen(false)} />
+      <SettingsDrawer
+        open={settingsOpen()}
+        initialTab={settingsInitialTab()}
+        onClose={() => {
+          setSettingsOpen(false);
+          setSettingsInitialTab(null);
+        }}
+      />
       <NewRoomModal
         open={newRoomOpen()}
         onClose={() => setNewRoomOpen(false)}
