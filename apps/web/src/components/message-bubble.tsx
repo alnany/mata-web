@@ -9,6 +9,7 @@ import type {
 } from '@mata/shared/matrix';
 import { shortTime } from '../lib/date-buckets.js';
 import { useBridge } from '../bridge/context.js';
+import { LinkPreviewCard, extractFirstUrl } from './link-preview.js';
 import { EmojiPicker } from './emoji-picker.js';
 
 /**
@@ -182,6 +183,24 @@ export function MessageBubble(props: {
           <span class="whitespace-pre-wrap break-words">
             <Body msg={msg} me={props.me} />
           </span>
+
+          {/*
+           * Link preview card. Only rendered for text-class
+           * messages (m.text / m.notice / m.emote) that carry an
+           * http(s) URL the homeserver might know about. Media
+           * messages (m.image / m.file / etc.) already have their
+           * own visual surface, so a preview underneath would be
+           * redundant noise.
+           */}
+          {(() => {
+            const c = msg.content;
+            if (c.msgtype !== 'm.text' && c.msgtype !== 'm.notice' && c.msgtype !== 'm.emote') {
+              return null;
+            }
+            const url = extractFirstUrl(c.body);
+            if (!url) return null;
+            return <LinkPreviewCard url={url} isMine={isMine()} />;
+          })()}
 
           <div
             class={`mt-1 flex items-center justify-end gap-1 text-[10px] ${
