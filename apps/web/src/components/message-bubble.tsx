@@ -1,4 +1,4 @@
-import { createResource, createSignal, For, Show, type Resource } from 'solid-js';
+import { createEffect, createResource, createSignal, For, onCleanup, Show, type Resource } from 'solid-js';
 import type {
   EventId,
   MediaMessageBody,
@@ -150,10 +150,14 @@ export function MessageBubble(props: {
             }`}
           >
             <Show when={edited}>
-              <span title={`Edited (${msg.edits.length}× revisions)`} class="italic">
+              <span
+                title={`Edited (${msg.edits.length}× revisions)`}
+                class={`rounded-full border px-1.5 py-px text-[9.5px] font-medium uppercase tracking-[0.04em] ${
+                  isMine() ? 'border-accent-ink/30 text-accent-ink/80' : 'border-line text-fg-3'
+                }`}
+              >
                 edited
               </span>
-              <span>·</span>
             </Show>
             <span>{shortTime(msg.originServerTs)}</span>
           </div>
@@ -562,14 +566,63 @@ function MediaLoading(props: { body: MediaMessageBody; loading: boolean; error: 
 function MediaPlayer(props: { body: MediaMessageBody; loaded: { url: string; mime: string } }) {
   const c = props.body;
   if (c.msgtype === 'm.image') {
-    // Cap displayed size so giant photos don't blow out the bubble.
+    const [lightbox, setLightbox] = createSignal(false);
+    // Esc / backdrop-click closes the lightbox. We attach a keydown
+    // listener only while the overlay is open so we don't capture Esc
+    // globally (the rest of the app uses it for cancel-reply etc).
+    createEffect(() => {
+      if (!lightbox()) return;
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') setLightbox(false);
+      };
+      window.addEventListener('keydown', onKey);
+      onCleanup(() => window.removeEventListener('keydown', onKey));
+    });
     return (
-      <img
-        src={props.loaded.url}
-        alt={c.body}
-        class="max-h-80 max-w-full cursor-zoom-in rounded-lg object-contain"
-        onClick={() => window.open(props.loaded.url, '_blank')}
-      />
+      <>
+        <img
+          src={props.loaded.url}
+          alt={c.body}
+          class="max-h-80 max-w-full cursor-zoom-in rounded-lg object-contain"
+          onClick={() => setLightbox(true)}
+        />
+        <Show when={lightbox()}>
+          <div
+            class="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-6 backdrop-blur-sm"
+            onClick={() => setLightbox(false)}
+            role="dialog"
+            aria-label="Image preview"
+          >
+            <img
+              src={props.loaded.url}
+              alt={c.body}
+              class="max-h-full max-w-full cursor-zoom-out rounded-lg object-contain shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            />
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setLightbox(false);
+              }}
+              class="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-sm hover:bg-white/20"
+              aria-label="Close (Esc)"
+              title="Close (Esc)"
+            >
+              ✕
+            </button>
+            <a
+              href={props.loaded.url}
+              download={c.body}
+              onClick={(e) => e.stopPropagation()}
+              class="absolute bottom-4 right-4 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm hover:bg-white/20"
+              title="Download"
+            >
+              Download
+            </a>
+          </div>
+        </Show>
+      </>
     );
   }
   if (c.msgtype === 'm.video') {

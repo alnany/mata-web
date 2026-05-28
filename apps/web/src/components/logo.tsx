@@ -1,16 +1,13 @@
 /**
- * Mata brand surfaces.
+ * Mata brand surface.
  *
- * Two visually distinct artifacts live under the same brand identity:
- *
- *   1. `<Mark>`        — the standalone ring+bar SVG. The single source of
- *                        truth for the logo (favicon, splash, boot screen,
- *                        login, anywhere a non-rail mark appears).
- *   2. `<BrandSquare>` — the workspace-rail brand tile. Lime square with
- *                        an Instrument Serif italic `M` glyph. This is NOT
- *                        the SVG mark; it's typographic-on-accent by design
- *                        (see LOGO.md §"Application: in-product · Workspace
- *                        rail brand square").
+ * `<Mark>` is the standalone ring+bar SVG — single source of truth
+ * for the logo (favicon, splash, boot screen, login, anywhere a non-
+ * rail mark appears). The old `<BrandSquare>` workspace-rail tile
+ * was removed when the single-account redesign dropped the rail
+ * column entirely; if a rail ever returns, regenerate the tile from
+ * the design skill (`LOGO.md §"App icon"`) rather than reviving the
+ * dead export here.
  *
  * SVG paths copied verbatim from /agents/<id>/skills/mata-design/LOGO.md.
  * Do NOT redraw or recolor. The design's "Don'ts" list explicitly forbids
@@ -90,49 +87,3 @@ export function Mark(props: { size?: MarkSize; class?: string; barColor?: string
   );
 }
 
-/**
- * Workspace-rail brand tile — the iOS "Default" app-icon variant from
- * LOGO.md §"App icon (iOS / macOS)": dark `#0a0a0b` squircle background,
- * paper ring + lime bar mark centered at ~33% of canvas width. We render
- * the squircle as a 9px-radius rounded square (the iOS OS-applied radius
- * is for the 1024px canvas; at 38px the rail spec calls for 9px).
- *
- * The 1px outline ring 3px outside the tile (per spec) is rendered via a
- * sibling element with `border` rather than `::after` because Solid +
- * Tailwind v4 want the rendering in JSX.
- */
-export function BrandSquare(props: { size?: number; class?: string }) {
-  const sz = () => props.size ?? 38;
-  // Mark sits at ~52% of canvas in the rail (slightly tighter than the
-  // 33% iOS app-icon ratio because the rail tile already lives inside a
-  // 64px gutter — needs to read as a logo, not a dot).
-  const markPct = 52;
-  return (
-    <div
-      class={`relative shrink-0 ${props.class ?? ''}`}
-      style={{ width: `${sz()}px`, height: `${sz()}px` }}
-      aria-label="Mata"
-      role="img"
-    >
-      <div
-        class="flex h-full w-full items-center justify-center"
-        style={{
-          'background-color': '#0a0a0b',
-          'border-radius': '9px',
-          color: '#ededee',
-        }}
-      >
-        <div style={{ width: `${markPct}%`, height: `${markPct}%` }}>
-          <Mark size="optical" />
-        </div>
-      </div>
-      {/* 1px outline ring 3px outside, faded accent. */}
-      <div
-        class="pointer-events-none absolute -inset-[3px] rounded-[12px]"
-        style={{
-          border: '1px solid color-mix(in oklab, var(--color-accent) 22%, transparent)',
-        }}
-      />
-    </div>
-  );
-}

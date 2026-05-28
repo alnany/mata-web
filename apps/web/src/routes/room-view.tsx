@@ -50,6 +50,16 @@ interface PendingEvent {
   status: 'sending' | 'failed';
   errorReason?: string;
   /**
+   * Full wire payload retained ONLY for the retry path — when the
+   * homeserver rejects a send (transient network blip, ratelimit,
+   * federation hiccup), the failed PendingRow shows a "Retry" button
+   * that re-fires the same `sendMessage` RPC verbatim. Without this
+   * we'd lose mentions / reply target on retry, which would be a
+   * silent corruption rather than a recoverable fail.
+   */
+  wireBody?: MessageBody;
+  replyToParam?: { eventId: EventId; sender: UserId; body: string };
+  /**
    * Set once the server has confirmed the send (sendStatus 'sent'
    * fires) and we know which event id will arrive from /sync. The
    * pending bubble keeps rendering until the sync delivery for this
@@ -539,7 +549,13 @@ export function RoomView(props: {
       // /send PUT — caught only after end-to-end instrumentation routed
       // the throw into the visible sync log.
       props.setCache(props.room.roomId, (c: RoomCache) => {
-        c.pending.push({ txnId, body: text, status: 'sending' });
+        c.pending.push({
+          txnId,
+          body: text,
+          status: 'sending',
+          wireBody: body,
+          ...(replyToParam ? { replyToParam } : {}),
+        });
       });
       diag(`send-UI[${shortTxn}]: cache-pushed pendingCount=${props.cache.pending.length}`);
       setDraft('');
@@ -595,6 +611,57 @@ export function RoomView(props: {
         showToast('error', `Send failed: ${msgOf(err)}`);
       });
 
+  };
+
+  /**
+   * Retry a previously failed pending send. Resets status to
+   * 'sending', re-fires the same RPC payload, and on success the
+   * usual sync delivery splices it as normal. We reuse the original
+   * txnId because matrix-js-sdk's idempotency table is keyed on
+   * (roomId, txnId) — re-using the same id means a delayed-success
+   * from the original attempt is recognized as the SAME message
+   * rather than a duplicate, preventing the "send twice, see two
+   * bubbles" hazard if the network just stalled.
+   */
+  const retryPending = (txnId: string) => {
+    const p = props.cache.pending.find((x) => x.txnId === txnId);
+    if (!p || p.status !== 'failed' || !p.wireBody) return;
+    props.setCache(props.room.roomId, (c: RoomCache) => {
+      const idx = c.pending.findIndex((x) => x.txnId === txnId);
+      if (idx < 0) return;
+      const nextPending = c.pending.slice();
+      nextPending[idx] = { ...nextPending[idx], status: 'sending', errorReason: undefined };
+      c.pending = nextPending;
+    });
+    void bridge
+      .request({
+        kind: 'sendMessage',
+        roomId: props.room.roomId,
+        content: p.wireBody,
+        txnId,
+        ...(p.replyToParam ? { replyTo: p.replyToParam } : {}),
+      })
+      .catch((err) => {
+        props.setCache(props.room.roomId, (c: RoomCache) => {
+          const idx = c.pending.findIndex((x) => x.txnId === txnId);
+          if (idx < 0) return;
+          const nextPending = c.pending.slice();
+          nextPending[idx] = { ...nextPending[idx], status: 'failed', errorReason: msgOf(err) };
+          c.pending = nextPending;
+        });
+        showToast('error', `Retry failed: ${msgOf(err)}`);
+      });
+  };
+
+  /**
+   * Drop a failed pending send entirely. There's no homeserver call
+   * — the message was never accepted, so removing the local pending
+   * entry is the whole operation.
+   */
+  const dismissPending = (txnId: string) => {
+    props.setCache(props.room.roomId, (c: RoomCache) => {
+      c.pending = c.pending.filter((x) => x.txnId !== txnId);
+    });
   };
 
   const cancelContext = () => {
@@ -884,7 +951,15 @@ export function RoomView(props: {
                   )
                 }
               </For>
-              <For each={props.cache.pending}>{(p) => <PendingRow pending={p} />}</For>
+              <For each={props.cache.pending}>
+                {(p) => (
+                  <PendingRow
+                    pending={p}
+                    onRetry={() => retryPending(p.txnId)}
+                    onDismiss={() => dismissPending(p.txnId)}
+                  />
+                )}
+              </For>
             </ul>
           </Show>
         </Show>
@@ -948,11 +1023,28 @@ export function RoomView(props: {
 // ---- Sub-components --------------------------------------------------------
 
 function DayDivider(props: { ts: number }) {
+  // Telegram-style: pill floats over a thin horizontal rule that spans
+  // the full timeline width. The rule uses `--color-line` so it blends
+  // into the conversation surface; the pill sits on top with `bg-elev`
+  // so it's clearly readable against both light and dark backgrounds.
   return (
-    <li class="my-3 flex justify-center">
-      <span class="rounded-full bg-input px-3 py-0.5 text-[11px] font-medium text-fg-3">
+    <li class="my-4 flex items-center gap-3 px-1">
+      <span
+        class="h-px flex-1"
+        style={{ 'background-color': 'var(--color-line)' }}
+        aria-hidden="true"
+      />
+      <span
+        class="mono rounded-full border bg-elev px-3 py-0.5 text-[10.5px] font-medium uppercase tracking-[0.06em] text-fg-3"
+        style={{ 'border-color': 'var(--color-line)' }}
+      >
         {dayLabel(props.ts)}
       </span>
+      <span
+        class="h-px flex-1"
+        style={{ 'background-color': 'var(--color-line)' }}
+        aria-hidden="true"
+      />
     </li>
   );
 }
@@ -974,9 +1066,14 @@ function LoadingStub() {
  * The only differences are a faint pulse while we wait for the
  * homeserver to ack and a failed-state recolouring.
  */
-function PendingRow(props: { pending: PendingEvent }) {
+function PendingRow(props: {
+  pending: PendingEvent;
+  onRetry?: () => void;
+  onDismiss?: () => void;
+}) {
   const confirmed = () => Boolean(props.pending.expectedEventId);
   const failed = () => props.pending.status === 'failed';
+  const canRetry = () => failed() && Boolean(props.pending.wireBody);
   return (
     <li class="mt-0.5 flex justify-end">
       <div class="relative max-w-[78%]">
@@ -994,7 +1091,29 @@ function PendingRow(props: { pending: PendingEvent }) {
             }`}
           >
             {failed() ? (
-              <span>failed: {props.pending.errorReason}</span>
+              <>
+                <span class="mr-auto truncate max-w-[60%]">
+                  failed: {props.pending.errorReason}
+                </span>
+                <Show when={canRetry()}>
+                  <button
+                    type="button"
+                    onClick={props.onRetry}
+                    class="rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-white hover:bg-white/30"
+                    title="Retry sending"
+                  >
+                    Retry
+                  </button>
+                </Show>
+                <button
+                  type="button"
+                  onClick={props.onDismiss}
+                  class="rounded-full bg-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/80 hover:bg-white/20"
+                  title="Discard this failed message"
+                >
+                  Dismiss
+                </button>
+              </>
             ) : (
               <span>{shortTime(Date.now())}</span>
             )}
