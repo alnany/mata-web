@@ -590,10 +590,35 @@ function splitMentions(text: string): MentionSeg[] {
   return out;
 }
 
+/**
+ * One-sentence friendly copy per decryption-failure category. Keep
+ * these short and non-technical — no enum names, no "DecryptionError",
+ * no stack traces. The detailed recovery path lives in Settings →
+ * Encryption, not in the timeline.
+ */
+export function encryptedReasonCopy(reason: string | null): string {
+  switch (reason) {
+    case 'historical':
+      return 'Encrypted — sent before you signed in to this device';
+    case 'key_withheld':
+      return "Encrypted — sender's device wouldn't share the key";
+    case 'session_missing':
+      return 'Encrypted — key for this conversation is missing on this device';
+    case 'verification':
+      return "Encrypted — sender's device isn't verified";
+    default:
+      return 'Encrypted message';
+  }
+}
+
 function SystemRow(props: { ev: TimelineEvent }) {
   const text = () => {
     const ev = props.ev;
-    if (ev.type === 'm.room.encrypted') return '🔒 Encrypted message (E2EE rollout pending)';
+    if (ev.type === 'm.room.encrypted') {
+      const prefix = ev.decryptionStatus === 'pending' ? '🔒 Decrypting…' : '🔒';
+      if (ev.decryptionStatus === 'pending') return prefix;
+      return `${prefix} ${encryptedReasonCopy(ev.failureReason)}`;
+    }
     if (ev.type === 'm.room.member') return 'membership change';
     if (ev.type === 'm.room.redaction') return 'message removed';
     return 'system event';

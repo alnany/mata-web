@@ -133,7 +133,18 @@ export interface RoomEncryptedEvent extends BaseEvent {
   type: 'm.room.encrypted';
   /** Set when decryption failed; UI renders a placeholder + retry hint. */
   decryptionStatus: 'pending' | 'failed' | 'key_missing';
-  failureReason: string | null;
+  /**
+   * Categorized failure reason for UI copy. Derived from the SDK's
+   * `DecryptionFailureCode`. UI maps each category to a single friendly
+   * sentence (no raw error strings ever surface to the user).
+   */
+  failureReason:
+    | 'historical' // sent before this device existed; common after logout/re-login
+    | 'key_withheld' // sender's device refused to share the key
+    | 'session_missing' // key never arrived; might come later
+    | 'verification' // sender device isolation policy rejected it
+    | 'unknown'
+    | null;
 }
 
 export interface RoomMembershipEvent extends BaseEvent {

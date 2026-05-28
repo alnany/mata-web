@@ -22,7 +22,7 @@ import type {
   RoomMember,
 } from '@mata/shared/matrix';
 import { dayLabel, isSameDay, shortTime } from '../lib/date-buckets.js';
-import { MessageBubble, type MessageActions } from '../components/message-bubble.js';
+import { MessageBubble, type MessageActions, encryptedReasonCopy } from '../components/message-bubble.js';
 import { ThreadPanel } from '../components/thread-panel.js';
 import { Composer } from '../components/composer.js';
 import { RoomHeader } from '../components/room-header.js';
@@ -102,6 +102,13 @@ export function RoomView(props: {
    * round-trip.
    */
   rooms: RoomSummary[];
+  /**
+   * Open the Settings → Encryption panel. Wired through `home.tsx` so
+   * the timeline's "Restore from backup" CTA on a collapsed run of
+   * undecryptable events can jump straight to the recovery flow
+   * without the user hunting through settings.
+   */
+  onOpenEncryptionSettings?: () => void;
 }) {
   const bridge = useBridge();
   const me = (): UserId | null => {
@@ -809,7 +816,20 @@ export function RoomView(props: {
   // ---- Render list with day separators + grouping ------------------------
   type Row =
     | { kind: 'day'; ts: number; key: string }
-    | { kind: 'msg'; ev: TimelineEvent; showHeader: boolean; key: string };
+    | { kind: 'msg'; ev: TimelineEvent; showHeader: boolean; key: string }
+    | {
+        // Collapsed run of consecutive undecryptable events. Renders as
+        // one muted marker instead of N gravestones. Most common after
+        // login on a fresh device, when the timeline backfills past
+        // messages we don't have keys for.
+        kind: 'utdGroup';
+        count: number;
+        dominantReason: string | null;
+        recoverable: boolean;
+        startEventId: EventId;
+        endEventId: EventId;
+        key: string;
+      };
 
   const eventById = createMemo(() => {
     const map = new Map<EventId, TimelineEvent>();
@@ -872,6 +892,90 @@ export function RoomView(props: {
     let lastTs = 0;
     for (let i = 0; i < evs.length; i++) {
       const ev = evs[i];
+      // ---- collapse runs of undecryptable events ------------------------
+      // A timeline backfilled from a fresh device often contains long
+      // stretches of m.room.encrypted/failed events (we have no keys for
+      // them). Rendering each one as its own marker is visual noise. If
+      // 2+ failed events appear in a row, fold them into a single
+      // `utdGroup` row. Day-divider logic still runs against the FIRST
+      // event of the group so we don't lose the date boundary.
+      if (ev.type === 'm.room.encrypted' && ev.decryptionStatus === 'failed') {
+        let j = i;
+        while (
+          j < evs.length &&
+          evs[j].type === 'm.room.encrypted' &&
+          (evs[j] as Extract<TimelineEvent, { type: 'm.room.encrypted' }>)
+            .decryptionStatus === 'failed' &&
+          isSameDay(ev.originServerTs, evs[j].originServerTs)
+        ) {
+          j++;
+        }
+        const runLen = j - i;
+        // Day boundary for the start of the run.
+        if (out.length === 0 || !isSameDay(lastTs, ev.originServerTs)) {
+          const dayKey = `d-${ev.eventId}`;
+          let dayRow = rowCache.get(dayKey);
+          if (!dayRow || dayRow.kind !== 'day' || dayRow.ts !== ev.originServerTs) {
+            dayRow = { kind: 'day', ts: ev.originServerTs, key: dayKey };
+            rowCache.set(dayKey, dayRow);
+          }
+          seen.add(dayKey);
+          out.push(dayRow);
+        }
+        if (runLen >= 2) {
+          // Pick the most common failure reason in the run for copy.
+          const tally = new Map<string, number>();
+          for (let k = i; k < j; k++) {
+            const e = evs[k] as Extract<TimelineEvent, { type: 'm.room.encrypted' }>;
+            const r = e.failureReason ?? 'unknown';
+            tally.set(r, (tally.get(r) ?? 0) + 1);
+          }
+          let dominantReason: string | null = null;
+          let best = 0;
+          for (const [k, v] of tally) {
+            if (v > best) {
+              best = v;
+              dominantReason = k;
+            }
+          }
+          const startId = ev.eventId;
+          const endId = evs[j - 1].eventId;
+          // Treat historical / session_missing as potentially recoverable
+          // via key backup restore. Withheld / verification failures are
+          // policy-level and can't be fixed by restoring a backup.
+          const recoverable =
+            dominantReason === 'historical' || dominantReason === 'session_missing';
+          const grpKey = `utd-${startId}-${endId}`;
+          let grpRow = rowCache.get(grpKey);
+          if (
+            !grpRow ||
+            grpRow.kind !== 'utdGroup' ||
+            grpRow.count !== runLen ||
+            grpRow.dominantReason !== dominantReason ||
+            grpRow.recoverable !== recoverable
+          ) {
+            grpRow = {
+              kind: 'utdGroup',
+              count: runLen,
+              dominantReason,
+              recoverable,
+              startEventId: startId,
+              endEventId: endId,
+              key: grpKey,
+            };
+            rowCache.set(grpKey, grpRow);
+          }
+          seen.add(grpKey);
+          out.push(grpRow);
+          lastSender = null;
+          lastTs = evs[j - 1].originServerTs;
+          i = j - 1;
+          continue;
+        }
+        // Singleton UTD — fall through to normal msg-row rendering so
+        // it still shows up; SystemRow inside MessageBubble handles it.
+      }
+      // ---- normal row path ----------------------------------------------
       if (i === 0 || !isSameDay(lastTs, ev.originServerTs)) {
         const dayKey = `d-${ev.eventId}`;
         let dayRow = rowCache.get(dayKey);
@@ -1010,6 +1114,13 @@ export function RoomView(props: {
                 {(row) =>
                   row.kind === 'day' ? (
                     <DayDivider ts={row.ts} />
+                  ) : row.kind === 'utdGroup' ? (
+                    <UndecryptableGroupRow
+                      count={row.count}
+                      dominantReason={row.dominantReason}
+                      recoverable={row.recoverable}
+                      onRestore={() => props.onOpenEncryptionSettings?.()}
+                    />
                   ) : (
                     <MessageBubble
                       ev={row.ev}
@@ -1108,6 +1219,45 @@ export function RoomView(props: {
 }
 
 // ---- Sub-components --------------------------------------------------------
+
+/**
+ * Collapsed marker for a run of consecutive undecryptable events.
+ * Renders as ONE muted pill with the count and, when the failure
+ * is recoverable (historical / session_missing), an inline
+ * "Restore from backup" link that opens the encryption panel.
+ *
+ * Replaces what used to be N separate "** Unable to decrypt:
+ * DecryptionError: ... **" gravestones on a fresh-login timeline
+ * backfill.
+ */
+function UndecryptableGroupRow(props: {
+  count: number;
+  dominantReason: string | null;
+  recoverable: boolean;
+  onRestore?: () => void;
+}) {
+  return (
+    <li class="my-2 flex justify-center px-1">
+      <span class="inline-flex items-center gap-2 rounded-full border border-line bg-elev px-3 py-1 text-[11px] italic text-fg-3">
+        <span aria-hidden="true">🔒</span>
+        <span>
+          {props.count} encrypted{' '}
+          {props.count === 1 ? 'message' : 'messages'} —{' '}
+          {encryptedReasonCopy(props.dominantReason).replace(/^Encrypted — /, '')}
+        </span>
+        <Show when={props.recoverable && props.onRestore}>
+          <button
+            type="button"
+            onClick={() => props.onRestore?.()}
+            class="ml-1 rounded-full bg-mata-500 px-2 py-0.5 text-[10px] font-medium not-italic text-white transition-colors hover:bg-mata-600"
+          >
+            Restore from backup
+          </button>
+        </Show>
+      </span>
+    </li>
+  );
+}
 
 function DayDivider(props: { ts: number }) {
   // Telegram-style: pill floats over a thin horizontal rule that spans
