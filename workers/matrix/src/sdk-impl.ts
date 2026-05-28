@@ -1509,7 +1509,7 @@ export class SdkSession {
         deltas: [
           {
             roomId: room.roomId as RoomId,
-            summary: partialSummary(room, c),
+            summary: partialSummary(room, client),
             newEvents: [tev],
           },
         ],
@@ -1574,7 +1574,7 @@ export class SdkSession {
         deltas: [
           {
             roomId: roomId as RoomId,
-            summary: partialSummary(room, c),
+            summary: partialSummary(room, client),
             newEvents: [tev],
           },
         ],
