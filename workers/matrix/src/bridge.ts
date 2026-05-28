@@ -308,26 +308,56 @@ export function installBridge(scope: DedicatedWorkerGlobalScope): BridgeContext 
           const key = `${res.status}:${family}`;
           if (!seenFailures.has(key)) {
             seenFailures.add(key);
-            emit({
-              kind: 'syncStatus',
-              status: 'reconnecting',
-              reason: `http ${res.status} on ${family}`,
-            });
+            // Same rule as the success branch: during startup the pill
+            // is our progress indicator, after startup the pill follows
+            // SDK SyncState only. A single 400 on /receipt (matrix-js-sdk
+            // emits a malformed receipt id intermittently — known SDK
+            // quirk, not a real connectivity loss) shouldn't drag the
+            // pill to "reconnecting" while sync is fine. Real connectivity
+            // problems hit the catch branch below AND the SDK's own
+            // SyncState.Reconnecting / Error event.
+            if (startupTraceMode) {
+              emit({
+                kind: 'syncStatus',
+                status: 'reconnecting',
+                reason: `http ${res.status} on ${family}`,
+              });
+            } else {
+              emit({
+                kind: 'diagNote',
+                note: `http ${res.status} on ${family}`,
+              });
+            }
           }
         } else {
           const key = `ok:${method}:${family}`;
-          // During startup, ALWAYS emit ok lines (with a request seq
-          // counter so dedup across identical calls still gives visible
-          // progress). Once sync is live, only emit the first ok per
-          // family to avoid log flood.
-          const shouldEmit = startupTraceMode || !seenOk.has(key);
-          if (shouldEmit) {
+          // During startup we touch the pill on every endpoint so the
+          // user can SEE the SDK making progress (the 4-second sync
+          // null window used to be a silent black box). After PREPARED
+          // the pill must follow ONLY the SDK's own SyncState — otherwise
+          // every routine PUT /typing or POST /receipt flickers the pill
+          // back to "connecting" forever, even though sync is healthy.
+          // Post-startup, route successful traces to `diagNote` which
+          // lands in the log panel but does not change pill state.
+          if (startupTraceMode) {
+            if (!seenOk.has(key)) {
+              seenOk.add(key);
+              const ms = Date.now() - startedAt;
+              emit({
+                kind: 'syncStatus',
+                status: 'connecting',
+                reason: `ok ${method} ${family} (${ms}ms)`,
+              });
+            }
+          } else if (!seenOk.has(key)) {
+            // First-time-this-session endpoint after startup — log it
+            // once for forensic value, but as a diag note so the pill
+            // stays put.
             seenOk.add(key);
             const ms = Date.now() - startedAt;
             emit({
-              kind: 'syncStatus',
-              status: 'connecting',
-              reason: `ok ${method} ${family} (${ms}ms)`,
+              kind: 'diagNote',
+              note: `ok ${method} ${family} (${ms}ms)`,
             });
           }
         }
