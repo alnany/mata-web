@@ -1,4 +1,4 @@
-import { createResource, For, Show, createSignal } from 'solid-js';
+import { createEffect, createResource, For, Show, createSignal } from 'solid-js';
 import { useBridge } from '../bridge/context.js';
 import { session, setSession } from '../stores/session.js';
 import { themeMode, setThemeMode, type ThemeMode } from '../stores/theme.js';
@@ -27,13 +27,32 @@ import { startVerification } from '../stores/verification.js';
  * (setDisplayName, setAvatar, pushRules). Same for device verification
  * (E2EE phase).
  */
-export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
+type SettingsTab = 'profile' | 'appearance' | 'encryption' | 'devices';
+
+export function SettingsDrawer(props: {
+  open: boolean;
+  onClose: () => void;
+  /**
+   * Optional tab to land on when the drawer opens. Used by the
+   * timeline's "Restore from backup" CTA, which deep-links straight
+   * to the Encryption tab. When omitted/null, falls back to the
+   * previously-selected tab (defaults to 'profile' on first open).
+   */
+  initialTab?: SettingsTab | null;
+}) {
   const bridge = useBridge();
   const navigate = useNavigate();
 
-  const [tab, setTab] = createSignal<
-    'profile' | 'appearance' | 'encryption' | 'devices'
-  >('profile');
+  const [tab, setTab] = createSignal<SettingsTab>('profile');
+
+  // When the drawer is opened with an explicit initialTab, jump to it.
+  // We watch (open, initialTab) together so that re-opening the drawer
+  // with the same tab still re-applies — e.g. user closes the drawer,
+  // clicks Restore again, and we re-land on Encryption even though the
+  // `initialTab` value didn't change between the two opens.
+  createEffect(() => {
+    if (props.open && props.initialTab) setTab(props.initialTab);
+  });
 
   const [devices] = createResource<Device[]>(
     () => (props.open && tab() === 'devices' ? Math.random() : null), // refetch when tab opened
