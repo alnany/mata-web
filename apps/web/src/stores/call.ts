@@ -23,6 +23,7 @@ import {
   type CallSignalingPort,
   type CallSnapshot,
 } from '../lib/webrtc-call.js';
+import { startRinging, stopRinging } from '../lib/ringtone.js';
 import { showToast } from './toast.js';
 import { prettyName } from '../components/message-bubble.js';
 
@@ -55,11 +56,11 @@ function bindSession(s: CallSession): void {
     // avoids re-creating the WebAudio nodes on every snapshot tick.
     if (!ringerStarted && (snap.state === 'ringing_in' || snap.state === 'ringing_out')) {
       ringerStarted = true;
-      ringtone.start(snap.state === 'ringing_in' ? 'incoming' : 'outgoing');
+      startRinging(snap.state === 'ringing_in' ? 'incoming' : 'outgoing');
     }
     if (ringerStarted && snap.state !== 'ringing_in' && snap.state !== 'ringing_out') {
       ringerStarted = false;
-      ringtone.stop();
+      stopRinging();
     }
     if (snap.state === 'connecting' || snap.state === 'connected') {
       everAccepted = true;

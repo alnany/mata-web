@@ -330,16 +330,27 @@ export class CallSession {
     }
   }
 
-  receiveHangup(_content: Record<string, unknown>): void {
+  receiveHangup(content: Record<string, unknown>): void {
     if (this.state === 'idle' || this.state === 'ended') return;
+    // Surface meaningful reasons. If we never connected and the remote
+    // hung up, the most likely diagnosis is "user_busy" (their other
+    // device picked up) or "invite_timeout" (they were AFK). For the
+    // already-connected case the reason matters less — the timer makes
+    // the duration clear — so we leave errorMessage null and let the
+    // overlay show its neutral "Call ended" text.
+    const reason =
+      typeof content.reason === 'string' ? (content.reason as string) : null;
+    if (this.state !== 'connected' && reason) {
+      this.errorMessage = mapHangupReason(reason);
+    }
     this.teardown('ended');
   }
 
   receiveReject(content: Record<string, unknown>): void {
     if (this.direction !== 'outbound' || this.state !== 'ringing_out') return;
     const reason =
-      typeof content.reason === 'string' ? (content.reason as string) : 'rejected';
-    this.errorMessage = `Call declined (${reason})`;
+      typeof content.reason === 'string' ? (content.reason as string) : null;
+    this.errorMessage = reason ? mapHangupReason(reason) : 'Call declined';
     this.teardown('ended');
   }
 
@@ -519,6 +530,38 @@ function msgOf(err: unknown): string {
  * means the caller wants video. This drives our local getUserMedia
  * constraint when the user accepts.
  */
+/**
+ * Translate spec-defined `m.call.hangup.reason` strings into a
+ * sentence the user can read. Anything we don't recognise falls
+ * through to a Title-Cased version of the raw token — better than
+ * showing `user_hangup` literally and better than swallowing the
+ * detail entirely (which would hide e.g. ICE failures from any
+ * future debugging session).
+ */
+function mapHangupReason(reason: string): string {
+  switch (reason) {
+    case 'ice_failed':
+    case 'ice_timeout':
+      return "Couldn't reach the other side.";
+    case 'invite_timeout':
+      return 'No answer.';
+    case 'user_busy':
+      return 'They were on another call.';
+    case 'user_hangup':
+      return 'Call ended.';
+    case 'user_media_failed':
+      return 'Their microphone or camera failed.';
+    case 'unknown_error':
+      return 'Call ended unexpectedly.';
+    default: {
+      const titled = reason
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+      return titled;
+    }
+  }
+}
+
 function inferMediaFromSdp(sdp: string): CallMedia {
   for (const line of sdp.split('\n')) {
     if (line.startsWith('m=video')) {
