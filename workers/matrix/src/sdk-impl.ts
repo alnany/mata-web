@@ -25,6 +25,7 @@ import {
   MatrixEventEvent,
   EventType,
   MsgType,
+  PendingEventOrdering,
   type MatrixClient,
   type Room,
   type MatrixEvent,
@@ -1069,6 +1070,31 @@ export class SdkSession {
       userId: record.userId,
       deviceId: record.deviceId,
       timelineSupport: true,
+      // `Detached` keeps locally-echoed sends OUT of the live timeline
+      // until the server's /sync confirms them. With the default
+      // `Chronological`, matrix-js-sdk inserts the local echo into the
+      // timeline immediately (with a synthetic `~!room:txn` event id
+      // and status='sending'), fires RoomEvent.Timeline for it, and
+      // then silently mutates that same MatrixEvent in place when the
+      // remote echo lands (no second Timeline fire). That breaks our
+      // UI in two ways:
+      //
+      //   (a) the local echo emits with status != null, which our
+      //       worker filter drops — so the message vanishes from the
+      //       UI the moment sendStatus 'sent' clears the pending bubble
+      //       (the "sending messages doesn't work" symptom);
+      //   (b) before the filter existed, the synthetic-id event AND
+      //       the (server-confirmed) post-handleRemoteEcho event both
+      //       reached the UI under different ids, producing the
+      //       "appears twice" flash.
+      //
+      // With `Detached`, addPendingEvent goes into a separate
+      // `pendingEventList` (no Timeline fire), and the sync delivery
+      // is the ONLY Timeline fire — with status=null and the real
+      // event id. The pending-bubble UI in room-view covers the
+      // optimistic display window; sync delivery + our atomic
+      // pending-to-events transfer handle the lock-in.
+      pendingEventOrdering: PendingEventOrdering.Detached,
       // Wire the SSSS callback so that any time the SDK needs to
       // decrypt an SSSS-protected secret (cross-signing private parts,
       // backup decryption key) it can look up the cached private bytes
