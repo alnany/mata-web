@@ -13,7 +13,7 @@ import { NewRoomModal } from '../components/new-room-modal.js';
 import { readRoomList, writeRoomList } from '../lib/persistent-cache.js';
 import { listTime } from '../lib/date-buckets.js';
 import { initials, gradientForUser } from '../components/message-bubble.js';
-import { BrandSquare, Mark } from '../components/logo.js';
+import { Mark } from '../components/logo.js';
 
 /**
  * Three-column shell: rail (64) · room list (296) · conversation (flex).
@@ -232,15 +232,14 @@ export function HomePage() {
   };
 
   return (
-    <div class="grid h-full min-h-0 w-full grid-cols-[64px_296px_1fr] bg-app">
-      <Rail
-        syncState={syncState()}
-        syncReason={syncReason()}
-        onSettings={() => setSettingsOpen(true)}
-        myName={myName()}
-      />
-
-      {/* -------- Room list column (296px) ---------------------------- */}
+    <div class="grid h-full min-h-0 w-full grid-cols-[296px_1fr] bg-app">
+      {/* -------- Room list column (296px) ----------------------------
+          The decorative 64px workspace rail was removed in 21:53 push —
+          Mata is single-account by scope (msg-Fq9gvzU1xNzXw55k). The
+          rail's only functional control (Settings) now lives in MeBar.
+          Brand mark + sync state were already mirrored in the list
+          header ("mata /personal" wordmark) and MeBar avatar dot, so
+          nothing user-facing was lost. ------------------------------ */}
       <aside
         class="flex h-full min-h-0 flex-col border-r bg-list"
         style={{ 'border-color': 'var(--color-line)' }}
@@ -379,6 +378,7 @@ export function HomePage() {
           syncState={syncState()}
           syncReason={syncReason()}
           onNewRoom={() => setNewRoomOpen(true)}
+          onSettings={() => setSettingsOpen(true)}
         />
       </aside>
 
@@ -413,89 +413,6 @@ export function HomePage() {
         }}
       />
     </div>
-  );
-}
-
-/* =========================================================================
-   Workspace rail — 64px column.
-   Per user rule (msg-cGZsaJps5Lj4T7hG): NO multi-workspace squares.
-   ========================================================================= */
-
-function Rail(props: {
-  syncState: string;
-  syncReason?: string;
-  onSettings: () => void;
-  myName: string;
-}) {
-  return (
-    <nav
-      class="flex h-full flex-col items-center border-r bg-rail py-3"
-      style={{ 'border-color': 'var(--color-line)' }}
-      aria-label="Primary navigation"
-    >
-      {/* Brand */}
-      <div title="Mata" class="mb-4">
-        <BrandSquare />
-      </div>
-
-      {/* Sync indicator — repurposes the e2ee pulse pattern as the only
-          rail-level status surface (since we strip the design's titlebar
-          breadcrumb per the project-scope rule). */}
-      <SyncDot state={props.syncState} reason={props.syncReason} />
-
-      <div class="flex-1" />
-
-      {/* Settings */}
-      <button
-        type="button"
-        onClick={props.onSettings}
-        class="flex h-[38px] w-[38px] items-center justify-center rounded-[10px] text-fg-3 transition-colors hover:bg-elev hover:text-fg"
-        aria-label="Settings"
-        title="Settings"
-      >
-        <IconSettings class="h-[15px] w-[15px]" />
-      </button>
-
-      {/* User avatar (lime gradient for self) */}
-      <div
-        class="mt-2 flex h-[30px] w-[30px] items-center justify-center rounded-[8px] text-[11px]"
-        style={{
-          background: 'linear-gradient(135deg, #c8f64d, #98c233)',
-          color: '#0a0a0b',
-          'font-weight': 600,
-        }}
-        title={props.myName}
-      >
-        {initials(props.myName || '?')}
-      </div>
-    </nav>
-  );
-}
-
-function SyncDot(props: { state: string; reason?: string }) {
-  const tone = () => {
-    switch (props.state) {
-      case 'syncing':
-        return { color: 'var(--color-accent)', pulse: false, label: 'synced' };
-      case 'error':
-        return { color: 'var(--color-danger)', pulse: false, label: 'sync error' };
-      case 'reconnecting':
-      case 'connecting':
-        return { color: 'var(--color-warn)', pulse: true, label: props.state };
-      default:
-        return { color: 'var(--color-fg-4)', pulse: false, label: 'idle' };
-    }
-  };
-  return (
-    <span
-      class={`my-1 inline-block h-1.5 w-1.5 rounded-full ${tone().pulse ? 'mata-pulse' : ''}`}
-      style={{
-        background: tone().color,
-        'box-shadow': props.state === 'syncing' ? '0 0 6px var(--color-accent)' : 'none',
-      }}
-      title={`${tone().label}${props.reason ? ` · ${props.reason}` : ''}`}
-      aria-label={tone().label}
-    />
   );
 }
 
@@ -743,10 +660,29 @@ function MeBar(props: {
   syncState: string;
   syncReason?: string;
   onNewRoom: () => void;
+  onSettings: () => void;
 }) {
+  // Map raw sync state → user-readable status + visible color. The MeBar
+  // status dot is now the ONLY sync surface (the rail's SyncDot was
+  // removed in the 21:53 push). We previously hardcoded the accent color
+  // regardless of state, which silently hid disconnected/error/reconnect
+  // signals from the user.
+  const status = () => {
+    switch (props.syncState) {
+      case 'syncing':
+        return { color: 'var(--color-accent)', pulse: false, label: 'Synced' };
+      case 'error':
+        return { color: 'var(--color-danger)', pulse: false, label: 'Sync error' };
+      case 'reconnecting':
+      case 'connecting':
+        return { color: 'var(--color-warn)', pulse: true, label: props.syncState };
+      default:
+        return { color: 'var(--color-fg-4)', pulse: false, label: 'Idle' };
+    }
+  };
   return (
     <footer
-      class="grid grid-cols-[28px_1fr_auto] items-center gap-[10px] border-t bg-list px-[14px] py-[10px]"
+      class="grid grid-cols-[28px_1fr_auto_auto] items-center gap-[8px] border-t bg-list px-[14px] py-[10px]"
       style={{ 'border-color': 'var(--color-line)' }}
     >
       <div class="relative">
@@ -761,12 +697,13 @@ function MeBar(props: {
           {initials(props.name || '?')}
         </div>
         <span
-          class="absolute -bottom-0.5 -right-0.5 h-[9px] w-[9px] rounded-full"
+          class={`absolute -bottom-0.5 -right-0.5 h-[9px] w-[9px] rounded-full ${status().pulse ? 'mata-pulse' : ''}`}
           style={{
-            background: 'var(--color-accent)',
+            background: status().color,
             'box-shadow': '0 0 0 2px var(--color-list)',
           }}
-          title={props.syncReason || props.syncState}
+          title={`${status().label}${props.syncReason ? ` · ${props.syncReason}` : ''}`}
+          aria-label={status().label}
         />
       </div>
       <div class="min-w-0">
@@ -775,6 +712,15 @@ function MeBar(props: {
         </div>
         <div class="mono truncate text-[10.5px] text-fg-4">{props.handle}</div>
       </div>
+      <button
+        type="button"
+        onClick={props.onSettings}
+        class="flex h-[26px] w-[26px] items-center justify-center rounded-[6px] text-fg-3 hover:bg-elev hover:text-fg"
+        aria-label="Settings"
+        title="Settings"
+      >
+        <IconSettings class="h-[14px] w-[14px]" />
+      </button>
       <button
         type="button"
         onClick={props.onNewRoom}
