@@ -28,6 +28,7 @@ import { Composer } from '../components/composer.js';
 import { RoomHeader } from '../components/room-header.js';
 import { MembersPanel } from '../components/members-panel.js';
 import { SearchPanel } from '../components/search-panel.js';
+import { ForwardModal } from '../components/forward-modal.js';
 
 /**
  * Per-room state held by the parent so re-opening a previously-loaded
@@ -93,6 +94,14 @@ export function RoomView(props: {
   room: RoomSummary;
   cache: RoomCache;
   setCache: (roomId: RoomId, updater: (cache: RoomCache) => void) => void;
+  /**
+   * Full joined-rooms list, threaded through from `home.tsx`. The
+   * ForwardModal needs it to render the target picker; we accept
+   * the entire list (not just a callback) so the modal can do
+   * client-side filtering on every keystroke without an extra
+   * round-trip.
+   */
+  rooms: RoomSummary[];
 }) {
   const bridge = useBridge();
   const me = (): UserId | null => {
@@ -137,6 +146,10 @@ export function RoomView(props: {
   const [openThread, setOpenThread] = createSignal<EventId | null>(null);
   const [focusToken, setFocusToken] = createSignal(0);
   const [membersOpen, setMembersOpen] = createSignal(false);
+  // Forward-target picker. Holds the source message until the user
+  // either picks a target (modal closes via its own success path) or
+  // dismisses (we clear via onClose).
+  const [forwardSource, setForwardSource] = createSignal<RoomMessageEvent | null>(null);
   const [searchOpen, setSearchOpen] = createSignal(false);
 
   // Pending intentional mentions for the next send. Composer pushes
@@ -772,6 +785,9 @@ export function RoomView(props: {
       // way to dismiss from the message menu without reopening.
       setOpenThread((cur) => (cur === rootEventId ? null : rootEventId));
     },
+    onForward: (ev) => {
+      setForwardSource(ev);
+    },
     onJumpTo: (eventId) => {
       const target = document.querySelector(`[data-event-id="${cssEsc(eventId)}"]`);
       if (target instanceof HTMLElement) {
@@ -1036,6 +1052,12 @@ export function RoomView(props: {
         open={searchOpen()}
         onClose={() => setSearchOpen(false)}
         onSelect={(eventId) => actions.onJumpTo(eventId)}
+      />
+      <ForwardModal
+        open={forwardSource() !== null}
+        source={forwardSource()}
+        rooms={props.rooms}
+        onClose={() => setForwardSource(null)}
       />
       <Show when={openThread()}>
         {(rootId) => (

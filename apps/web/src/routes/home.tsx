@@ -397,6 +397,7 @@ export function HomePage() {
                 room={room()}
                 cache={caches[room().roomId]}
                 setCache={updateCache}
+                rooms={joinedRooms()}
               />
             );
           }}

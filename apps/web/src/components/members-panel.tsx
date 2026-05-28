@@ -29,6 +29,7 @@ import type { RoomMember, RoomSummary, UserId } from '@mata/shared/matrix';
 import { useBridge } from '../bridge/context.js';
 import { showToast } from '../stores/toast.js';
 import { initials, prettyName } from './message-bubble.js';
+import { InviteUserModal } from './invite-user-modal.js';
 
 export function MembersPanel(props: {
   room: RoomSummary;
@@ -39,6 +40,7 @@ export function MembersPanel(props: {
   const bridge = useBridge();
   const [search, setSearch] = createSignal('');
   const [acting, setActing] = createSignal<Record<string, boolean>>({});
+  const [inviteOpen, setInviteOpen] = createSignal(false);
 
   // `version` is a bumpable token to force createResource to re-fetch
   // after we mutate (kick / invite). Solid's resource refetch() would
@@ -123,8 +125,17 @@ export function MembersPanel(props: {
           </span>
           <button
             type="button"
+            onClick={() => setInviteOpen(true)}
+            class="ml-auto rounded-md px-2 py-1 text-[11.5px] font-medium text-mata-500 hover:bg-input"
+            aria-label="Invite a person"
+            title="Invite a person"
+          >
+            + Invite
+          </button>
+          <button
+            type="button"
             onClick={props.onClose}
-            class="ml-auto rounded p-1 text-fg-3 hover:bg-input hover:text-fg"
+            class="rounded p-1 text-fg-3 hover:bg-input hover:text-fg"
             aria-label="Close"
           >
             ✕
@@ -192,6 +203,13 @@ export function MembersPanel(props: {
           </Switch>
         </div>
       </aside>
+      <InviteUserModal
+        open={inviteOpen()}
+        roomId={props.room.roomId}
+        roomName={props.room.name || props.room.roomId}
+        onClose={() => setInviteOpen(false)}
+        onInvited={() => setVersion(version() + 1)}
+      />
     </Show>
   );
 }
