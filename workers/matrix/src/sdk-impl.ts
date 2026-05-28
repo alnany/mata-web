@@ -224,7 +224,21 @@ export class SdkSession {
     limit: number,
   ): Promise<{ events: TimelineEvent[]; prevToken: string | null }> {
     const c = this.requireClient();
-    const room = c.getRoom(roomId);
+    // Cold-start race: the IndexedDB room-list cache paints rooms
+    // before the SDK's first /sync populates client state. If the user
+    // clicks one of those cached rows during the gap, c.getRoom is
+    // null and the old code threw "Unknown room" immediately. Poll
+    // briefly — sync.Room arrives on the very next delta in the
+    // typical case (a few hundred ms after auth on a warm session,
+    // up to a few seconds on the first cold sync).
+    let room = c.getRoom(roomId);
+    if (!room) {
+      const deadline = Date.now() + 8000;
+      while (!room && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 150));
+        room = c.getRoom(roomId);
+      }
+    }
     if (!room) throw syncError(`Unknown room ${roomId}`);
     const liveTimeline = room.getLiveTimeline();
     if (fromToken !== null) {
