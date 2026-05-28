@@ -5,6 +5,7 @@ import { useBridge } from '../bridge/context.js';
 import { bridgeDiag } from '../bridge/worker-client.js';
 import { session, setSession } from '../stores/session.js';
 import { showToast } from '../stores/toast.js';
+import { activeCall } from '../stores/call.js';
 import type { RoomId, RoomSummary } from '@mata/shared/matrix';
 import { RoomView, createRoomCache, type RoomCache } from './room-view.js';
 import { SettingsDrawer } from '../components/settings-drawer.js';
@@ -360,6 +361,7 @@ export function HomePage() {
                   room={room}
                   active={activeId() === room.roomId}
                   onSelect={() => openRoom(room)}
+                  callBusyHere={activeCall()?.roomId === room.roomId}
                 />
               )}
             </For>
@@ -514,7 +516,19 @@ function SyncBanner(props: {
   );
 }
 
-function RoomRow(props: { room: RoomSummary; active: boolean; onSelect: () => void }) {
+function RoomRow(props: {
+  room: RoomSummary;
+  active: boolean;
+  onSelect: () => void;
+  /**
+   * True when this room is the current active call's room. Drives the
+   * Phase 14.1 busy-line indicator. Computed by the parent against
+   * `activeCall()` so this component stays presentation-only and the
+   * Solid reactivity graph correctly invalidates the row when the
+   * call ends.
+   */
+  callBusyHere: boolean;
+}) {
   const r = props.room;
   return (
     <li>
@@ -532,6 +546,24 @@ function RoomRow(props: { room: RoomSummary; active: boolean; onSelect: () => vo
           <Show when={r.isEncrypted}>
             <span class="absolute -bottom-0.5 -right-0.5 text-[10px]" title="Encrypted">
               🔒
+            </span>
+          </Show>
+          {/* Phase 14.1 — busy-line indicator. A small green dot
+              with a phone glyph sits on the avatar of any room that
+              currently hosts our active call. We do NOT show this for
+              every room with VoIP traffic on the homeserver (we have
+              no way to know), only the one we ourselves are talking
+              in — that's the one the user might switch away from and
+              forget. The pulsing animation is `animate-pulse` from
+              Tailwind, kept subtle so it doesn't drag attention from
+              unread badges. */}
+          <Show when={props.callBusyHere}>
+            <span
+              class="absolute -top-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-[8px] text-white ring-2 ring-white animate-pulse dark:ring-neutral-950"
+              title="Call in progress"
+              aria-label="Call in progress in this room"
+            >
+              📞
             </span>
           </Show>
         </div>
