@@ -244,20 +244,26 @@ export function Composer(props: {
   };
 
   return (
-    <div class="border-t border-neutral-200 bg-neutral-50 px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900">
+    <div
+      class="border-t bg-conv px-[22px] pb-[18px] pt-[12px]"
+      style={{ 'border-color': 'var(--color-line)' }}
+    >
       <Show when={contextStrip()}>
         {(strip) => (
-          <div class={`mb-2 flex items-start gap-2 rounded-md border-l-2 bg-white px-3 py-1.5 dark:bg-neutral-950 ${strip().tone}`}>
+          <div
+            class="mb-2 flex items-start gap-2 rounded-[8px] border-l-2 bg-elev px-3 py-1.5"
+            style={{ 'border-left-color': 'var(--color-accent)' }}
+          >
             <div class="min-w-0 flex-1">
-              <div class="text-[11px] font-medium text-neutral-500">{strip().label}</div>
-              <div class="truncate text-xs text-neutral-700 dark:text-neutral-300">
-                {strip().preview}
+              <div class="mono text-[10.5px] uppercase tracking-[0.04em] text-fg-4">
+                {strip().label}
               </div>
+              <div class="truncate text-[12.5px] text-fg-2">{strip().preview}</div>
             </div>
             <button
               type="button"
               onClick={props.onCancelContext}
-              class="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
+              class="rounded-[6px] p-1 text-fg-3 hover:bg-input hover:text-fg"
               aria-label="Cancel"
               title="Cancel (Esc)"
             >
@@ -267,30 +273,12 @@ export function Composer(props: {
         )}
       </Show>
 
-      <div class="flex items-end gap-2">
-        <Show when={props.onAttach && !props.editing}>
-          <input
-            ref={fileInputRef}
-            type="file"
-            class="hidden"
-            onChange={(e) => {
-              const file = e.currentTarget.files?.[0];
-              if (file && props.onAttach) props.onAttach(file);
-              // Reset so the same file can be picked again later.
-              e.currentTarget.value = '';
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef?.click()}
-            class="h-9 w-9 shrink-0 rounded-full text-neutral-500 transition-colors hover:bg-neutral-200 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-            aria-label="Attach file"
-            title="Attach file"
-          >
-            📎
-          </button>
-        </Show>
-        <div class="relative flex-1">
+      {/* Composer frame — single unified rect, textarea + actions row */}
+      <div
+        class="rounded-[12px] border bg-input px-[12px] pb-[8px] pt-[10px] transition-colors focus-within:border-[var(--color-line-2)]"
+        style={{ 'border-color': 'var(--color-line)' }}
+      >
+        <div class="relative">
           <MentionPopover
             results={mentionState()?.results ?? []}
             activeIndex={mentionState()?.activeIndex ?? 0}
@@ -305,7 +293,8 @@ export function Composer(props: {
             value={props.draft()}
             placeholder={props.editing ? 'Edit your message…' : 'Message'}
             rows={1}
-            class="w-full resize-none rounded-2xl border border-neutral-300 bg-white px-4 py-2 text-sm leading-5 outline-none focus:border-mata-500 focus:ring-2 focus:ring-mata-500/30 dark:border-neutral-700 dark:bg-neutral-950"
+            class="block w-full resize-none bg-transparent text-[14px] leading-[1.5] text-fg placeholder:text-fg-3 outline-none"
+            style={{ 'min-height': '24px' }}
             onInput={(e) => {
               props.setDraft(e.currentTarget.value);
               autosize();
@@ -313,9 +302,6 @@ export function Composer(props: {
               void refreshMention();
             }}
             onKeyDown={onKey}
-            // Selection-change events fire for clicks + arrow keys, so the
-            // popover opens/closes correctly when the caret crosses
-            // mention boundaries without typing.
             onClick={() => void refreshMention()}
             onKeyUp={(e) => {
               if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') {
@@ -323,23 +309,105 @@ export function Composer(props: {
               }
             }}
             onBlur={() => {
-              // Defer so a popover-click can fire first.
               setTimeout(() => setMentionState(null), 120);
             }}
           />
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            props.onSubmit();
-            requestAnimationFrame(() => autosize());
-          }}
-          disabled={!props.draft().trim()}
-          class="h-9 shrink-0 rounded-full bg-mata-500 px-4 text-sm font-semibold text-white shadow-sm transition-opacity hover:bg-mata-600 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {props.editing ? 'Save' : 'Send'}
-        </button>
+
+        {/* Actions row */}
+        <div class="mt-[6px] flex items-center gap-[2px]">
+          <Show when={props.onAttach && !props.editing}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              class="hidden"
+              onChange={(e) => {
+                const file = e.currentTarget.files?.[0];
+                if (file && props.onAttach) props.onAttach(file);
+                e.currentTarget.value = '';
+              }}
+            />
+            <ComposerIconButton
+              onClick={() => fileInputRef?.click()}
+              label="Attach file"
+            >
+              <IconPaperclip class="h-[14px] w-[14px]" />
+            </ComposerIconButton>
+          </Show>
+
+          <ComposerIconButton
+            label="Insert emoji"
+            onClick={() => {
+              /* TODO Phase B: open shared emoji picker positioned to composer. */
+            }}
+          >
+            <IconSmile class="h-[14px] w-[14px]" />
+          </ComposerIconButton>
+
+          <div class="flex-1" />
+
+          {/* E2EE status (pulse dot · mono label). Only the dot animates. */}
+          <span
+            class="mono flex items-center gap-[6px] rounded-[6px] px-[8px] py-[4px] text-[10.5px] text-fg-3"
+            title="End-to-end encrypted"
+          >
+            <span class="dot-accent mata-pulse" />
+            <span>e2ee</span>
+          </span>
+
+          {/* Send button */}
+          <button
+            type="button"
+            onClick={() => {
+              props.onSubmit();
+              requestAnimationFrame(() => autosize());
+            }}
+            disabled={!props.draft().trim()}
+            class="flex h-[30px] shrink-0 items-center gap-[6px] rounded-[7px] bg-accent pl-[14px] pr-[12px] text-[12px] text-accent-ink transition-[filter] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ 'font-weight': 500 }}
+          >
+            <span>{props.editing ? 'Save' : 'Send'}</span>
+            <span
+              class="mono rounded-[4px] px-[5px] py-[1px] text-[10px]"
+              style={{ background: 'rgba(0,0,0,0.18)' }}
+            >
+              ⌘↩
+            </span>
+          </button>
+        </div>
       </div>
     </div>
+  );
+}
+
+function ComposerIconButton(props: { label: string; onClick: () => void; children: any }) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      class="flex h-[28px] w-[28px] items-center justify-center rounded-[6px] text-fg-3 transition-colors hover:bg-elev hover:text-fg"
+      aria-label={props.label}
+      title={props.label}
+    >
+      {props.children}
+    </button>
+  );
+}
+
+function IconPaperclip(p: { class?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class={p.class}>
+      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
+}
+function IconSmile(p: { class?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class={p.class}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+      <line x1="9" y1="9" x2="9.01" y2="9" />
+      <line x1="15" y1="9" x2="15.01" y2="9" />
+    </svg>
   );
 }

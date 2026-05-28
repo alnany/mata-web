@@ -403,6 +403,32 @@ function SystemRow(props: { ev: TimelineEvent }) {
   );
 }
 
+/**
+ * Deterministic 2-stop gradient for an arbitrary id. Picks one of seven
+ * named gradients per the design spec (HANDOFF.md §"Avatar gradients").
+ *
+ * The `lime` family is reserved for the current user, so callers passing
+ * the current user's id should NOT route through this — they should
+ * apply the lime gradient directly. We exclude lime from the hash slot
+ * pool to make accidental collisions impossible.
+ */
+export function gradientForUser(userId: string | undefined): { background: string; color: string } {
+  const palette = [
+    { background: 'linear-gradient(135deg, #c97f4f, #6b3f25)', color: '#fdf3e8' }, // warm
+    { background: 'linear-gradient(135deg, #5fa0c4, #2e5972)', color: '#eaf3fb' }, // cool
+    { background: 'linear-gradient(135deg, #9b87f5, #5a4aa0)', color: '#f1ecff' }, // violet
+    { background: 'linear-gradient(135deg, #c47ec9, #6a3f6e)', color: '#f8eaf9' }, // mauve
+    { background: 'linear-gradient(135deg, #7a8f5f, #3e4a32)', color: '#eaf3d8' }, // moss
+    { background: 'linear-gradient(135deg, #c08a72, #5e3b29)', color: '#fbecd9' }, // clay
+  ];
+  let h = 0;
+  const s = userId ?? '';
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) | 0;
+  }
+  return palette[Math.abs(h) % palette.length];
+}
+
 export function initials(userId: string | undefined): string {
   if (!userId) return '?';
   const localpart = userId.startsWith('@') ? userId.slice(1).split(':')[0] : userId;
