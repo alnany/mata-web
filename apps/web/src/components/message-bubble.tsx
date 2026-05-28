@@ -26,6 +26,13 @@ export type MessageActions = {
   onEdit: (ev: RoomMessageEvent) => void;
   onDelete: (eventId: EventId) => void;
   onJumpTo: (eventId: EventId) => void;
+  /**
+   * Open the thread side-panel rooted at this message. If the
+   * message is already in a thread, this opens the existing thread
+   * at its root, not a sub-thread (Matrix doesn't support nested
+   * threads per MSC3440).
+   */
+  onOpenThread: (rootEventId: EventId) => void;
 };
 
 export function MessageBubble(props: {
@@ -181,6 +188,18 @@ export function MessageBubble(props: {
             >
               <MenuItem onClick={() => { props.actions.onReply(msg); setShowMenu(false); }}>
                 Reply
+              </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  // If this message is already in a thread, open the
+                  // existing thread root rather than try to nest —
+                  // Matrix doesn't allow nested threads.
+                  const rootId = msg.threadRoot ?? msg.eventId;
+                  props.actions.onOpenThread(rootId);
+                  setShowMenu(false);
+                }}
+              >
+                {msg.threadRoot ? 'Open thread' : 'Reply in thread'}
               </MenuItem>
               <MenuItem onClick={copyText}>Copy text</MenuItem>
               <MenuItem onClick={copyPermalink}>Copy link</MenuItem>
@@ -384,12 +403,12 @@ function SystemRow(props: { ev: TimelineEvent }) {
   );
 }
 
-function initials(userId: string): string {
+export function initials(userId: string): string {
   const localpart = userId.startsWith('@') ? userId.slice(1).split(':')[0] : userId;
   return localpart.slice(0, 2).toUpperCase();
 }
 
-function prettyName(userId: string): string {
+export function prettyName(userId: string): string {
   const localpart = userId.startsWith('@') ? userId.slice(1).split(':')[0] : userId;
   return localpart;
 }

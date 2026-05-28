@@ -23,6 +23,7 @@ import type {
 } from '@mata/shared/matrix';
 import { dayLabel, isSameDay } from '../lib/date-buckets.js';
 import { MessageBubble, type MessageActions } from '../components/message-bubble.js';
+import { ThreadPanel } from '../components/thread-panel.js';
 import { Composer } from '../components/composer.js';
 import { RoomHeader } from '../components/room-header.js';
 import { MembersPanel } from '../components/members-panel.js';
@@ -86,6 +87,12 @@ export function RoomView(props: {
   const [draft, setDraft] = createSignal('');
   const [replyingTo, setReplyingTo] = createSignal<RoomMessageEvent | null>(null);
   const [editing, setEditing] = createSignal<RoomMessageEvent | null>(null);
+  // Thread side-panel (Phase 13). null = panel closed. When set,
+  // ThreadPanel mounts with this event id as the thread root; the
+  // panel calls `loadThread` once and rides `props.cache.events` for
+  // live append. Switching rooms closes any open thread (see the
+  // room-change createEffect below).
+  const [openThread, setOpenThread] = createSignal<EventId | null>(null);
   const [focusToken, setFocusToken] = createSignal(0);
   const [membersOpen, setMembersOpen] = createSignal(false);
 
@@ -162,6 +169,7 @@ export function RoomView(props: {
         setDraft('');
         setReplyingTo(null);
         setEditing(null);
+        setOpenThread(null);
         requestAnimationFrame(() => {
           if (stickToBottom()) scrollToBottom('auto');
           bumpFocus();
@@ -545,6 +553,12 @@ export function RoomView(props: {
         })
         .catch((err) => showToast('error', `Delete failed: ${msgOf(err)}`));
     },
+    onOpenThread: (rootEventId) => {
+      // Toggle: clicking the same root closes the panel. The panel
+      // itself renders a Close button; this is the keyboard-friendly
+      // way to dismiss from the message menu without reopening.
+      setOpenThread((cur) => (cur === rootEventId ? null : rootEventId));
+    },
     onJumpTo: (eventId) => {
       const target = document.querySelector(`[data-event-id="${cssEsc(eventId)}"]`);
       if (target instanceof HTMLElement) {
@@ -668,6 +682,17 @@ export function RoomView(props: {
         myUserId={me()}
         onClose={() => setMembersOpen(false)}
       />
+      <Show when={openThread()}>
+        {(rootId) => (
+          <ThreadPanel
+            roomId={props.room.roomId}
+            threadRootId={rootId()}
+            liveEvents={() => props.cache.events}
+            myUserId={me()}
+            onClose={() => setOpenThread(null)}
+          />
+        )}
+      </Show>
     </section>
   );
 }
