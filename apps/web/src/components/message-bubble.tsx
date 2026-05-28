@@ -475,14 +475,15 @@ function MediaContent(props: { body: MediaMessageBody }) {
   const bridge = useBridge();
 
   type Loaded = { url: string; mime: string };
-  const [resource] = createResource<Loaded | null, MediaMessageBody>(
+  type LoadResult = { loaded: Loaded | null; error: string | null };
+  const [resource] = createResource<LoadResult, MediaMessageBody>(
     () => props.body,
-    async (body) => {
+    async (body): Promise<LoadResult> => {
       // Resolve the canonical mxc — for encrypted media we use file.url,
       // for plain media we use url. If neither is present (malformed
       // event) we render the filename fallback.
       const mxc = body.file?.url ?? body.url;
-      if (!mxc) return null;
+      if (!mxc) return { loaded: null, error: 'no mxc URI on event' };
       try {
         const res = await bridge.request({
           kind: 'loadMedia',
@@ -491,28 +492,46 @@ function MediaContent(props: { body: MediaMessageBody }) {
           mime: body.info.mimetype,
         });
         const blob = new Blob([res.data], { type: res.mime });
-        return { url: URL.createObjectURL(blob), mime: res.mime };
-      } catch {
-        return null;
+        return { loaded: { url: URL.createObjectURL(blob), mime: res.mime }, error: null };
+      } catch (err) {
+        // Surface the actual failure inline instead of silently rendering
+        // "unavailable" — the user is our debugger here, they shouldn't
+        // need devtools to know what's broken.
+        const msg = err instanceof Error ? err.message : String(err);
+        return { loaded: null, error: msg };
       }
     },
   );
 
   return (
     <div class="my-1">
-      <Show when={resource()} fallback={<MediaLoading body={props.body} loading={resource.loading} />}>
+      <Show
+        when={resource()?.loaded}
+        fallback={
+          <MediaLoading
+            body={props.body}
+            loading={resource.loading}
+            error={resource()?.error ?? null}
+          />
+        }
+      >
         {(r) => <MediaPlayer body={props.body} loaded={r()} />}
       </Show>
     </div>
   );
 }
 
-function MediaLoading(props: { body: MediaMessageBody; loading: boolean }) {
+function MediaLoading(props: { body: MediaMessageBody; loading: boolean; error: string | null }) {
   return (
-    <div class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900">
+    <div
+      class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900"
+      title={props.error ?? undefined}
+    >
       <span>{props.body.msgtype === 'm.image' ? '🖼️' : props.body.msgtype === 'm.video' ? '🎬' : props.body.msgtype === 'm.audio' ? '🔊' : '📎'}</span>
       <span class="truncate">{props.body.body}</span>
-      <span class="ml-auto shrink-0">{props.loading ? 'loading…' : 'unavailable'}</span>
+      <span class="ml-auto shrink-0 max-w-[60%] truncate">
+        {props.loading ? 'loading…' : props.error ? `failed: ${props.error}` : 'unavailable'}
+      </span>
     </div>
   );
 }
