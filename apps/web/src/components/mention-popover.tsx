@@ -74,7 +74,7 @@ export function MentionPopover(props: {
   return (
     <Show when={props.results.length > 0}>
       <div
-        class="absolute bottom-full left-0 right-0 mb-1 max-h-64 overflow-y-auto rounded-xl border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900"
+        class="absolute bottom-full left-0 right-0 mb-1 max-h-64 overflow-y-auto rounded-xl border border-line bg-elev shadow-lg"
         role="listbox"
       >
         <For each={props.results}>
@@ -93,17 +93,17 @@ export function MentionPopover(props: {
                 class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm"
                 classList={{
                   'bg-mata-50 dark:bg-mata-950/40': isActive(),
-                  'hover:bg-neutral-50 dark:hover:bg-neutral-800': !isActive(),
+                  'hover:bg-input': !isActive(),
                 }}
               >
-                <span class="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-neutral-200 text-[10px] font-semibold text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200">
+                <span class="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-input text-[10px] font-semibold text-fg-2">
                   {initials(prettyName(r.member.userId))}
                 </span>
                 <span class="min-w-0 flex-1">
                   <span class="block truncate font-medium">
                     {r.member.displayname || prettyName(r.member.userId)}
                   </span>
-                  <span class="block truncate text-[11px] text-neutral-500">{r.member.userId}</span>
+                  <span class="block truncate text-[11px] text-fg-3">{r.member.userId}</span>
                 </span>
               </button>
             );

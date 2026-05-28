@@ -43,11 +43,11 @@ function IncomingCallModal() {
   const peer = () => s()?.peerUserId ?? 'Unknown';
   return (
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div class="w-[320px] rounded-2xl bg-white p-6 text-center shadow-2xl dark:bg-neutral-900">
+      <div class="w-[320px] rounded-2xl bg-elev p-6 text-center shadow-2xl">
         <div class="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-mata-500/20 text-3xl">
           📞
         </div>
-        <p class="text-xs uppercase tracking-wide text-neutral-500">Incoming {s()?.media} call</p>
+        <p class="text-xs uppercase tracking-wide text-fg-3">Incoming {s()?.media} call</p>
         <h2 class="mt-1 text-lg font-semibold">{prettyName(peer())}</h2>
         <div class="mt-5 flex justify-center gap-3">
           <button
@@ -109,14 +109,14 @@ function ActiveCallCard() {
   });
 
   return (
-    <div class="fixed right-4 top-4 z-40 w-[300px] rounded-2xl bg-white p-3 shadow-2xl ring-1 ring-black/5 dark:bg-neutral-900 dark:ring-white/10">
+    <div class="fixed right-4 top-4 z-40 w-[300px] rounded-2xl bg-elev p-3 shadow-2xl ring-1 ring-black/5 dark:ring-white/10">
       <div class="flex items-center gap-3">
         <div class="h-10 w-10 shrink-0 rounded-full bg-mata-500/20 text-center text-xl leading-10">
           {s()?.media === 'video' ? '🎥' : '📞'}
         </div>
         <div class="min-w-0 flex-1">
           <div class="truncate text-sm font-semibold">{prettyName(s()?.peerUserId ?? '')}</div>
-          <div class="truncate text-xs text-neutral-500">{headline()}</div>
+          <div class="truncate text-xs text-fg-3">{headline()}</div>
         </div>
       </div>
 
@@ -159,7 +159,7 @@ function ActiveCallCard() {
           class={`rounded-full px-3 py-1.5 text-xs font-medium ${
             s()?.micMuted
               ? 'bg-red-500 text-white'
-              : 'bg-neutral-200 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200'
+              : 'bg-input text-fg'
           }`}
         >
           {s()?.micMuted ? 'Unmute' : 'Mute'}
@@ -171,7 +171,7 @@ function ActiveCallCard() {
             class={`rounded-full px-3 py-1.5 text-xs font-medium ${
               s()?.videoOff
                 ? 'bg-red-500 text-white'
-                : 'bg-neutral-200 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200'
+                : 'bg-input text-fg'
             }`}
           >
             {s()?.videoOff ? 'Video on' : 'Video off'}

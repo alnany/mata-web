@@ -113,13 +113,13 @@ function ModalBody(props: {
   return (
     <div class="fixed inset-0 z-40 flex items-center justify-center" role="dialog" aria-modal>
       <div class="absolute inset-0 bg-black/50" onClick={props.onClose} />
-      <div class="relative z-10 w-[440px] max-w-[92vw] rounded-2xl bg-white p-6 shadow-2xl dark:bg-neutral-900">
+      <div class="relative z-10 w-[440px] max-w-[92vw] rounded-2xl bg-elev p-6 shadow-2xl">
         <header class="mb-4 flex items-start justify-between">
           <div>
             <h2 class="text-base font-semibold">Verify session</h2>
-            <p class="mt-0.5 text-xs text-neutral-500">
+            <p class="mt-0.5 text-xs text-fg-3">
               {otherLabel()}
-              <span class="ml-1.5 font-mono text-[10px] text-neutral-400">
+              <span class="ml-1.5 font-mono text-[10px] text-fg-3">
                 {deviceLabel()}
               </span>
             </p>
@@ -127,7 +127,7 @@ function ModalBody(props: {
           <button
             type="button"
             onClick={props.onClose}
-            class="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+            class="rounded p-1 text-fg-3 hover:bg-input hover:text-fg-2"
             aria-label="Close"
           >
             ✕
@@ -186,13 +186,13 @@ function WaitingState(props: {
           ? `Waiting for ${props.who}'s device to accept…`
           : `${props.who} wants to verify this session.`}
       </p>
-      <p class="mt-1 text-xs text-neutral-500">
+      <p class="mt-1 text-xs text-fg-3">
         On the other device, accept the request to compare emojis.
       </p>
       <button
         type="button"
         onClick={props.onCancel}
-        class="mt-5 rounded-md border border-neutral-200 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+        class="mt-5 rounded-md border border-line px-3 py-1.5 text-xs text-fg-2 hover:bg-elev"
       >
         Cancel
       </button>
@@ -207,15 +207,15 @@ function SasCompare(props: {
 }) {
   return (
     <div>
-      <p class="text-xs text-neutral-600 dark:text-neutral-400">
+      <p class="text-xs text-fg-2">
         Compare the emojis with the other device. They must be in the same order.
       </p>
       <div class="my-5 grid grid-cols-4 gap-2 px-1">
         <For each={props.emojis}>
           {(e) => (
-            <div class="flex flex-col items-center rounded-lg border border-neutral-200 bg-neutral-50 py-3 dark:border-neutral-800 dark:bg-neutral-950">
+            <div class="flex flex-col items-center rounded-lg border border-line bg-elev py-3">
               <div class="text-2xl leading-none">{e.emoji}</div>
-              <div class="mt-1.5 text-[10px] capitalize text-neutral-600 dark:text-neutral-400">
+              <div class="mt-1.5 text-[10px] capitalize text-fg-2">
                 {e.description}
               </div>
             </div>
@@ -260,7 +260,7 @@ function CenteredMessage(props: {
         <p
           class="mt-1 text-xs"
           classList={{
-            'text-neutral-500': props.detailTone !== 'warn',
+            'text-fg-3': props.detailTone !== 'warn',
             'text-amber-600 dark:text-amber-400': props.detailTone === 'warn',
           }}
         >

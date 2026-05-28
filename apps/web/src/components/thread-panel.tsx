@@ -143,15 +143,15 @@ export function ThreadPanel(props: Props) {
 
   return (
     <aside
-      class="absolute inset-y-0 right-0 z-20 flex w-[380px] max-w-full flex-col border-l border-neutral-200 bg-white shadow-xl dark:border-neutral-800 dark:bg-neutral-950"
+      class="absolute inset-y-0 right-0 z-20 flex w-[380px] max-w-full flex-col border-l border-line bg-elev shadow-xl"
       aria-label="Thread"
     >
-      <header class="flex items-center justify-between border-b border-neutral-200 px-4 py-2 dark:border-neutral-800">
+      <header class="flex items-center justify-between border-b border-line px-4 py-2">
         <span class="text-sm font-semibold">Thread</span>
         <button
           type="button"
           onClick={props.onClose}
-          class="rounded p-1 text-lg text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+          class="rounded p-1 text-lg text-fg-3 hover:bg-input"
           aria-label="Close thread"
         >
           ×
@@ -159,8 +159,8 @@ export function ThreadPanel(props: Props) {
       </header>
 
       <div ref={scrollEl} class="flex-1 overflow-y-auto px-3 py-2">
-        <Show when={!loading()} fallback={<div class="py-8 text-center text-xs text-neutral-500">Loading thread…</div>}>
-          <Show when={events().length > 0} fallback={<div class="py-8 text-center text-xs text-neutral-500">No replies yet — start the thread below.</div>}>
+        <Show when={!loading()} fallback={<div class="py-8 text-center text-xs text-fg-3">Loading thread…</div>}>
+          <Show when={events().length > 0} fallback={<div class="py-8 text-center text-xs text-fg-3">No replies yet — start the thread below.</div>}>
             <ol class="space-y-2">
               <For each={events()}>{(ev) => <ThreadEventRow ev={ev} />}</For>
             </ol>
@@ -169,7 +169,7 @@ export function ThreadPanel(props: Props) {
       </div>
 
       <form
-        class="border-t border-neutral-200 p-2 dark:border-neutral-800"
+        class="border-t border-line p-2"
         onSubmit={(e) => {
           e.preventDefault();
           send();
@@ -177,7 +177,7 @@ export function ThreadPanel(props: Props) {
       >
         <div class="flex items-end gap-2">
           <textarea
-            class="min-h-[36px] max-h-32 flex-1 resize-none rounded-lg border border-neutral-300 bg-white px-2 py-1 text-sm focus:border-mata-500 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900"
+            class="min-h-[36px] max-h-32 flex-1 resize-none rounded-lg border border-line-2 bg-elev px-2 py-1 text-sm focus:border-mata-500 focus:outline-none"
             placeholder="Reply in thread…"
             value={draft()}
             disabled={sending()}
@@ -192,7 +192,7 @@ export function ThreadPanel(props: Props) {
           <button
             type="submit"
             disabled={sending() || draft().trim().length === 0}
-            class="rounded-lg bg-mata-500 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-neutral-300 dark:disabled:bg-neutral-700"
+            class="rounded-lg bg-mata-500 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-input dark:disabled:bg-neutral-700"
           >
             Send
           </button>
@@ -212,20 +212,20 @@ export function ThreadPanel(props: Props) {
 function ThreadEventRow(props: { ev: TimelineEvent }) {
   const ev = props.ev;
   if (ev.type !== 'm.room.message') {
-    return <li class="text-[11px] italic text-neutral-500">{describeNonMessage(ev)}</li>;
+    return <li class="text-[11px] italic text-fg-3">{describeNonMessage(ev)}</li>;
   }
   const m = ev;
   const sender = m.sender;
   const body = pickBody(m);
   return (
     <li class="flex items-start gap-2">
-      <div class="h-7 w-7 shrink-0 rounded-full bg-neutral-300 text-center text-[11px] font-semibold leading-7 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200">
+      <div class="h-7 w-7 shrink-0 rounded-full bg-input text-center text-[11px] font-semibold leading-7 text-fg-2">
         {initials(prettyName(sender))}
       </div>
       <div class="flex-1 min-w-0">
         <div class="flex items-baseline gap-2">
           <span class="truncate text-xs font-semibold">{prettyName(sender)}</span>
-          <span class="text-[10px] text-neutral-500">{formatTs(m.originServerTs)}</span>
+          <span class="text-[10px] text-fg-3">{formatTs(m.originServerTs)}</span>
         </div>
         <div class="whitespace-pre-wrap break-words text-sm">{body}</div>
       </div>

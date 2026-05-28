@@ -112,9 +112,9 @@ export function EncryptionPanel() {
       {/* Status block */}
       <Show
         when={!status.loading}
-        fallback={<div class="text-sm text-neutral-500">Loading…</div>}
+        fallback={<div class="text-sm text-fg-3">Loading…</div>}
       >
-        <div class="rounded-lg border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900">
+        <div class="rounded-lg border border-line bg-elev p-3">
           <StatusRow
             label="Cross-signing"
             ok={status()?.crossSigningReady ?? false}
@@ -153,11 +153,11 @@ export function EncryptionPanel() {
               <button
                 type="button"
                 onClick={() => setMode('restore')}
-                class="w-full rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-300 dark:hover:bg-neutral-900"
+                class="w-full rounded-lg border border-line bg-elev px-4 py-2 text-sm font-medium text-fg-2 transition-colors hover:bg-elev"
               >
                 Restore from recovery key
               </button>
-              <p class="text-[11px] text-neutral-500">
+              <p class="text-[11px] text-fg-3">
                 Set up backup on your first device. On any new device, use
                 Restore to re-trust this device and recover past room keys.
               </p>
@@ -173,9 +173,9 @@ export function EncryptionPanel() {
 
       {/* Setup form */}
       <Show when={mode() === 'setup'}>
-        <div class="space-y-3 rounded-lg border border-neutral-200 p-3 dark:border-neutral-800">
+        <div class="space-y-3 rounded-lg border border-line p-3">
           <h3 class="text-sm font-semibold">Set up secure backup</h3>
-          <p class="text-[12px] text-neutral-500">
+          <p class="text-[12px] text-fg-3">
             Your login password unlocks signing your device keys. Your
             security passphrase encrypts your key backup — you'll need it
             (or the printed recovery key) on any new device.
@@ -184,7 +184,7 @@ export function EncryptionPanel() {
             <input
               type="password"
               autocomplete="current-password"
-              class="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+              class="w-full rounded-md border border-line-2 bg-elev px-3 py-2 text-sm"
               value={password()}
               onInput={(e) => setPassword(e.currentTarget.value)}
             />
@@ -193,7 +193,7 @@ export function EncryptionPanel() {
             <input
               type="password"
               autocomplete="new-password"
-              class="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+              class="w-full rounded-md border border-line-2 bg-elev px-3 py-2 text-sm"
               value={passphrase()}
               onInput={(e) => setPassphrase(e.currentTarget.value)}
             />
@@ -202,7 +202,7 @@ export function EncryptionPanel() {
             <input
               type="password"
               autocomplete="new-password"
-              class="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+              class="w-full rounded-md border border-line-2 bg-elev px-3 py-2 text-sm"
               value={confirmPassphrase()}
               onInput={(e) => setConfirmPassphrase(e.currentTarget.value)}
             />
@@ -223,7 +223,7 @@ export function EncryptionPanel() {
                 resetForm();
               }}
               disabled={busy()}
-              class="rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-700 dark:border-neutral-700 dark:text-neutral-300"
+              class="rounded-md border border-line-2 px-3 py-2 text-sm text-fg-2"
             >
               Cancel
             </button>
@@ -241,7 +241,7 @@ export function EncryptionPanel() {
             this is the only way back to your encrypted history.
           </p>
           <div
-            class="select-all break-all rounded-md bg-white p-3 font-mono text-xs leading-relaxed text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100"
+            class="select-all break-all rounded-md bg-elev p-3 font-mono text-xs leading-relaxed text-fg"
             onClick={(e) => {
               // Select all on click for easy copy.
               const range = document.createRange();
@@ -260,7 +260,7 @@ export function EncryptionPanel() {
                 const k = recoveryKey();
                 if (k) await navigator.clipboard.writeText(k);
               }}
-              class="rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-neutral-950 dark:text-amber-300 dark:hover:bg-neutral-900"
+              class="rounded-md border border-amber-400 bg-elev px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300"
             >
               Copy
             </button>
@@ -280,16 +280,16 @@ export function EncryptionPanel() {
 
       {/* Restore form */}
       <Show when={mode() === 'restore'}>
-        <div class="space-y-3 rounded-lg border border-neutral-200 p-3 dark:border-neutral-800">
+        <div class="space-y-3 rounded-lg border border-line p-3">
           <h3 class="text-sm font-semibold">Restore from recovery key</h3>
-          <p class="text-[12px] text-neutral-500">
+          <p class="text-[12px] text-fg-3">
             Enter either your recovery key (the base58 string from setup)
             or your security passphrase. We'll re-trust this device and
             start importing past room keys.
           </p>
           <FormField label="Recovery key or passphrase">
             <textarea
-              class="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 font-mono text-xs dark:border-neutral-700 dark:bg-neutral-900"
+              class="w-full rounded-md border border-line-2 bg-elev px-3 py-2 font-mono text-xs"
               rows={3}
               value={restoreInput()}
               onInput={(e) => setRestoreInput(e.currentTarget.value)}
@@ -311,7 +311,7 @@ export function EncryptionPanel() {
                 resetForm();
               }}
               disabled={busy()}
-              class="rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-700 dark:border-neutral-700 dark:text-neutral-300"
+              class="rounded-md border border-line-2 px-3 py-2 text-sm text-fg-2"
             >
               Cancel
             </button>
@@ -335,7 +335,7 @@ function StatusRow(props: { label: string; ok: boolean; hint: string }) {
       </span>
       <div class="min-w-0 flex-1">
         <div class="text-sm font-medium">{props.label}</div>
-        <div class="text-[11px] text-neutral-500">{props.hint}</div>
+        <div class="text-[11px] text-fg-3">{props.hint}</div>
       </div>
     </div>
   );
@@ -344,7 +344,7 @@ function StatusRow(props: { label: string; ok: boolean; hint: string }) {
 function FormField(props: { label: string; children: import('solid-js').JSX.Element }) {
   return (
     <label class="block space-y-1">
-      <span class="block text-[11px] font-medium text-neutral-600 dark:text-neutral-400">
+      <span class="block text-[11px] font-medium text-fg-2">
         {props.label}
       </span>
       {props.children}

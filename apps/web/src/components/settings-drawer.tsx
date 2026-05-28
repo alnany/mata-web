@@ -147,19 +147,19 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
           class="absolute inset-0 bg-black/40 backdrop-blur-sm"
           onClick={props.onClose}
         />
-        <aside class="relative z-10 flex h-full w-[420px] max-w-[90vw] flex-col border-r border-neutral-200 bg-white shadow-2xl dark:border-neutral-800 dark:bg-neutral-950">
-          <header class="flex items-center justify-between border-b border-neutral-200 px-5 py-4 dark:border-neutral-800">
+        <aside class="relative z-10 flex h-full w-[420px] max-w-[90vw] flex-col border-r border-line bg-elev shadow-2xl">
+          <header class="flex items-center justify-between border-b border-line px-5 py-4">
             <h2 class="text-base font-semibold">Settings</h2>
             <button
               type="button"
               onClick={props.onClose}
-              class="rounded p-1 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+              class="rounded p-1 text-fg-3 hover:bg-input hover:text-fg"
               aria-label="Close"
             >
               ✕
             </button>
           </header>
-          <nav class="flex gap-1 border-b border-neutral-200 px-4 dark:border-neutral-800">
+          <nav class="flex gap-1 border-b border-line px-4">
             {(['profile', 'appearance', 'encryption', 'devices'] as const).map((t) => (
               <button
                 type="button"
@@ -167,7 +167,7 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
                 class={`-mb-px border-b-2 px-3 py-2 text-sm transition-colors ${
                   tab() === t
                     ? 'border-mata-500 text-mata-600 dark:text-mata-500'
-                    : 'border-transparent text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100'
+                    : 'border-transparent text-fg-3 hover:text-fg'
                 }`}
               >
                 {t[0].toUpperCase() + t.slice(1)}
@@ -179,14 +179,14 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
             <Show when={tab() === 'profile'}>
               <div class="space-y-4">
                 <div>
-                  <label class="block text-xs font-medium text-neutral-500">User ID</label>
-                  <div class="mt-1 break-all rounded-lg bg-neutral-100 px-3 py-2 font-mono text-xs dark:bg-neutral-900">
+                  <label class="block text-xs font-medium text-fg-3">User ID</label>
+                  <div class="mt-1 break-all rounded-lg bg-input px-3 py-2 font-mono text-xs">
                     {me()?.userId ?? '—'}
                   </div>
                 </div>
                 <div>
-                  <label class="block text-xs font-medium text-neutral-500">Device ID</label>
-                  <div class="mt-1 break-all rounded-lg bg-neutral-100 px-3 py-2 font-mono text-xs dark:bg-neutral-900">
+                  <label class="block text-xs font-medium text-fg-3">Device ID</label>
+                  <div class="mt-1 break-all rounded-lg bg-input px-3 py-2 font-mono text-xs">
                     {me()?.deviceId ?? '—'}
                   </div>
                 </div>
@@ -205,7 +205,7 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
                 >
                   {resetBusy() ? 'Resetting…' : 'Reset encryption data'}
                 </button>
-                <p class="text-[11px] text-neutral-500">
+                <p class="text-[11px] text-fg-3">
                   Use this if the connection banner repeatedly shows
                   "wasm bridge deadlocked" or encrypted sends never succeed.
                   Signs you out and clears local encryption keys.
@@ -225,7 +225,7 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
                         class={`rounded-lg border px-3 py-2 text-sm capitalize transition-colors ${
                           themeMode() === m
                             ? 'border-mata-500 bg-mata-500/10 text-mata-600 dark:text-mata-500'
-                            : 'border-neutral-200 hover:border-neutral-300 dark:border-neutral-800 dark:hover:border-neutral-700'
+                            : 'border-line hover:border-line'
                         }`}
                       >
                         {m}
@@ -241,10 +241,10 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
                     browser silently denies any Notification.requestPermission()
                     call that lacks a user gesture in the call stack.
                   */}
-                  <div class="flex items-start justify-between gap-3 rounded-lg border border-neutral-200 px-3 py-2.5 dark:border-neutral-800">
+                  <div class="flex items-start justify-between gap-3 rounded-lg border border-line px-3 py-2.5">
                     <div class="min-w-0 flex-1">
                       <div class="text-sm">Desktop notifications</div>
-                      <div class="text-[11px] text-neutral-500">
+                      <div class="text-[11px] text-fg-3">
                         Chime + browser toast for mentions and new messages in
                         rooms you're not viewing.
                       </div>
@@ -261,13 +261,13 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
                       class={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
                         notifyEnabled()
                           ? 'bg-mata-500'
-                          : 'bg-neutral-300 dark:bg-neutral-700'
+                          : 'bg-input'
                       }`}
                       aria-pressed={notifyEnabled()}
                       aria-label="Toggle notifications"
                     >
                       <span
-                        class={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                        class={`inline-block h-4 w-4 transform rounded-full bg-elev shadow transition-transform ${
                           notifyEnabled() ? 'translate-x-6' : 'translate-x-1'
                         }`}
                       />
@@ -285,11 +285,11 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
               <div class="space-y-2">
                 <Show
                   when={!devices.loading}
-                  fallback={<div class="text-sm text-neutral-500">Loading…</div>}
+                  fallback={<div class="text-sm text-fg-3">Loading…</div>}
                 >
                   <Show
                     when={(devices() ?? []).length > 0}
-                    fallback={<div class="text-sm text-neutral-500">No other devices.</div>}
+                    fallback={<div class="text-sm text-fg-3">No other devices.</div>}
                   >
                     <For each={devices()}>
                       {(d) => {
@@ -298,7 +298,7 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
                         const canVerify =
                           !!m && !isThis && d.verified !== 'verified';
                         return (
-                          <div class="rounded-lg border border-neutral-200 p-3 dark:border-neutral-800">
+                          <div class="rounded-lg border border-line p-3">
                             <div class="flex items-baseline justify-between gap-2">
                               <span class="truncate text-sm font-medium">
                                 {d.displayName || d.deviceId}
@@ -321,9 +321,9 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
                                 </Show>
                               </div>
                             </div>
-                            <div class="mt-1 font-mono text-[10px] text-neutral-500">{d.deviceId}</div>
+                            <div class="mt-1 font-mono text-[10px] text-fg-3">{d.deviceId}</div>
                             <Show when={d.lastSeenTs}>
-                              <div class="text-[11px] text-neutral-500">
+                              <div class="text-[11px] text-fg-3">
                                 last seen {new Date(d.lastSeenTs as number).toLocaleString()}
                               </div>
                             </Show>
@@ -349,7 +349,7 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
                     </For>
                   </Show>
                 </Show>
-                <p class="pt-3 text-[11px] text-neutral-500">
+                <p class="pt-3 text-[11px] text-fg-3">
                   Devices marked verified have been cross-signed with your
                   master key. Set up key backup in the Encryption tab to
                   unlock cross-device key recovery.
@@ -358,7 +358,7 @@ export function SettingsDrawer(props: { open: boolean; onClose: () => void }) {
             </Show>
           </div>
 
-          <footer class="border-t border-neutral-200 px-5 py-3 text-[11px] text-neutral-500 dark:border-neutral-800">
+          <footer class="border-t border-line px-5 py-3 text-[11px] text-fg-3">
             Mata · built on Matrix protocol
           </footer>
         </aside>

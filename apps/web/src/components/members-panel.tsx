@@ -111,12 +111,12 @@ export function MembersPanel(props: {
   return (
     <Show when={props.open}>
       <aside
-        class="absolute inset-y-0 right-0 z-20 flex w-72 flex-col border-l border-neutral-200 bg-white shadow-xl dark:border-neutral-800 dark:bg-neutral-900"
+        class="absolute inset-y-0 right-0 z-20 flex w-72 flex-col border-l border-line bg-elev shadow-xl"
         aria-label="Members panel"
       >
-        <header class="flex items-center gap-2 border-b border-neutral-200 px-3 py-2.5 dark:border-neutral-800">
+        <header class="flex items-center gap-2 border-b border-line px-3 py-2.5">
           <span class="text-sm font-semibold">People</span>
-          <span class="text-[11px] text-neutral-500">
+          <span class="text-[11px] text-fg-3">
             <Show when={members()} fallback="…">
               {(_) => `${filtered().joined.length}`}
             </Show>
@@ -124,27 +124,27 @@ export function MembersPanel(props: {
           <button
             type="button"
             onClick={props.onClose}
-            class="ml-auto rounded p-1 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+            class="ml-auto rounded p-1 text-fg-3 hover:bg-input hover:text-fg"
             aria-label="Close"
           >
             ✕
           </button>
         </header>
 
-        <div class="border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
+        <div class="border-b border-line px-3 py-2">
           <input
             type="text"
             value={search()}
             onInput={(e) => setSearch(e.currentTarget.value)}
             placeholder="Search members…"
-            class="w-full rounded-md border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-xs focus:border-mata-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-mata-500/20 dark:border-neutral-700 dark:bg-neutral-950 dark:focus:bg-neutral-900"
+            class="w-full rounded-md border border-line bg-elev px-2.5 py-1.5 text-xs focus:border-mata-500 focus:bg-elev focus:outline-none focus:ring-2 focus:ring-mata-500/20 dark:focus:bg-neutral-900"
           />
         </div>
 
         <div class="flex-1 overflow-y-auto">
           <Switch>
             <Match when={members.loading}>
-              <div class="px-4 py-6 text-center text-xs text-neutral-500">Loading…</div>
+              <div class="px-4 py-6 text-center text-xs text-fg-3">Loading…</div>
             </Match>
             <Match when={members.error}>
               <div class="px-4 py-6 text-center text-xs text-red-500">
@@ -184,7 +184,7 @@ export function MembersPanel(props: {
               <Show
                 when={filtered().joined.length === 0 && filtered().invited.length === 0}
               >
-                <div class="px-4 py-6 text-center text-xs text-neutral-500">
+                <div class="px-4 py-6 text-center text-xs text-fg-3">
                   No members match.
                 </div>
               </Show>
@@ -198,9 +198,9 @@ export function MembersPanel(props: {
 
 function SectionHeader(props: { label: string; count: number }) {
   return (
-    <div class="sticky top-0 z-10 flex items-center gap-2 bg-white/95 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-500 backdrop-blur dark:bg-neutral-900/95">
+    <div class="sticky top-0 z-10 flex items-center gap-2 bg-elev/95 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-fg-3 backdrop-blur/95">
       <span>{props.label}</span>
-      <span class="rounded-full bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400">
+      <span class="rounded-full bg-input px-1.5 py-0.5 text-[10px] text-fg-2 dark:text-fg-3">
         {props.count}
       </span>
     </div>
@@ -224,9 +224,9 @@ function MemberRow(props: {
     return null;
   };
   return (
-    <div class="group flex items-center gap-2.5 border-b border-neutral-100 px-3 py-2 last:border-b-0 dark:border-neutral-800/60">
+    <div class="group flex items-center gap-2.5 border-b border-neutral-100 px-3 py-2 last:border-b-0/60">
       <div class="relative shrink-0">
-        <div class="flex h-9 w-9 items-center justify-center rounded-full bg-neutral-200 text-[11px] font-semibold text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+        <div class="flex h-9 w-9 items-center justify-center rounded-full bg-input text-[11px] font-semibold text-fg-2">
           {initials(name)}
         </div>
         <Show when={props.isEncrypted && m.trust && m.membership === 'join'}>
@@ -264,13 +264,13 @@ function MemberRow(props: {
           </Show>
           <Show when={powerBadge()}>
             {(label) => (
-              <span class="rounded-full bg-neutral-100 px-1.5 py-0.5 text-[9px] font-medium text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
+              <span class="rounded-full bg-input px-1.5 py-0.5 text-[9px] font-medium text-fg-2">
                 {label()}
               </span>
             )}
           </Show>
         </div>
-        <div class="truncate text-[10px] text-neutral-500">{m.userId}</div>
+        <div class="truncate text-[10px] text-fg-3">{m.userId}</div>
       </div>
       <Show when={props.canKick}>
         <button

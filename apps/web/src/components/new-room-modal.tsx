@@ -114,7 +114,7 @@ export function NewRoomModal(props: {
         }}
       >
         <div
-          class="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl dark:bg-neutral-900"
+          class="w-full max-w-md rounded-2xl bg-elev p-5 shadow-xl"
           onClick={(e) => e.stopPropagation()}
         >
           <header class="mb-3 flex items-center justify-between">
@@ -122,7 +122,7 @@ export function NewRoomModal(props: {
             <button
               type="button"
               onClick={close}
-              class="rounded-md p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+              class="rounded-md p-1 text-fg-3 hover:bg-input hover:text-fg"
               aria-label="Close"
               disabled={submitting()}
             >
@@ -130,7 +130,7 @@ export function NewRoomModal(props: {
             </button>
           </header>
 
-          <div class="mb-4 inline-flex rounded-lg bg-neutral-100 p-1 dark:bg-neutral-800">
+          <div class="mb-4 inline-flex rounded-lg bg-input p-1">
             <For each={tabs}>
               {(t) => (
                 <button
@@ -138,8 +138,8 @@ export function NewRoomModal(props: {
                   onClick={() => setMode(t.id)}
                   class={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
                     mode() === t.id
-                      ? 'bg-white text-neutral-900 shadow-sm dark:bg-neutral-700 dark:text-white'
-                      : 'text-neutral-600 hover:text-neutral-900 dark:text-neutral-300'
+                      ? 'bg-elev text-fg shadow-sm dark:text-white'
+                      : 'text-fg-2 hover:text-fg'
                   }`}
                 >
                   {t.label}
@@ -155,7 +155,7 @@ export function NewRoomModal(props: {
                 value={name()}
                 onInput={(e) => setName(e.currentTarget.value)}
                 placeholder="Project Alpha"
-                class="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20 dark:border-neutral-700 dark:bg-neutral-950"
+                class="w-full rounded-lg border border-line bg-elev px-3 py-2 text-sm focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20"
               />
             </Field>
             <Field label="Topic (optional)">
@@ -164,7 +164,7 @@ export function NewRoomModal(props: {
                 value={topic()}
                 onInput={(e) => setTopic(e.currentTarget.value)}
                 placeholder="What's it about?"
-                class="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20 dark:border-neutral-700 dark:bg-neutral-950"
+                class="w-full rounded-lg border border-line bg-elev px-3 py-2 text-sm focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20"
               />
             </Field>
           </Show>
@@ -184,12 +184,12 @@ export function NewRoomModal(props: {
               onInput={(e) => setInvites(e.currentTarget.value)}
               placeholder="@vito:chat.greatass.me"
               autocomplete="off"
-              class="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20 dark:border-neutral-700 dark:bg-neutral-950"
+              class="w-full rounded-lg border border-line bg-elev px-3 py-2 text-sm focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20"
             />
           </Field>
 
           <Show when={mode() === 'room'}>
-            <label class="mb-4 flex items-start gap-3 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-950">
+            <label class="mb-4 flex items-start gap-3 rounded-lg border border-line bg-elev px-3 py-2 text-xs">
               <input
                 type="checkbox"
                 checked={encrypted()}
@@ -197,10 +197,10 @@ export function NewRoomModal(props: {
                 class="mt-0.5 h-4 w-4 rounded text-mata-600 focus:ring-mata-500"
               />
               <span>
-                <span class="block font-medium text-neutral-900 dark:text-neutral-100">
+                <span class="block font-medium text-fg">
                   End-to-end encrypted 🔒
                 </span>
-                <span class="text-neutral-500">
+                <span class="text-fg-3">
                   Recommended. Turn off only for a public-style lobby — once a
                   Matrix room is encrypted it can't be unencrypted.
                 </span>
@@ -213,7 +213,7 @@ export function NewRoomModal(props: {
               type="button"
               onClick={close}
               disabled={submitting()}
-              class="rounded-lg px-3 py-2 text-sm text-neutral-600 hover:bg-neutral-100 disabled:opacity-50 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              class="rounded-lg px-3 py-2 text-sm text-fg-2 hover:bg-input disabled:opacity-50"
             >
               Cancel
             </button>
@@ -240,7 +240,7 @@ function Field(props: {
 }) {
   return (
     <div class="mb-3">
-      <label class="mb-1 flex items-center gap-1 text-xs font-medium text-neutral-700 dark:text-neutral-300">
+      <label class="mb-1 flex items-center gap-1 text-xs font-medium text-fg-2">
         <span>{props.label}</span>
         <Show when={props.required}>
           <span class="text-red-500">*</span>
@@ -248,7 +248,7 @@ function Field(props: {
       </label>
       {props.children}
       <Show when={props.help}>
-        <p class="mt-1 text-[11px] text-neutral-500">{props.help}</p>
+        <p class="mt-1 text-[11px] text-fg-3">{props.help}</p>
       </Show>
     </div>
   );

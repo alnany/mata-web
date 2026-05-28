@@ -98,7 +98,7 @@ export function MessageBubble(props: {
         <div class="mr-2 w-8 shrink-0">
           <Show when={props.showHeader}>
             <div
-              class="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-300 text-xs font-semibold text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200"
+              class="flex h-8 w-8 items-center justify-center rounded-full bg-input text-xs font-semibold text-fg-2"
               title={msg.sender}
             >
               {initials(msg.sender)}
@@ -109,7 +109,7 @@ export function MessageBubble(props: {
 
       <div class="relative max-w-[78%]">
         <Show when={props.showHeader && !isMine()}>
-          <div class="mb-0.5 text-[11px] font-semibold text-neutral-600 dark:text-neutral-400">
+          <div class="mb-0.5 text-[11px] font-semibold text-fg-2">
             {prettyName(msg.sender)}
           </div>
         </Show>
@@ -146,7 +146,7 @@ export function MessageBubble(props: {
 
           <div
             class={`mt-1 flex items-center justify-end gap-1 text-[10px] ${
-              isMine() ? 'text-accent-ink/70' : 'text-neutral-500'
+              isMine() ? 'text-accent-ink/70' : 'text-fg-3'
             }`}
           >
             <Show when={edited}>
@@ -255,7 +255,7 @@ function ActionBtn(props: { title: string; onClick: () => void; children: any })
       type="button"
       title={props.title}
       onClick={props.onClick}
-      class="flex h-7 w-7 items-center justify-center rounded-full text-base text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+      class="flex h-7 w-7 items-center justify-center rounded-full text-base text-fg-2 hover:bg-input"
     >
       {props.children}
     </button>
@@ -270,7 +270,7 @@ function MenuItem(props: { onClick: () => void; destructive?: boolean; children:
       class={`block w-full px-3 py-1.5 text-left transition-colors ${
         props.destructive
           ? 'text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40'
-          : 'text-neutral-800 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800'
+          : 'text-fg hover:bg-input'
       }`}
     >
       {props.children}
@@ -287,7 +287,7 @@ function ReactionPill(props: { r: ReactionAggregate; me: UserId | null; onToggle
       class={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors ${
         props.r.selfReacted
           ? 'border-mata-500 bg-mata-500/15 text-mata-700 dark:text-mata-300'
-          : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800'
+          : 'border-line-2 bg-elev text-fg-2 hover:bg-input'
       }`}
       title={`${props.r.count} reaction${props.r.count === 1 ? '' : 's'}`}
     >
@@ -363,7 +363,7 @@ function TextWithMentions(props: {
           ? self
             ? 'bg-mata-100 font-semibold text-mata-800 dark:bg-mata-900/60 dark:text-mata-200'
             : 'bg-mata-50 text-mata-700 dark:bg-mata-950/40 dark:text-mata-300'
-          : 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300';
+          : 'bg-input text-fg-2';
         return (
           <span class={`rounded px-1 ${tone}`} title={`@${seg.handle}`}>
             @{seg.handle}
@@ -409,7 +409,7 @@ function SystemRow(props: { ev: TimelineEvent }) {
   };
   return (
     <li class="my-1 flex justify-center">
-      <span class="rounded-full bg-neutral-100 px-3 py-1 text-[11px] italic text-neutral-500 dark:bg-neutral-900">
+      <span class="rounded-full bg-input px-3 py-1 text-[11px] italic text-fg-3">
         {text()}
       </span>
     </li>
@@ -547,7 +547,7 @@ function MediaContent(props: { body: MediaMessageBody }) {
 function MediaLoading(props: { body: MediaMessageBody; loading: boolean; error: string | null }) {
   return (
     <div
-      class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900"
+      class="flex items-center gap-2 rounded-lg border border-line bg-elev px-3 py-2 text-xs text-fg-3"
       title={props.error ?? undefined}
     >
       <span>{props.body.msgtype === 'm.image' ? '🖼️' : props.body.msgtype === 'm.video' ? '🎬' : props.body.msgtype === 'm.audio' ? '🔊' : '📎'}</span>
@@ -583,11 +583,11 @@ function MediaPlayer(props: { body: MediaMessageBody; loaded: { url: string; mim
     <a
       href={props.loaded.url}
       download={c.body}
-      class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-700 hover:bg-neutral-100 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+      class="flex items-center gap-2 rounded-lg border border-line bg-elev px-3 py-2 text-xs text-fg-2 hover:bg-input"
     >
       <span>📎</span>
       <span class="truncate">{c.body}</span>
-      <span class="ml-auto shrink-0 text-[10px] text-neutral-500">
+      <span class="ml-auto shrink-0 text-[10px] text-fg-3">
         {formatBytes(c.info.size)}
       </span>
     </a>
