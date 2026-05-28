@@ -1504,6 +1504,20 @@ export class SdkSession {
 
       const tev = toTimelineEvent(event);
       if (!tev) return;
+      // Drop local echoes for ordinary message events — same reason as
+      // the call-events branch above. matrix-js-sdk surfaces every send
+      // through Room.timeline twice: first the local echo (event.status
+      // = 'sending' / 'sent') with a temporary local-only event id, then
+      // the sync-confirmed delivery (status = null) with the real server
+      // id. Without this filter the UI receives both copies under
+      // different ids, the dedup-by-eventId in room-view can't merge
+      // them, and the user sees their own message appear twice on send
+      // (until /messages refresh on reload returns only the canonical
+      // copy). Inbound events have status === null and pass through
+      // unaffected.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const msgStatus = (event as any).status;
+      if (msgStatus != null) return;
       this.emit({
         kind: 'syncUpdate',
         deltas: [
@@ -1516,8 +1530,6 @@ export class SdkSession {
         nextBatch: client.getSyncStateData()?.nextSyncToken ?? '',
       });
     });
-
-    // ---- Decryption updates --------------------------------------------
     // RoomEvent.Timeline fires with the event still in its m.room.encrypted
     // shape (decryption is async). We forward that placeholder so the UI
     // can show a "decrypting…" slot. Once matrix-js-sdk finishes the wasm
