@@ -1,31 +1,19 @@
 // =============================================================================
 // notifications.ts — central notification dispatcher
 //
-// Responsibilities (kept deliberately UI-side, NOT in the worker):
-//   1. Track browser Notification permission and let the UI request it
-//      lazily on the first user-meaningful gesture (settings toggle).
-//   2. Maintain a single user preference flag (enabled / disabled),
-//      persisted in localStorage so refresh preserves choice.
-//   3. Maintain "window focused" state via document visibility +
-//      window blur/focus listeners. Notifications only fire when the
-//      window is NOT focused, OR when the user is focused but the
-//      event is for a non-active room AND it's a mention.
-//   4. Provide a `dispatchMessageEvent` helper that the home route
-//      calls for every new event delta. The helper decides whether to:
-//        - Play the chime (mentions / non-active room messages)
-//        - Show a desktop Notification
-//        - Update the unread/highlight tally exposed to the tab title
-//   5. Provide derived unread/highlight totals that the App component
-//      uses to mutate `document.title`.
-//
-// We intentionally do NOT use the Matrix-spec PushProcessor here: that
-// would require running the rules engine on every event, including
-// state events and reactions. Our notification surface only cares
-// about message events; for the (current, small) feature set, the
-// mention + non-active-room heuristic is the right tradeoff between
-// signal and complexity. A worker-side PushProcessor pass is the next
-// step when we want HA push (server-side notify decisions for offline
-// delivery).
+// Responsibilities (UI-side, NOT in the worker):
+//   1. Track browser Notification permission + a persisted user
+//      enabled flag (localStorage).
+//   2. Track window focus / visibility so we only fire desktop toasts
+//      when the user isn't looking at the active room.
+//   3. Receive aggregate unread/highlight totals via `setRoomCounts`
+//      (home.tsx pushes the sum over rooms()). These are exposed via
+//      `notifyTotals` for the tab title. Source of truth is the
+//      server's per-room unreadCount/highlightCount — receipts sent
+//      from room-view clear those on the next sync.
+//   4. `dispatchSyncDeltas` runs on every syncUpdate and decides
+//      whether to play the chime + show a desktop toast. Mute is
+//      honored via RoomSummary.isMuted.
 // =============================================================================
 
 import { createSignal } from 'solid-js';
@@ -40,9 +28,6 @@ import type {
 
 const STORAGE_KEY = 'mata.notify.enabled.v1';
 
-// Default: opt-in. We require an explicit toggle so the first
-// permission prompt happens from a user-initiated click, which is the
-// only path that browsers reliably allow.
 const loadEnabled = (): boolean => {
   try {
     return localStorage.getItem(STORAGE_KEY) === '1';
@@ -52,12 +37,6 @@ const loadEnabled = (): boolean => {
 };
 
 const [enabled, setEnabledRaw] = createSignal(loadEnabled());
-
-// totalUnread / totalHighlights are exposed so App can drive the tab
-// title. Both reset to zero when the user clicks back into the tab
-// (focus listener below) — we treat "user saw the tab again" as
-// "they've seen the new messages". A more correct version would per-
-// room mark-as-read; that ships later as part of read receipts work.
 const [totalUnread, setTotalUnread] = createSignal(0);
 const [totalHighlights, setTotalHighlights] = createSignal(0);
 const [permission, setPermission] = createSignal<NotificationPermission>(
@@ -68,18 +47,10 @@ const [windowFocused, setWindowFocused] = createSignal(
 );
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('focus', () => {
-    setWindowFocused(true);
-    setTotalUnread(0);
-    setTotalHighlights(0);
-  });
+  window.addEventListener('focus', () => setWindowFocused(true));
   window.addEventListener('blur', () => setWindowFocused(false));
   document.addEventListener('visibilitychange', () => {
     setWindowFocused(!document.hidden);
-    if (!document.hidden) {
-      setTotalUnread(0);
-      setTotalHighlights(0);
-    }
   });
 }
 
@@ -89,12 +60,20 @@ export const notifyTotals = { unread: totalUnread, highlights: totalHighlights }
 export const isWindowFocused = windowFocused;
 
 /**
- * Toggle the user preference, requesting Notification permission on
- * activation if it hasn't been granted yet. The browser denies
- * permission requests that come from anywhere except a user gesture,
- * so the caller must wire this to a click handler.
+ * Aggregate room unread + highlight counts pushed from home.tsx every
+ * time the room list updates. Server-driven: receipts sent by the
+ * room-view will, on the next sync delta, drop the per-room counts
+ * for the active room. No focus-zeroes-everything hack anymore.
  */
+export function setRoomCounts(input: { unread: number; highlights: number }): void {
+  setTotalUnread(input.unread);
+  setTotalHighlights(input.highlights);
+}
+
 export async function setNotifyEnabled(next: boolean): Promise<void> {
+  // The browser denies any Notification.requestPermission() call that
+  // lacks a user gesture in the synchronous call stack — so this
+  // function MUST be invoked directly from a click handler.
   if (next && typeof Notification !== 'undefined' && Notification.permission === 'default') {
     try {
       const p = await Notification.requestPermission();
@@ -109,7 +88,6 @@ export async function setNotifyEnabled(next: boolean): Promise<void> {
         return;
       }
     } catch {
-      // Permission API failure — bail without flipping the flag.
       return;
     }
   }
@@ -123,10 +101,7 @@ export async function setNotifyEnabled(next: boolean): Promise<void> {
 }
 
 // ---- audio chime --------------------------------------------------------
-// Tiny in-browser WebAudio ping. No asset to load, plays instantly. The
-// node lives across calls because creating + tearing down an
-// AudioContext per chime would prompt the user-gesture autoplay
-// policy on every fire.
+
 let audioCtx: AudioContext | null = null;
 function ensureAudio(): AudioContext | null {
   if (typeof window === 'undefined') return null;
@@ -145,7 +120,7 @@ function ensureAudio(): AudioContext | null {
 function playChime() {
   const ctx = ensureAudio();
   if (!ctx) return;
-  // Two-tone descending ping at ~660 Hz then ~440 Hz, ~110 ms total.
+  // Two-tone descending ping ~660→440Hz, 110ms total.
   const t0 = ctx.currentTime;
   const o = ctx.createOscillator();
   const g = ctx.createGain();
@@ -160,65 +135,36 @@ function playChime() {
   o.stop(t0 + 0.12);
 }
 
-// ---- dispatch entrypoint ------------------------------------------------
+// ---- dispatch -----------------------------------------------------------
 
 export interface NotifyDispatchInput {
   deltas: RoomDelta[];
-  /** Active room the user is currently viewing (null on rooms list). */
   activeRoomId: RoomId | null;
-  /** Caller's own user id — required for mention detection. */
   me: UserId | null;
-  /** Lookup so we can render "Sender · #Room: body" in the OS. */
   roomById: Map<RoomId, RoomSummary>;
-  /** Click handler: receive the roomId so the app can focus that room. */
   onClickRoom: (roomId: RoomId) => void;
 }
 
-/**
- * Called from home.tsx on every syncUpdate. Mutates the unread /
- * highlight tallies and (when warranted) plays sound + shows desktop
- * notifications. Idempotent for empty inputs.
- */
 export function dispatchSyncDeltas(input: NotifyDispatchInput): void {
   const me = input.me;
-  let unreadInc = 0;
-  let highlightInc = 0;
-  // We only emit a single chime per dispatch even if many messages
-  // arrived at once, to avoid the popcorn effect on first connect.
   let needChime = false;
-  // Desktop notifications are capped at one per room per dispatch.
-  // Without the cap, a backfill burst would launch 50 toasters.
   const notifiedRooms = new Set<RoomId>();
 
   for (const delta of input.deltas) {
+    const room = input.roomById.get(delta.roomId);
+    // Muted rooms never make noise — even for mentions, matching
+    // Matrix push rule `notify:false` semantics.
+    if (room?.isMuted) continue;
     const roomIsActive = input.activeRoomId === delta.roomId && windowFocused();
     for (const ev of delta.newEvents) {
       if (ev.type !== 'm.room.message') continue;
-      // Skip our own messages — we already saw them on send.
       if (me && ev.sender === me) continue;
-      // Skip events that the cache replay layer fires for messages we
-      // already counted (a server-side echo / re-sync). We don't have
-      // an authoritative "is this new to me" flag at this layer, but
-      // duplicated eventIds are dropped by the room-view cache merge
-      // before they reach the UI; the dispatch path here runs against
-      // the same delta stream so any duplicate would have to come from
-      // an upstream replay. Acceptable false-positive rate for now.
       const msg = ev as RoomMessageEvent;
       const isMention = !!me && isMentionEvent(msg, me);
       if (roomIsActive && !isMention) continue;
 
-      unreadInc += 1;
-      if (isMention) highlightInc += 1;
-
-      // Always chime for mentions; otherwise only when the room is
-      // not active OR window not focused (the early-continue above
-      // already filtered most of these out — what's left is the
-      // non-active rooms whose unread count we want to bump audibly).
       needChime = true;
 
-      // Desktop notification gating: must be enabled, granted, and
-      // window not focused (OR mention while focused on a different
-      // room).
       if (
         enabled()
         && permission() === 'granted'
@@ -226,13 +172,11 @@ export function dispatchSyncDeltas(input: NotifyDispatchInput): void {
         && !notifiedRooms.has(delta.roomId)
       ) {
         notifiedRooms.add(delta.roomId);
-        showDesktopNotification(msg, input.roomById.get(delta.roomId), () => input.onClickRoom(delta.roomId));
+        showDesktopNotification(msg, room, () => input.onClickRoom(delta.roomId));
       }
     }
   }
 
-  if (unreadInc > 0) setTotalUnread((u) => u + unreadInc);
-  if (highlightInc > 0) setTotalHighlights((h) => h + highlightInc);
   if (needChime && enabled()) playChime();
 }
 
@@ -241,8 +185,6 @@ function isMentionEvent(msg: RoomMessageEvent, me: UserId): boolean {
   if (c.msgtype !== 'm.text' && c.msgtype !== 'm.emote' && c.msgtype !== 'm.notice') return false;
   if (c.mentions?.userIds.includes(me)) return true;
   if (c.mentions?.room) return true;
-  // Heuristic fallback when MSC3952 mentions are absent (older clients,
-  // older messages): match my localpart as a whitespace-bounded @token.
   const local = me.slice(1).split(':')[0];
   if (!local) return false;
   const re = new RegExp(`(^|[\\s,.;:!?\\n])@${escapeRe(local)}\\b`);
@@ -263,10 +205,6 @@ function showDesktopNotification(
     const sender = msg.sender.slice(1).split(':')[0] ?? msg.sender;
     const preview = previewFor(msg as TimelineEvent);
     const body = `${sender}: ${preview}`;
-    // `renotify` is a non-standard Chromium option that TS's lib.dom
-    // doesn't declare. We pass it via a permissive cast so re-firing
-    // for the same tag still pops the toaster (without stacking) on
-    // browsers that support it; others ignore the unknown field.
     const opts: NotificationOptions = { body, tag: `mata-${room?.roomId ?? msg.sender}`, silent: false };
     (opts as NotificationOptions & { renotify?: boolean }).renotify = true;
     const n = new Notification(title, opts);
@@ -279,7 +217,6 @@ function showDesktopNotification(
       onClick();
       n.close();
     };
-    // Best-effort auto-close after 6s; user may have OS-level overrides.
     setTimeout(() => {
       try {
         n.close();
@@ -288,9 +225,7 @@ function showDesktopNotification(
       }
     }, 6000);
   } catch {
-    // Notification constructor can throw if the page lost focus
-    // permission mid-flight; we swallow so dispatchSyncDeltas never
-    // hard-fails the sync loop.
+    /* swallow — never break sync */
   }
 }
 

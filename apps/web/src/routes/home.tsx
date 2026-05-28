@@ -8,7 +8,7 @@ import { showToast } from '../stores/toast.js';
 import type { RoomId, RoomSummary } from '@mata/shared/matrix';
 import { RoomView, createRoomCache, type RoomCache } from './room-view.js';
 import { SettingsDrawer } from '../components/settings-drawer.js';
-import { dispatchSyncDeltas } from '../stores/notifications.js';
+import { dispatchSyncDeltas, setRoomCounts } from '../stores/notifications.js';
 import { NewRoomModal } from '../components/new-room-modal.js';
 import { readRoomList, writeRoomList } from '../lib/persistent-cache.js';
 import { listTime } from '../lib/date-buckets.js';
@@ -149,6 +149,12 @@ export function HomePage() {
       const prev = rooms() ?? [];
       const merged = mergeRooms(prev, res.rooms);
       setRooms(merged);
+      // Phase 11: push aggregate unread/highlight to notifications store
+      // so the tab title reflects ground-truth server counts instead of
+      // a session-wide accumulator.
+      let u = 0, h = 0;
+      for (const r of merged) { if (r.membership === 'join') { u += r.unreadCount; h += r.highlightCount; } }
+      setRoomCounts({ unread: u, highlights: h });
       void writeRoomList(merged);
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);

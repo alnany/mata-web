@@ -88,8 +88,8 @@ export class MatrixCore {
     return this.requireSession().loadRoomHistory(roomId, fromToken, limit);
   }
 
-  async sendMessage(roomId: RoomId, content: MessageBody, txnId: string): Promise<void> {
-    return this.requireSession().sendMessage(roomId, content, txnId);
+  async sendMessage(roomId: RoomId, content: MessageBody, txnId: string, threadRoot?: EventId): Promise<void> {
+    return this.requireSession().sendMessage(roomId, content, txnId, threadRoot);
   }
 
   async editMessage(
