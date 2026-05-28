@@ -8,6 +8,7 @@ import { ToastRoot } from './components/toast-root.js';
 import { VerificationModal } from './components/verification-modal.js';
 import { attachVerificationStore } from './stores/verification.js';
 import { notifyTotals } from './stores/notifications.js';
+import { paintFaviconBadge } from './lib/favicon-badge.js';
 import { initCallStore } from './stores/call.js';
 import { CallOverlay } from './components/call-overlay.js';
 import { Mark } from './components/logo.js';
@@ -77,6 +78,10 @@ export function App(props: ParentProps) {
     if (typeof document !== 'undefined' && document.title !== next) {
       document.title = next;
     }
+    // Favicon dot — the part the user actually notices when this tab
+    // is sitting in a row of background tabs. Lime for normal unread,
+    // vermilion for highlights (mentions / DMs).
+    void paintFaviconBadge({ unread: u, highlights: h });
   });
 
   return (
