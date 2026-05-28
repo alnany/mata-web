@@ -8,6 +8,7 @@ import { showToast } from '../stores/toast.js';
 import type { RoomId, RoomSummary } from '@mata/shared/matrix';
 import { RoomView, createRoomCache, type RoomCache } from './room-view.js';
 import { SettingsDrawer } from '../components/settings-drawer.js';
+import { dispatchSyncDeltas } from '../stores/notifications.js';
 import { NewRoomModal } from '../components/new-room-modal.js';
 import { readRoomList, writeRoomList } from '../lib/persistent-cache.js';
 import { listTime } from '../lib/date-buckets.js';
@@ -156,7 +157,30 @@ export function HomePage() {
   };
 
   // Refresh on every sync delta. Worker holds canonical state; this is cheap.
-  onCleanup(bridge.on('syncUpdate', () => refetchRooms()));
+  onCleanup(
+    bridge.on('syncUpdate', (e) => {
+      refetchRooms();
+      // Drive desktop notifications + chime + tab badge tally off the
+      // same delta stream. Active room + focused window short-circuit
+      // inside dispatchSyncDeltas, so no need to gate at the caller.
+      const me = (() => {
+        const s = session();
+        return s.phase === 'authenticated' ? s.userId : null;
+      })();
+      const roomById = new Map<RoomId, RoomSummary>();
+      for (const r of rooms() ?? []) roomById.set(r.roomId, r);
+      dispatchSyncDeltas({
+        deltas: e.deltas,
+        activeRoomId: activeId(),
+        me,
+        roomById,
+        onClickRoom: (rid) => {
+          const r = roomById.get(rid);
+          if (r) openRoom(r);
+        },
+      });
+    }),
+  );
 
   // -------- Active room + per-room cache (silky switch) -------------------
   const [activeId, setActiveId] = createSignal<RoomId | null>(null);
