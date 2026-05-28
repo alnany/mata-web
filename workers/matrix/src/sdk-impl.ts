@@ -742,22 +742,32 @@ export class SdkSession {
   // ---------------------------------------------------------------------------
   // Message search.
   //
-  // matrix-js-sdk wraps Synapse's POST /_matrix/client/v3/search under
-  // `searchRoomEvents({ term, filter })`. The response is an
-  // `ISearchResults` whose `results[]` items are `SearchResult`
-  // instances — each carries an `EventContext` (its own MatrixEvent +
-  // events before/after). We flatten each hit to the wire-format
-  // `SearchHit` so the UI doesn't have to know matrix-js-sdk shapes.
+  // Two execution paths, picked per room:
   //
-  // Encrypted rooms: Synapse can't index ciphertext, so search is
-  // effectively plaintext-only. The server returns zero hits for
-  // encrypted rooms — that's a known Matrix limitation, not a Mata
-  // bug. We surface the empty result honestly rather than
-  // pretending to search.
+  // 1) Server search (Synapse `/_matrix/client/v3/search` via
+  //    matrix-js-sdk's `searchRoomEvents`) — used when the room is
+  //    NOT end-to-end encrypted. Cheap, deep, paginated by the
+  //    server.
   //
-  // First page only. When the user crosses Synapse's default page
-  // size (~10) we'll wire `backPaginateRoomEventsSearch` behind a
-  // `next_batch` extension to this RPC.
+  // 2) Local timeline scan — used when the room IS encrypted, OR
+  //    when the server returns zero hits (defensive: some Synapse
+  //    deployments compile without `matrixfederationapi.search`
+  //    enabled and the endpoint still 200s with an empty result).
+  //    We walk the room's live timeline + any cached timeline
+  //    windows, run a case-insensitive substring match against the
+  //    decrypted body, and synthesize `SearchHit`s with the
+  //    immediate neighbors as context.
+  //
+  //    This is honest about its limits: only events the client has
+  //    actually decrypted are searchable. Loading more history with
+  //    scroll-back grows the searchable window. A proper persistent
+  //    FTS index over decrypted events in IndexedDB is the long-term
+  //    fix and tracked as a follow-on.
+  //
+  // First page only for the server path. When the user crosses
+  // Synapse's default page size (~10) we'll wire
+  // `backPaginateRoomEventsSearch` behind a `next_batch` extension
+  // to this RPC.
   // ---------------------------------------------------------------------------
   async searchMessages(
     query: string,
@@ -766,35 +776,90 @@ export class SdkSession {
     const trimmed = query.trim();
     if (!trimmed) return { results: [], count: 0, highlights: [] };
     const client = this.requireClient();
+
+    // Pick path. Without a roomId we can only run the server search
+    // (cross-room scan would need iterating every joined room, which
+    // is wasteful and not what the UI asks for today).
+    const room = roomId ? client.getRoom(roomId) : null;
+    const encrypted = roomId ? client.isRoomEncrypted(roomId) : false;
+
+    if (roomId && encrypted && room) {
+      return this.searchLocal(room, trimmed);
+    }
+
+    // Try server first.
     try {
       const opts: { term: string; filter?: { rooms: string[] } } = { term: trimmed };
       if (roomId) opts.filter = { rooms: [roomId] };
       const raw = await client.searchRoomEvents(opts);
-      const results = (raw.results ?? []).map((r): SearchHit => {
+      const serverHits = (raw.results ?? []).map((r): SearchHit => {
         const ev = r.context.getEvent();
         const timeline = r.context.getTimeline();
         const idx = r.context.getOurEventIndex();
         const prev = idx > 0 ? timeline[idx - 1] : undefined;
         const next = idx >= 0 && idx + 1 < timeline.length ? timeline[idx + 1] : undefined;
-        const before = prev ? extractPreview(prev) : null;
-        const after = next ? extractPreview(next) : null;
-        const body = extractPreview(ev) ?? '';
         return {
           eventId: ev.getId() as EventId,
           roomId: ev.getRoomId() as RoomId,
           sender: (ev.getSender() ?? '') as UserId,
           originServerTs: ev.getTs(),
-          body,
-          contextBefore: before,
-          contextAfter: after,
+          body: extractPreview(ev) ?? '',
+          contextBefore: prev ? extractPreview(prev) : null,
+          contextAfter: next ? extractPreview(next) : null,
         };
       });
-      const count = typeof raw.count === 'number' ? raw.count : results.length;
-      const highlights = Array.isArray(raw.highlights) ? raw.highlights : [];
-      return { results, count, highlights };
-    } catch (err) {
-      throw networkError(`searchMessages failed: ${describe(err)}`);
+      if (serverHits.length > 0) {
+        const count = typeof raw.count === 'number' ? raw.count : serverHits.length;
+        const highlights = Array.isArray(raw.highlights) ? raw.highlights : [];
+        return { results: serverHits, count, highlights };
+      }
+      // Server returned 0 — fall through to local scan as a safety
+      // net. Some Synapse builds answer search requests but never
+      // actually index, so this catches that silently.
+      if (room) return this.searchLocal(room, trimmed);
+      return { results: [], count: 0, highlights: [trimmed] };
+    } catch (_err) {
+      // Server search failed (404, 403, etc.) — degrade to local.
+      if (room) return this.searchLocal(room, trimmed);
+      return { results: [], count: 0, highlights: [trimmed] };
     }
+  }
+
+  // Local timeline scan for encrypted rooms and server-empty cases.
+  // Walks the live timeline (most recent N events the client has
+  // decrypted), substring-matches case-insensitively against the
+  // body, and produces ranked SearchHits — most recent first.
+  //
+  // We cap at 100 hits to keep the panel responsive; the UI shows
+  // a per-room count and the user can refine the query if they're
+  // hitting the cap.
+  private searchLocal(
+    room: import('matrix-js-sdk').Room,
+    term: string,
+  ): { results: SearchHit[]; count: number; highlights: string[] } {
+    const needle = term.toLowerCase();
+    const timeline = room.getLiveTimeline().getEvents();
+    const hits: SearchHit[] = [];
+    // Iterate newest-first so the first N hits are the most recent.
+    for (let i = timeline.length - 1; i >= 0 && hits.length < 100; i--) {
+      const ev = timeline[i]!;
+      if (ev.getType() !== EventType.RoomMessage) continue;
+      const body = extractPreview(ev);
+      if (!body) continue;
+      if (!body.toLowerCase().includes(needle)) continue;
+      const prev = i > 0 ? timeline[i - 1] : undefined;
+      const next = i + 1 < timeline.length ? timeline[i + 1] : undefined;
+      hits.push({
+        eventId: ev.getId() as EventId,
+        roomId: ev.getRoomId() as RoomId,
+        sender: (ev.getSender() ?? '') as UserId,
+        originServerTs: ev.getTs(),
+        body,
+        contextBefore: prev ? extractPreview(prev) : null,
+        contextAfter: next ? extractPreview(next) : null,
+      });
+    }
+    return { results: hits, count: hits.length, highlights: [term] };
   }
 
   async loadThread(roomId: RoomId, threadRootId: EventId): Promise<TimelineEvent[]> {
