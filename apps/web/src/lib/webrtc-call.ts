@@ -176,6 +176,7 @@ export class CallSession {
         offerToReceiveVideo: this.media === 'video',
       });
       await pc.setLocalDescription(offer);
+      debug('local offer applied', sdpDirections(offer.sdp ?? ''));
       await this.signaling.send(this.roomId, 'm.call.invite', {
         call_id: this.callId,
         version: CALL_PROTOCOL_VERSION,
@@ -200,6 +201,7 @@ export class CallSession {
       if (!pc) throw new Error('peer connection not ready');
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+      debug('local answer applied', sdpDirections(answer.sdp ?? ''));
       await this.signaling.send(this.roomId, 'm.call.answer', {
         call_id: this.callId,
         version: CALL_PROTOCOL_VERSION,
@@ -363,7 +365,28 @@ export class CallSession {
     };
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
     this.localStream = stream;
+    // CRITICAL: in the inbound flow, `buildPeerConnection` runs inside
+    // `receiveInvite` BEFORE the user clicks Accept — so when it ran,
+    // `this.localStream` was null and zero senders were added. When
+    // `accept()` finally calls us here, we have a stream but the pc
+    // is already built. If we don't push the tracks into the existing
+    // pc, the answer SDP ends up declaring our m-lines as `recvonly`
+    // / `inactive`, DTLS never completes on a sending m-line, and the
+    // connectionState hangs at `connecting` indefinitely. This was the
+    // "stuck on Connecting…" symptom. The check is idempotent — if
+    // buildPeerConnection already added these tracks (outbound flow,
+    // where attachMedia runs first), `getSenders()` reports them and
+    // we skip. We compare by track identity, not stream identity.
+    if (this.pc) {
+      const existing = new Set(this.pc.getSenders().map((s) => s.track).filter(Boolean));
+      for (const track of stream.getTracks()) {
+        if (!existing.has(track)) {
+          this.pc.addTrack(track, stream);
+        }
+      }
+    }
     for (const fn of this.listeners.localStream) fn(stream);
+    debug('attachMedia', { tracks: stream.getTracks().map((t) => t.kind), pcHadSenders: this.pc?.getSenders().length });
   }
 
   private async buildPeerConnection(): Promise<RTCPeerConnection> {
@@ -401,6 +424,7 @@ export class CallSession {
       }
     };
     pc.onconnectionstatechange = () => {
+      debug('connectionState', pc.connectionState);
       switch (pc.connectionState) {
         case 'connected':
           this.connectedAt = Date.now();
@@ -418,6 +442,27 @@ export class CallSession {
           break;
       }
     };
+    // ICE-layer transitions are usually the diagnostic the user
+    // actually cares about: `checking` → stuck means no candidate
+    // pair worked (NAT / firewall); `connected` → followed by no
+    // `connectionState=connected` means DTLS is the problem (no
+    // active sender, cert mismatch, ...). Logged separately so we
+    // can see them in the browser console without enabling verbose
+    // matrix-js-sdk tracing.
+    pc.oniceconnectionstatechange = () => {
+      debug('iceConnectionState', pc.iceConnectionState);
+    };
+    pc.onicegatheringstatechange = () => {
+      debug('iceGatheringState', pc.iceGatheringState);
+    };
+    pc.onsignalingstatechange = () => {
+      debug('signalingState', pc.signalingState);
+    };
+    debug('peerConnection built', {
+      iceServers: iceServers.map((s) => s.urls),
+      direction: this.direction,
+      media: this.media,
+    });
     return pc;
   }
 
@@ -530,6 +575,54 @@ function msgOf(err: unknown): string {
  * means the caller wants video. This drives our local getUserMedia
  * constraint when the user accepts.
  */
+/**
+ * Diagnostic logger. Behind a single flag so flipping verbose mode
+ * on/off is one place. We tag every line with `[call]` so console
+ * filters work cleanly during user-reported call bugs ("paste lines
+ * starting with [call]"). Production builds keep this on — WebRTC
+ * bugs are too painful to debug without a breadcrumb trail, and the
+ * volume is low (a handful per call).
+ */
+const CALL_DEBUG = true;
+function debug(label: string, info?: unknown): void {
+  if (!CALL_DEBUG) return;
+  if (info === undefined) {
+    // eslint-disable-next-line no-console
+    console.log(`[call] ${label}`);
+  } else {
+    // eslint-disable-next-line no-console
+    console.log(`[call] ${label}`, info);
+  }
+}
+
+/**
+ * Sniff the active m-line directions from an SDP blob. Used in the
+ * post-mortem log to flag the "I'm sending nothing" failure mode: if
+ * we just applied a local description and it's all `recvonly` /
+ * `inactive`, the remote peer can't hear us no matter how good ICE
+ * gets. Cheap to compute on top of an SDP string we already have.
+ */
+function sdpDirections(sdp: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  let currentMedia: string | null = null;
+  for (const line of sdp.split(/\r?\n/)) {
+    if (line.startsWith('m=')) {
+      const kind = line.split(/\s+/)[0]?.slice(2);
+      currentMedia = kind ?? null;
+      // Default to sendrecv if no direction attribute appears.
+      if (currentMedia) out[currentMedia] = 'sendrecv';
+    } else if (currentMedia) {
+      for (const dir of ['sendrecv', 'sendonly', 'recvonly', 'inactive']) {
+        if (line === `a=${dir}`) {
+          out[currentMedia] = dir;
+          break;
+        }
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * Translate spec-defined `m.call.hangup.reason` strings into a
  * sentence the user can read. Anything we don't recognise falls
