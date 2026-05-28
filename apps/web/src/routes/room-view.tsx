@@ -290,7 +290,16 @@ export function RoomView(props: {
       () => {
         loadInitial();
         setTypingUsers([]);
-        setDraft('');
+        // Reload the destination room's draft from localStorage. We
+        // MUST NOT call setDraft('') here: setDraft writes through
+        // to localStorage, and `draftStorageKey()` reactively reads
+        // props.room.roomId — which at this point is already the
+        // NEW room. So setDraft('') would DELETE the destination
+        // room's saved draft (the exact "I typed a message, switched
+        // chats, came back, it's gone" bug). Use setDraftValueRaw
+        // to update only the in-memory signal; per-room localStorage
+        // stays intact until the user actually types or sends.
+        setDraftValueRaw(loadStoredDraft());
         setReplyingTo(null);
         setEditing(null);
         setOpenThread(null);
