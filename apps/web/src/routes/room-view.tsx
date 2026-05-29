@@ -91,6 +91,14 @@ const PAGE_SIZE = 50;
 const SCROLL_STICK_THRESHOLD = 80;
 const PAGINATE_TRIGGER = 200;
 
+// Module-scoped member-list cache (see loadMembersForComposer below).
+// Survives across room-view remounts so room-hop doesn't refetch.
+const MEMBERS_TTL_MS = 30_000;
+const membersCache = new Map<
+  RoomId,
+  { promise: Promise<RoomMember[]>; expiresAt: number }
+>();
+
 export function RoomView(props: {
   room: RoomSummary;
   cache: RoomCache;
@@ -216,18 +224,24 @@ export function RoomView(props: {
     return out;
   };
 
-  // Lazy-load room members for the @autocomplete. Cached per
-  // room-view instance; the parent remounts us on room switch so the
-  // cache lifetime is naturally bounded.
-  let membersPromise: Promise<RoomMember[]> | null = null;
+  // Lazy-load room members for the @autocomplete. Cached at module
+  // scope with a 30s TTL so room-switch-and-back doesn't re-fetch a
+  // members list that almost never changes within that window. The
+  // earlier per-instance cache was wiped on every room-switch
+  // remount; for power users hopping between 3-4 rooms repeatedly,
+  // that meant a fresh members fetch per hop.
   const loadMembersForComposer = (): Promise<RoomMember[]> => {
-    if (!membersPromise) {
-      membersPromise = bridge
-        .request({ kind: 'loadRoomMembers', roomId: props.room.roomId })
-        .then((r) => r.members)
-        .catch(() => []);
-    }
-    return membersPromise;
+    const cached = membersCache.get(props.room.roomId);
+    if (cached && cached.expiresAt > Date.now()) return cached.promise;
+    const promise = bridge
+      .request({ kind: 'loadRoomMembers', roomId: props.room.roomId })
+      .then((r) => r.members)
+      .catch(() => []);
+    membersCache.set(props.room.roomId, {
+      promise,
+      expiresAt: Date.now() + MEMBERS_TTL_MS,
+    });
+    return promise;
   };
   const bumpFocus = () => setFocusToken((v) => v + 1);
 
