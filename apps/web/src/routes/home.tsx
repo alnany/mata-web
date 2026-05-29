@@ -446,12 +446,51 @@ export function HomePage() {
   const roomsList = createMemo(() => filteredRooms().filter((r) => r.type !== 'direct'));
 
   // -------- Keyboard shortcuts ------------------------------------------
+  // Flat, in-display-order room list (DMs first, then rooms) used for
+  // keyboard navigation so Alt+↑/↓ walks exactly what the user sees,
+  // honoring the active scope tab + search filter.
+  const orderedRooms = createMemo(() => [...directList(), ...roomsList()]);
+
+  // Step the selection by `delta` (-1 = up/prev, +1 = down/next) and
+  // open the resulting room. Clamps at both ends; if nothing is active
+  // yet, ↓ lands on the first room and ↑ on the last.
+  const stepRoom = (delta: number) => {
+    const list = orderedRooms();
+    if (list.length === 0) return;
+    const cur = activeId();
+    const idx = cur ? list.findIndex((r) => r.roomId === cur) : -1;
+    let next: number;
+    if (idx === -1) {
+      next = delta > 0 ? 0 : list.length - 1;
+    } else {
+      next = Math.min(list.length - 1, Math.max(0, idx + delta));
+    }
+    const target = list[next];
+    if (target && target.roomId !== cur) {
+      openRoom(target);
+      // Keep the newly selected row in view within the scroller.
+      requestAnimationFrame(() => {
+        document
+          .querySelector(`[data-room-id="${target.roomId}"]`)
+          ?.scrollIntoView({ block: 'nearest' });
+      });
+    }
+  };
+
   const onKey = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       const input = document.getElementById('mata-room-search') as HTMLInputElement | null;
       input?.focus();
       input?.select();
+      return;
+    }
+    // Alt+↑/↓ — previous / next chat (matches Telegram Web). Alt is a
+    // chord so it never steals plain arrow keys from the composer or
+    // the search box.
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      stepRoom(e.key === 'ArrowDown' ? 1 : -1);
     }
   };
   onMount(() => window.addEventListener('keydown', onKey));
@@ -871,7 +910,7 @@ function RoomRow(props: {
   const hasDraft = () => draftPreview().length > 0;
 
   return (
-    <li class="group relative">
+    <li class="group relative" data-room-id={r.roomId}>
       {/* Active rail */}
       <Show when={props.active}>
         <span
