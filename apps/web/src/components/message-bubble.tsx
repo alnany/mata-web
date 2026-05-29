@@ -103,6 +103,32 @@ export function MessageBubble(props: {
     });
   });
 
+  // Telegram-style invocation of the action menu:
+  //   • desktop  → right-click (contextmenu) on the bubble
+  //   • touch    → long-press (~450 ms) with a light haptic tick
+  // Both just flip `showMenu` on; the existing click-away / Esc
+  // effect above handles dismissal, and the toolbar wrapper already
+  // forces itself visible whenever showMenu() is true.
+  let pressTimer: number | undefined;
+  const cancelPress = () => {
+    if (pressTimer !== undefined) {
+      clearTimeout(pressTimer);
+      pressTimer = undefined;
+    }
+  };
+  const onBubbleTouchStart = () => {
+    cancelPress();
+    pressTimer = window.setTimeout(() => {
+      setShowMenu(true);
+      navigator.vibrate?.(10);
+    }, 450);
+  };
+  const onBubbleContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
+    setShowMenu(true);
+  };
+  onCleanup(cancelPress);
+
   // Most rendering only makes sense for m.room.message — others get a
   // muted system row.
   if (props.ev.type !== 'm.room.message') {
@@ -173,6 +199,11 @@ export function MessageBubble(props: {
               ? 'bg-accent text-accent-ink'
               : 'bg-elev text-fg'
           }`}
+          onContextMenu={onBubbleContextMenu}
+          onTouchStart={onBubbleTouchStart}
+          onTouchEnd={cancelPress}
+          onTouchMove={cancelPress}
+          onTouchCancel={cancelPress}
         >
           {/* Reply preview strip */}
           <Show when={msg.inReplyTo && props.inReplyToEvent}>

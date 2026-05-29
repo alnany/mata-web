@@ -677,12 +677,46 @@ export function RoomView(props: {
   };
 
   // ---- Scroll tracking + pagination --------------------------------------
+  // Floating date header (Telegram-style): while scrolling, a pill at
+  // the top of the timeline shows which day you're currently reading.
+  // It fades out shortly after scrolling stops.
+  const [floatingDayTs, setFloatingDayTs] = createSignal<number | null>(null);
+  const [floatingDayShown, setFloatingDayShown] = createSignal(false);
+  let floatingHideTimer: number | undefined;
+  const updateFloatingDay = () => {
+    if (!scrollerRef) return;
+    const top = scrollerRef.getBoundingClientRect().top;
+    const dividers = scrollerRef.querySelectorAll<HTMLElement>('[data-day-ts]');
+    let activeTs: number | null = null;
+    for (const d of dividers) {
+      // The active day is the last divider that has scrolled past (or is
+      // pinned to) the top edge of the viewport.
+      if (d.getBoundingClientRect().top <= top + 12) {
+        activeTs = Number(d.dataset.dayTs);
+      } else {
+        break;
+      }
+    }
+    // Before the first divider scrolls off, fall back to the earliest day.
+    if (activeTs == null && dividers.length > 0) {
+      activeTs = Number(dividers[0].dataset.dayTs);
+    }
+    if (activeTs != null) setFloatingDayTs(activeTs);
+    setFloatingDayShown(true);
+    if (floatingHideTimer) clearTimeout(floatingHideTimer);
+    floatingHideTimer = window.setTimeout(() => setFloatingDayShown(false), 1400);
+  };
+  onCleanup(() => {
+    if (floatingHideTimer) clearTimeout(floatingHideTimer);
+  });
+
   const onScroll = () => {
     if (!scrollerRef) return;
     const distFromBottom =
       scrollerRef.scrollHeight - scrollerRef.scrollTop - scrollerRef.clientHeight;
     const atBottom = distFromBottom < SCROLL_STICK_THRESHOLD;
     setStickToBottom(atBottom);
+    updateFloatingDay();
 
     // Remember where the user is so reopening the room restores it.
     // Debounced so we don't thrash the store on every scroll frame.
@@ -1198,6 +1232,20 @@ export function RoomView(props: {
     },
   };
 
+  // ↑ on an empty composer → edit my most recent text message.
+  const editLast = () => {
+    const meId = me();
+    if (!meId) return;
+    const evs = props.cache.events;
+    for (let i = evs.length - 1; i >= 0; i--) {
+      const e = evs[i];
+      if (e.type === 'm.room.message' && e.sender === meId && e.content.msgtype === 'm.text') {
+        actions.onEdit(e);
+        return;
+      }
+    }
+  };
+
   // Pending cross-room jump from global search. When home switches the
   // active room to land on a search hit, the target event may not be in
   // the rendered timeline yet (it loads async). Retry the DOM-based jump
@@ -1606,6 +1654,21 @@ export function RoomView(props: {
 
       {/* Timeline */}
       <div class="relative min-h-0">
+      {/* Floating day header — fades in while scrolling. */}
+      <Show when={floatingDayTs() != null}>
+        <div
+          class={`pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 transition-opacity duration-200 ${
+            floatingDayShown() ? 'opacity-100' : 'opacity-0'
+          }`}
+        >
+          <span
+            class="mono rounded-full border bg-elev px-3 py-0.5 text-[10.5px] font-medium uppercase tracking-[0.06em] text-fg-3 shadow-sm"
+            style={{ 'border-color': 'var(--color-line)' }}
+          >
+            {dayLabel(floatingDayTs() as number)}
+          </span>
+        </div>
+      </Show>
       <div
         ref={scrollerRef}
         onScroll={onScroll}
@@ -1744,6 +1807,7 @@ export function RoomView(props: {
         editing={editing()}
         onCancelContext={cancelContext}
         onSubmit={submit}
+        onEditLast={editLast}
         onTyping={sendTyping}
         onAttach={handleAttach}
         hasStagedAttachments={() => staged().length > 0}
@@ -1850,7 +1914,7 @@ function DayDivider(props: { ts: number }) {
   // into the conversation surface; the pill sits on top with `bg-elev`
   // so it's clearly readable against both light and dark backgrounds.
   return (
-    <li class="my-4 flex items-center gap-3 px-1">
+    <li class="my-4 flex items-center gap-3 px-1" data-day-ts={props.ts}>
       <span
         class="h-px flex-1"
         style={{ 'background-color': 'var(--color-line)' }}

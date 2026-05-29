@@ -30,6 +30,13 @@ export function Composer(props: {
   onCancelContext: () => void;
   onSubmit: () => void;
   onTyping: () => void;
+  /**
+   * Pressing ↑ on an empty composer jumps straight into editing your
+   * most recent message (iMessage / Slack / Telegram muscle memory).
+   * Optional — only fires when the draft is empty and no reply/edit
+   * context is active.
+   */
+  onEditLast?: () => void;
   /** Called when the user picks a file from the attach button. */
   onAttach?: (file: File) => void;
   /**
@@ -256,6 +263,17 @@ export function Composer(props: {
       e.preventDefault();
       props.onSubmit();
       requestAnimationFrame(() => autosize());
+      return;
+    }
+    if (
+      e.key === 'ArrowUp' &&
+      props.onEditLast &&
+      !props.editing &&
+      !props.replyingTo &&
+      props.draft().trim() === ''
+    ) {
+      e.preventDefault();
+      props.onEditLast();
       return;
     }
     if (e.key === 'Escape' && (props.replyingTo || props.editing)) {
