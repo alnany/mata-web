@@ -44,6 +44,14 @@ export type MessageActions = {
    * and the room list; the bubble just hands off the source event.
    */
   onForward: (ev: RoomMessageEvent) => void;
+  /**
+   * Open the room-level image gallery starting at this image event.
+   * When provided, clicking an image opens the shared album overlay
+   * (swipe left/right through every image in the room) instead of the
+   * bubble's own single-image lightbox. Optional so the bubble still
+   * works standalone (thread panel, tests) with a local lightbox.
+   */
+  onOpenImage?: (eventId: EventId) => void;
 };
 
 export function MessageBubble(props: {
@@ -186,7 +194,15 @@ export function MessageBubble(props: {
           </Show>
 
           <span class="whitespace-pre-wrap break-words">
-            <Body msg={msg} me={props.me} />
+            <Body
+              msg={msg}
+              me={props.me}
+              onOpenImage={
+                props.actions.onOpenImage
+                  ? () => props.actions.onOpenImage?.(msg.eventId)
+                  : undefined
+              }
+            />
           </span>
 
           {/*
@@ -515,13 +531,13 @@ function ReactionPill(props: { r: ReactionAggregate; me: UserId | null; onToggle
   );
 }
 
-function Body(props: { msg: RoomMessageEvent; me: UserId | null }) {
+function Body(props: { msg: RoomMessageEvent; me: UserId | null; onOpenImage?: () => void }) {
   const c = props.msg.content;
   if (c.msgtype === 'm.text' || c.msgtype === 'm.notice' || c.msgtype === 'm.emote') {
     return <TextWithMentions text={c.body} mentions={c.mentions ?? null} me={props.me} />;
   }
   if (c.msgtype === 'm.image' || c.msgtype === 'm.video' || c.msgtype === 'm.audio' || c.msgtype === 'm.file') {
-    return <MediaContent body={c} />;
+    return <MediaContent body={c} onOpenImage={props.onOpenImage} />;
   }
   return `[${c.msgtype}] ${c.body}`;
 }
@@ -770,7 +786,7 @@ function previewOf(ev: TimelineEvent): string {
 // the presence of `file` on the body.
 // ---------------------------------------------------------------------------
 
-function MediaContent(props: { body: MediaMessageBody }) {
+function MediaContent(props: { body: MediaMessageBody; onOpenImage?: () => void }) {
   const bridge = useBridge();
 
   type Loaded = { url: string; mime: string };
@@ -833,7 +849,7 @@ function MediaContent(props: { body: MediaMessageBody }) {
           />
         }
       >
-        {(r) => <MediaPlayer body={props.body} loaded={r()} />}
+        {(r) => <MediaPlayer body={props.body} loaded={r()} onOpenImage={props.onOpenImage} />}
       </Show>
     </div>
   );
@@ -854,9 +870,25 @@ function MediaLoading(props: { body: MediaMessageBody; loading: boolean; error: 
   );
 }
 
-function MediaPlayer(props: { body: MediaMessageBody; loaded: { url: string; mime: string } }) {
+function MediaPlayer(props: {
+  body: MediaMessageBody;
+  loaded: { url: string; mime: string };
+  onOpenImage?: () => void;
+}) {
   const c = props.body;
   if (c.msgtype === 'm.image') {
+    // When the room provides a gallery handler, clicking opens the
+    // shared album overlay (arrow through every image in the room).
+    if (props.onOpenImage) {
+      return (
+        <img
+          src={props.loaded.url}
+          alt={c.body}
+          class="max-h-80 max-w-full cursor-zoom-in rounded-lg object-contain"
+          onClick={() => props.onOpenImage?.()}
+        />
+      );
+    }
     const [lightbox, setLightbox] = createSignal(false);
     // Esc / backdrop-click closes the lightbox. We attach a keydown
     // listener only while the overlay is open so we don't capture Esc

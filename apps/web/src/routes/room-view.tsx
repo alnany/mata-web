@@ -28,6 +28,7 @@ import { Composer } from '../components/composer.js';
 import { RoomHeader } from '../components/room-header.js';
 import { MembersPanel } from '../components/members-panel.js';
 import { SearchPanel } from '../components/search-panel.js';
+import { ImageGallery, type GalleryImage } from '../components/image-gallery.js';
 import { ForwardModal } from '../components/forward-modal.js';
 import { readRoomTimeline, writeRoomTimeline } from '../lib/persistent-cache.js';
 
@@ -261,6 +262,17 @@ export function RoomView(props: {
   // either picks a target (modal closes via its own success path) or
   // dismisses (we clear via onClose).
   const [forwardSource, setForwardSource] = createSignal<RoomMessageEvent | null>(null);
+  // Room-level image album. Clicking any image opens this overlay and the
+  // user can page through every image in the room (← / → / chevrons).
+  const [galleryStart, setGalleryStart] = createSignal<EventId | null>(null);
+  const galleryImages = createMemo<GalleryImage[]>(() =>
+    props.cache.events
+      .filter(
+        (e): e is Extract<TimelineEvent, { type: 'm.room.message' }> =>
+          e.type === 'm.room.message' && e.content.msgtype === 'm.image',
+      )
+      .map((e) => ({ eventId: e.eventId, body: e.content, name: e.content.body })),
+  );
   const [searchOpen, setSearchOpen] = createSignal(false);
 
   // Pending intentional mentions for the next send. Composer pushes
@@ -1167,6 +1179,7 @@ export function RoomView(props: {
     onForward: (ev) => {
       setForwardSource(ev);
     },
+    onOpenImage: (eventId) => setGalleryStart(eventId),
     onJumpTo: (eventId) => {
       const target = document.querySelector(`[data-event-id="${cssEsc(eventId)}"]`);
       if (target instanceof HTMLElement) {
@@ -1774,6 +1787,15 @@ export function RoomView(props: {
             liveEvents={() => props.cache.events}
             myUserId={me()}
             onClose={() => setOpenThread(null)}
+          />
+        )}
+      </Show>
+      <Show when={galleryStart()}>
+        {(start) => (
+          <ImageGallery
+            images={galleryImages()}
+            startEventId={start()}
+            onClose={() => setGalleryStart(null)}
           />
         )}
       </Show>

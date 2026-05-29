@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
+import { Portal } from 'solid-js/web';
 import { useNavigate } from '@solidjs/router';
 import { useBridge } from '../bridge/context.js';
 import { session, setSession } from '../stores/session.js';
@@ -393,6 +394,45 @@ export function HomePage() {
     });
   };
 
+  // ---- Room context menu (right-click on a room row) --------------------
+  // Standard list affordances: mark read, mute/unmute, leave. Position is
+  // captured from the pointer; RoomContextMenu clamps it into the viewport
+  // and closes on outside-click / Escape / scroll.
+  const [ctxMenu, setCtxMenu] = createSignal<{ x: number; y: number; room: RoomSummary } | null>(
+    null,
+  );
+  const openRoomMenu = (e: MouseEvent, room: RoomSummary) => {
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY, room });
+  };
+  const toggleRoomMuted = (room: RoomSummary) => {
+    const next = !room.isMuted;
+    void bridge
+      .request({ kind: 'setRoomMuted', roomId: room.roomId, muted: next })
+      .then(() => showToast('info', next ? 'Muted' : 'Unmuted'))
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        showToast('error', `Couldn't ${next ? 'mute' : 'unmute'}: ${msg}`);
+      });
+  };
+  const leaveRoomConfirmed = (room: RoomSummary) => {
+    const ok = window.confirm(`Leave "${room.name}"? You'll stop receiving messages from it.`);
+    if (!ok) return;
+    void bridge
+      .request({ kind: 'leaveRoom', roomId: room.roomId })
+      .then(() => {
+        showToast('info', `Left "${room.name}"`);
+        if (activeId() === room.roomId) {
+          setActiveId(null);
+          navigate('/');
+        }
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        showToast('error', `Couldn't leave: ${msg}`);
+      });
+  };
+
   // Auto-select the top room on first paint. Two scenarios:
   //   (a) persisted activeId points at a room that's still in the list →
   //       just make sure it has a cache entry (already handled below
@@ -702,6 +742,7 @@ export function HomePage() {
                       active={activeId() === room.roomId}
                       onSelect={() => openRoom(room)}
                       onMarkRead={() => markRoomRead(room.roomId)}
+                      onContextMenu={(e) => openRoomMenu(e, room)}
                       callBusyHere={activeCall()?.roomId === room.roomId}
                       draftText={drafts()[room.roomId]}
                       myId={myId()}
@@ -725,6 +766,7 @@ export function HomePage() {
                       active={activeId() === room.roomId}
                       onSelect={() => openRoom(room)}
                       onMarkRead={() => markRoomRead(room.roomId)}
+                      onContextMenu={(e) => openRoomMenu(e, room)}
                       callBusyHere={activeCall()?.roomId === room.roomId}
                       draftText={drafts()[room.roomId]}
                       myId={myId()}
@@ -826,6 +868,13 @@ export function HomePage() {
           setActiveId(roomId);
         }}
       />
+      <RoomContextMenu
+        state={ctxMenu()}
+        onClose={() => setCtxMenu(null)}
+        onMarkRead={(room) => markRoomRead(room.roomId)}
+        onToggleMute={toggleRoomMuted}
+        onLeave={leaveRoomConfirmed}
+      />
     </div>
     </>
   );
@@ -903,6 +952,127 @@ function RoomListSkeleton() {
 }
 
 /* =========================================================================
+   Room context menu — right-click on a room row
+   ========================================================================= */
+
+function RoomContextMenu(props: {
+  state: { x: number; y: number; room: RoomSummary } | null;
+  onClose: () => void;
+  onMarkRead: (room: RoomSummary) => void;
+  onToggleMute: (room: RoomSummary) => void;
+  onLeave: (room: RoomSummary) => void;
+}) {
+  const MENU_W = 196;
+  const MENU_H = 150;
+  // Clamp the pointer position so the menu never overflows the viewport.
+  const pos = () => {
+    const s = props.state;
+    if (!s) return { left: 8, top: 8 };
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    return {
+      left: Math.max(8, Math.min(s.x, vw - MENU_W - 8)),
+      top: Math.max(8, Math.min(s.y, vh - MENU_H - 8)),
+    };
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') props.onClose();
+  };
+  onMount(() => window.addEventListener('keydown', onKey));
+  onCleanup(() => window.removeEventListener('keydown', onKey));
+
+  return (
+    <Show when={props.state}>
+      {(s) => (
+        <Portal>
+          {/* Full-screen catcher: any click / right-click / scroll dismisses. */}
+          <div
+            class="fixed inset-0 z-[200]"
+            onClick={props.onClose}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              props.onClose();
+            }}
+            onWheel={props.onClose}
+          >
+            <div
+              class="absolute min-w-[196px] overflow-hidden rounded-[10px] border py-1 shadow-xl"
+              style={{
+                left: `${pos().left}px`,
+                top: `${pos().top}px`,
+                'border-color': 'var(--color-line)',
+                background: 'var(--color-elev)',
+                'box-shadow': '0 8px 28px rgba(0,0,0,0.32)',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div class="truncate px-3 py-1.5 text-[11px] text-fg-4">{s().room.name}</div>
+              <div class="mb-1 h-px" style={{ background: 'var(--color-line)' }} />
+              <button
+                type="button"
+                disabled={s().room.unreadCount === 0}
+                onClick={() => {
+                  props.onMarkRead(s().room);
+                  props.onClose();
+                }}
+                class="flex w-full items-center gap-2.5 px-3 py-[7px] text-left text-[13px] text-fg-2 transition-colors hover:bg-[var(--color-list)] disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M13.5 4.5L6 12L2.5 8.5" />
+                </svg>
+                Mark as read
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  props.onToggleMute(s().room);
+                  props.onClose();
+                }}
+                class="flex w-full items-center gap-2.5 px-3 py-[7px] text-left text-[13px] text-fg-2 transition-colors hover:bg-[var(--color-list)]"
+              >
+                <Show
+                  when={s().room.isMuted}
+                  fallback={
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M5 6a3 3 0 0 1 6 0c0 3 1.2 4 1.2 4H3.8S5 9 5 6Z" />
+                      <path d="M6.6 12.5a1.6 1.6 0 0 0 2.8 0" />
+                    </svg>
+                  }
+                >
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M5 6a3 3 0 0 1 6 0c0 3 1.2 4 1.2 4H3.8S5 9 5 6Z" />
+                    <path d="M6.6 12.5a1.6 1.6 0 0 0 2.8 0" />
+                    <path d="M2 2l12 12" />
+                  </svg>
+                </Show>
+                {s().room.isMuted ? 'Unmute' : 'Mute notifications'}
+              </button>
+              <div class="my-1 h-px" style={{ background: 'var(--color-line)' }} />
+              <button
+                type="button"
+                onClick={() => {
+                  props.onLeave(s().room);
+                  props.onClose();
+                }}
+                class="flex w-full items-center gap-2.5 px-3 py-[7px] text-left text-[13px] transition-colors hover:bg-[var(--color-list)]"
+                style={{ color: 'var(--color-danger)' }}
+              >
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M6 14H3.5A1.5 1.5 0 0 1 2 12.5v-9A1.5 1.5 0 0 1 3.5 2H6" />
+                  <path d="M10.5 11L14 7.5L10.5 4" />
+                  <path d="M14 7.5H6" />
+                </svg>
+                Leave room
+              </button>
+            </div>
+          </div>
+        </Portal>
+      )}
+    </Show>
+  );
+}
+
+/* =========================================================================
    Room row — design-spec layout: leader glyph · name (+ federated suffix) · meta
    ========================================================================= */
 
@@ -911,6 +1081,7 @@ function RoomRow(props: {
   active: boolean;
   onSelect: () => void;
   onMarkRead: () => void;
+  onContextMenu: (e: MouseEvent) => void;
   callBusyHere: boolean;
   draftText?: string;
   myId: string;
@@ -924,7 +1095,7 @@ function RoomRow(props: {
   const hasDraft = () => draftPreview().length > 0;
 
   return (
-    <li class="group relative" data-room-id={r.roomId}>
+    <li class="group relative" data-room-id={r.roomId} onContextMenu={props.onContextMenu}>
       {/* Active rail */}
       <Show when={props.active}>
         <span
