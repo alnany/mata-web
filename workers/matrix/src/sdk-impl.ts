@@ -343,28 +343,9 @@ export class SdkSession {
    */
   readonly secretStorageKeyCache: Map<string, Uint8Array> = new Map();
 
-  /**
-   * Currently-foregrounded room (the one the user has open in the UI).
-   * Set by `subscribeRoom` from the room-view's onMount; cleared by
-   * `unsubscribeRoom` or by the next subscribeRoom. The sync-tick
-   * reconcile (see ClientEvent.Sync handler) emits the live-timeline
-   * tail for THIS room on every successful sync so the open room
-   * stays eventually-consistent with the SDK's internal state — a
-   * safety net for the rare case where RoomEvent.Timeline or
-   * MatrixEventEvent.Decrypted didn't fire for an inbound event
-   * (matrix-js-sdk drops them silently on certain reconnect / gap
-   * paths, which the user perceives as "I see the message in Element
-   * but it doesn't show here until I refresh").
-   */
+  /** Foreground room; sync-tick reconcile re-emits its tail (see Sync handler). */
   private subscribedRoomId: RoomId | null = null;
-
-  /**
-   * Cap on how many tail events we re-emit per reconcile. Element
-   * uses a similar window; 60 covers a typical viewport on any
-   * reasonable screen size, and the UI dedupes by eventId so any
-   * extra is just a postMessage cost. Larger than the per-room
-   * PAGE_SIZE (40) so we always cover the visible window.
-   */
+  /** Tail size re-emitted per reconcile; UI dedupes by eventId. */
   private static readonly RECONCILE_TAIL_SIZE = 60;
 
   /**
@@ -488,12 +469,7 @@ export class SdkSession {
 
   subscribeRoom(roomId: RoomId): void {
     this.subscribedRoomId = roomId;
-    // Fire one reconcile immediately so opening a room that the SDK
-    // already has timeline state for paints from the canonical SDK
-    // copy, not just whatever stale events the UI cache held. Safe
-    // when client is null (cold-start race) — emitSubscribedRoomTail
-    // bails on missing client.
-    this.emitSubscribedRoomTail();
+    this.emitSubscribedRoomTail(); // immediate reconcile; bails if client null
   }
 
   unsubscribeRoom(): void {
@@ -502,13 +478,9 @@ export class SdkSession {
 
   /**
    * Re-emit the subscribed room's live-timeline tail as a syncUpdate
-   * delta. The UI's room-view handler dedupes by eventId, so this is
-   * idempotent — duplicates land in the same slot they already
-   * occupy. Called on every successful sync tick to catch events
-   * that slipped through the per-event taps (RoomEvent.Timeline /
-   * MatrixEventEvent.Decrypted occasionally miss events on
-   * reconnect / gap-fill paths, leaving the UI lagging the SDK's
-   * actual state).
+   * delta (idempotent — UI dedupes by eventId). Catches events that
+   * slipped through RoomEvent.Timeline / MatrixEventEvent.Decrypted on
+   * reconnect / gap-fill paths, where the UI lags the SDK's state.
    */
   private emitSubscribedRoomTail(): void {
     const c = this.client;
@@ -543,7 +515,7 @@ export class SdkSession {
     roomId: RoomId,
     fromToken: string | null,
     limit: number,
-  ): Promise<{ events: TimelineEvent[]; prevToken: string | null }> {
+  ): Promise<{ events: TimelineEvent[]; prevToken: string | null; readUpToEventId: string | null }> {
     const c = this.requireClient();
     // Cold-start race: the IndexedDB room-list cache paints rooms
     // before the SDK's first /sync populates client state. If the user
@@ -569,9 +541,23 @@ export class SdkSession {
       await c.paginateEventTimeline(liveTimeline, { backwards: true, limit });
     }
     const events = liveTimeline.getEvents();
+    // Read-marker anchor for the unread divider: the user's own
+    // read-receipt up-to event id captured now, before the UI's
+    // post-load markLatestRead advances it. `false` = real server-acked
+    // position, not synthetic. Initial page only; UI freezes it.
+    let readUpToEventId: string | null = null;
+    if (fromToken === null) {
+      const me = c.getUserId();
+      try {
+        readUpToEventId = me ? room.getEventReadUpTo(me, false) : null;
+      } catch {
+        readUpToEventId = null;
+      }
+    }
     return {
       events: events.map((e) => toTimelineEvent(e)).filter((e): e is TimelineEvent => e !== null),
       prevToken: liveTimeline.getPaginationToken('b' as unknown as Parameters<typeof liveTimeline.getPaginationToken>[0]),
+      readUpToEventId,
     };
   }
 
@@ -2200,13 +2186,7 @@ export class SdkSession {
               : undefined,
           });
           if (state === SyncState.Prepared) this.emitInitialRooms(client);
-          // Reconcile the open room's tail on every successful sync.
-          // Cheap (single delta with up to 60 events, deduped by the
-          // UI), and catches events that RoomEvent.Timeline /
-          // MatrixEventEvent.Decrypted missed during reconnect / gap
-          // fill — the "I see it in Element but not here until
-          // refresh" symptom.
-          this.emitSubscribedRoomTail();
+          this.emitSubscribedRoomTail(); // reconcile open room each sync tick
           break;
         case SyncState.Reconnecting:
         case SyncState.Catchup:
