@@ -1,4 +1,4 @@
-import { createSignal, onMount, Show } from 'solid-js';
+import { createResource, createSignal, onMount, Show } from 'solid-js';
 import type { RoomSummary, UserId } from '@mata/shared/matrix';
 import { prettyName } from './message-bubble.js';
 import { PresenceDot } from './presence-dot.js';
@@ -168,7 +168,7 @@ export function RoomHeader(props: {
               setMenuOpen(false);
             }}
           >
-            Room info
+            Room settings
           </MenuItem>
           <MenuItem onClick={toggleMute} disabled={muting()}>
             {props.room.isMuted ? 'Unmute notifications' : 'Mute notifications'}
@@ -177,7 +177,7 @@ export function RoomHeader(props: {
       </Show>
 
       <Show when={infoOpen()}>
-        <RoomInfoModal room={props.room} onClose={() => setInfoOpen(false)} />
+        <RoomSettingsModal room={props.room} onClose={() => setInfoOpen(false)} />
       </Show>
     </header>
   );
@@ -236,8 +236,66 @@ function MenuItem(props: { onClick: () => void; disabled?: boolean; children: an
   );
 }
 
-function RoomInfoModal(props: { room: RoomSummary; onClose: () => void }) {
+/**
+ * Room settings (Phase 1) — Overview tab. Edit the room name + topic,
+ * power-level gated: the worker resolves `maySendStateEvent` for
+ * `m.room.name` / `m.room.topic` and we render the fields read-only
+ * (or show a "no permission" note) when the user can't change them.
+ * State metadata (type / encrypted / room id) stays as a read-only
+ * footer. DMs have no display name to edit, so the name field falls
+ * back to read-only there too via the same power gate.
+ */
+function RoomSettingsModal(props: { room: RoomSummary; onClose: () => void }) {
   const r = props.room;
+  const bridge = useBridge();
+  const [name, setName] = createSignal('');
+  const [topic, setTopic] = createSignal('');
+  const [saving, setSaving] = createSignal(false);
+
+  const [settings] = createResource(
+    () => r.roomId,
+    async (roomId) => {
+      const res = await bridge.request({ kind: 'fetchRoomSettings', roomId });
+      if (res.kind === 'fetchRoomSettings') {
+        setName(res.name);
+        setTopic(res.topic);
+        return res;
+      }
+      return null;
+    },
+  );
+
+  const canSetName = () => settings()?.canSetName ?? false;
+  const canSetTopic = () => settings()?.canSetTopic ?? false;
+  const loaded = () => settings() !== undefined;
+  const readOnly = () => loaded() && !canSetName() && !canSetTopic();
+  const dirty = () =>
+    (canSetName() && name().trim() !== (settings()?.name ?? '')) ||
+    (canSetTopic() && topic().trim() !== (settings()?.topic ?? ''));
+
+  const save = async () => {
+    if (saving() || !dirty()) return;
+    setSaving(true);
+    try {
+      const s = settings();
+      if (canSetName() && name().trim() !== (s?.name ?? '')) {
+        await bridge.request({ kind: 'setRoomName', roomId: r.roomId, name: name().trim() });
+      }
+      if (canSetTopic() && topic().trim() !== (s?.topic ?? '')) {
+        await bridge.request({ kind: 'setRoomTopic', roomId: r.roomId, topic: topic().trim() });
+      }
+      showToast('success', 'Room updated');
+      props.onClose();
+    } catch (err) {
+      showToast('error', `Could not save: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fieldClass =
+    'w-full rounded-lg border border-line bg-elev px-3 py-2 text-sm text-fg placeholder:text-fg-4 focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20 disabled:cursor-not-allowed disabled:text-fg-3';
+
   return (
     <div class="fixed inset-0 z-30 flex items-center justify-center" role="dialog" aria-modal>
       <div class="absolute inset-0 bg-black/50" onClick={props.onClose} />
@@ -247,7 +305,7 @@ function RoomInfoModal(props: { room: RoomSummary; onClose: () => void }) {
       >
         <div class="flex items-start justify-between">
           <h3 class="text-[15px] text-fg" style={{ 'font-weight': 500 }}>
-            {r.name}
+            Room settings
           </h3>
           <button
             type="button"
@@ -258,15 +316,71 @@ function RoomInfoModal(props: { room: RoomSummary; onClose: () => void }) {
             ✕
           </button>
         </div>
-        <dl class="mt-4 space-y-2 text-[13px]">
+
+        <div class="mt-4 space-y-3">
+          <div>
+            <label class="mono mb-1 block text-[10.5px] uppercase tracking-[0.08em] text-fg-4">
+              Name
+            </label>
+            <input
+              type="text"
+              value={name()}
+              onInput={(e) => setName(e.currentTarget.value)}
+              disabled={!canSetName()}
+              placeholder="Room name"
+              class={fieldClass}
+            />
+          </div>
+          <div>
+            <label class="mono mb-1 block text-[10.5px] uppercase tracking-[0.08em] text-fg-4">
+              Topic
+            </label>
+            <textarea
+              value={topic()}
+              onInput={(e) => setTopic(e.currentTarget.value)}
+              disabled={!canSetTopic()}
+              placeholder="What's this room about?"
+              rows={3}
+              class={`${fieldClass} resize-none`}
+            />
+          </div>
+        </div>
+
+        <Show when={readOnly()}>
+          <p class="mt-3 text-[11.5px] text-fg-3">
+            You don't have permission to change this room's settings.
+          </p>
+        </Show>
+
+        <Show when={!readOnly()}>
+          <div class="mt-4 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={props.onClose}
+              class="rounded-lg border border-line px-3 py-1.5 text-[13px] text-fg-2 hover:bg-input"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={!dirty() || saving()}
+              class="rounded-lg bg-accent px-3 py-1.5 text-[13px] font-semibold text-accent-ink transition-[filter] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {saving() ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </Show>
+
+        <dl
+          class="mt-5 space-y-2 border-t pt-4 text-[13px]"
+          style={{ 'border-color': 'var(--color-line)' }}
+        >
           <Row label="Type">{r.type}</Row>
           <Row label="Encrypted">{r.isEncrypted ? 'yes' : 'no'}</Row>
           <Row label="Room ID">
             <span class="mono break-all text-[11px] text-fg-3">{r.roomId}</span>
           </Row>
-          <Show when={r.topic}>
-            <Row label="Topic">{r.topic}</Row>
-          </Show>
         </dl>
       </div>
     </div>

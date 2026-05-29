@@ -131,6 +131,24 @@ const handlers: Handlers = {
     await core.setIgnored(req.userId, req.ignored);
     return { kind: 'setIgnored' };
   },
+  fetchRoomSettings: async (req, core) => {
+    const s = await core.fetchRoomSettings(req.roomId);
+    return {
+      kind: 'fetchRoomSettings',
+      name: s.name,
+      topic: s.topic,
+      canSetName: s.canSetName,
+      canSetTopic: s.canSetTopic,
+    };
+  },
+  setRoomName: async (req, core) => {
+    await core.setRoomName(req.roomId, req.name);
+    return { kind: 'setRoomName' };
+  },
+  setRoomTopic: async (req, core) => {
+    await core.setRoomTopic(req.roomId, req.topic);
+    return { kind: 'setRoomTopic' };
+  },
   fetchEvent: async (req, core) => {
     const event = await core.fetchEvent(req.roomId, req.eventId);
     return { kind: 'fetchEvent', event };

@@ -736,6 +736,54 @@ export class SdkSession {
   }
 
   /**
+   * Read the room's editable settings (name + topic) plus whether the
+   * current user is permitted to change them. Editability is the room's
+   * power-level gate — `maySendStateEvent('m.room.name' / 'm.room.topic')`
+   * — so the UI can render read-only fields for under-privileged members
+   * instead of letting them submit a doomed state event.
+   */
+  async fetchRoomSettings(
+    roomId: RoomId,
+  ): Promise<{ name: string; topic: string; canSetName: boolean; canSetTopic: boolean }> {
+    const c = this.requireClient();
+    const room = c.getRoom(roomId);
+    if (!room) throw new Error('room not found');
+    const me = c.getUserId() ?? '';
+    const nameRaw = room.currentState
+      .getStateEvents('m.room.name', '')
+      ?.getContent()?.name;
+    const topicRaw = room.currentState
+      .getStateEvents('m.room.topic', '')
+      ?.getContent()?.topic;
+    let canSetName = false;
+    let canSetTopic = false;
+    try {
+      canSetName = room.currentState.maySendStateEvent('m.room.name', me);
+      canSetTopic = room.currentState.maySendStateEvent('m.room.topic', me);
+    } catch {
+      /* power levels unavailable — leave fields read-only */
+    }
+    return {
+      name: typeof nameRaw === 'string' ? nameRaw : (room.name ?? ''),
+      topic: typeof topicRaw === 'string' ? topicRaw : '',
+      canSetName,
+      canSetTopic,
+    };
+  }
+
+  /** Set the room display name (`m.room.name` state event). */
+  async setRoomName(roomId: RoomId, name: string): Promise<void> {
+    const c = this.requireClient();
+    await c.sendStateEvent(roomId, 'm.room.name' as never, { name } as never, '');
+  }
+
+  /** Set the room topic (`m.room.topic` state event). */
+  async setRoomTopic(roomId: RoomId, topic: string): Promise<void> {
+    const c = this.requireClient();
+    await c.sendStateEvent(roomId, 'm.room.topic' as never, { topic } as never, '');
+  }
+
+  /**
    * Register a Web Push pusher. The homeserver will POST a Matrix Push
    * Gateway notification to `gatewayUrl` whenever a push rule matches —
    * including when this client is offline / the tab is closed. We carry

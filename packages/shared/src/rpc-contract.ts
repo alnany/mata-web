@@ -162,6 +162,9 @@ export type MainToWorkerRequest =
   | { kind: 'fetchPresence'; userId: UserId }
   | { kind: 'fetchProfile'; userId: UserId }
   | { kind: 'setIgnored'; userId: UserId; ignored: boolean }
+  | { kind: 'fetchRoomSettings'; roomId: RoomId }
+  | { kind: 'setRoomName'; roomId: RoomId; name: string }
+  | { kind: 'setRoomTopic'; roomId: RoomId; topic: string }
   | { kind: 'sendReaction'; roomId: RoomId; eventId: EventId; key: string }
   | { kind: 'sendTyping'; roomId: RoomId; timeoutMs: number }
   | { kind: 'sendReadReceipt'; roomId: RoomId; eventId: EventId }
@@ -410,6 +413,9 @@ export type MainToWorkerResponse =
     }
   | { kind: 'fetchProfile'; displayName: string | null; avatarUrl: string | null; ignored: boolean }
   | { kind: 'setIgnored' }
+  | { kind: 'fetchRoomSettings'; name: string; topic: string; canSetName: boolean; canSetTopic: boolean }
+  | { kind: 'setRoomName' }
+  | { kind: 'setRoomTopic' }
   | { kind: 'sendReaction' }
   | { kind: 'sendTyping' }
   | { kind: 'sendReadReceipt' }
