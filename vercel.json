@@ -33,6 +33,6 @@
     }
   ],
   "rewrites": [
-    { "source": "/((?!assets/|favicon\\.svg|og-cover\\.jpg|sw\\.js).*)", "destination": "/index.html" }
+    { "source": "/((?!api/|assets/|favicon\\.svg|og-cover\\.jpg|sw\\.js).*)", "destination": "/index.html" }
   ]
 }

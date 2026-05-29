@@ -129,20 +129,58 @@ async function lpWrite(url: string, preview: UrlPreview | null): Promise<void> {
  *      on the rare non-TLS host without hurting the user.
  */
 export function extractFirstUrl(text: string): string | null {
-  if (!text) return null;
+  const spans = findUrlSpans(text);
+  return spans.length > 0 ? spans[0].url : null;
+}
+
+/**
+ * A clickable URL located inside a message body.
+ *  - `start` / `end` are indices into the ORIGINAL text (end exclusive),
+ *    so the renderer can slice the exact literal the user typed and keep
+ *    everything else as plain text.
+ *  - `text` is that literal substring (what we show).
+ *  - `url` is the normalized href to open (bare domains get `https://`).
+ */
+export interface UrlSpan {
+  start: number;
+  end: number;
+  text: string;
+  url: string;
+}
+
+/**
+ * Find every linkable URL in a string, in document order, with their
+ * exact source spans. Single source of truth for both link previews
+ * (first span) and inline linkification (all spans). Two passes mirror
+ * `extractFirstUrl`'s old behavior:
+ *   Pass 1 — explicit http(s):// schemes (authoritative; claim their span).
+ *   Pass 2 — bare `host.tld/path` references with a known TLD, skipped
+ *            when they overlap a Pass-1 span or sit right after `@`
+ *            (email right-hand side).
+ * `matrix.to/#/` permalinks are intentionally excluded — those are
+ * internal navigation, not external links, and render as plain text.
+ */
+export function findUrlSpans(text: string): UrlSpan[] {
+  if (!text) return [];
+  const spans: UrlSpan[] = [];
+  const claimed: Array<[number, number]> = [];
+
   // Pass 1 — explicit scheme.
   const reHttp = /https?:\/\/[^\s<>"'`]+/gi;
   let m: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: regex iteration idiom
   while ((m = reHttp.exec(text)) !== null) {
-    const url = stripTrailingPunct(m[0]);
+    const raw = m[0];
+    const url = stripTrailingPunct(raw);
     if (!url) continue;
     if (url.includes('matrix.to/#/')) continue;
-    return url;
+    const start = m.index;
+    const end = start + url.length;
+    spans.push({ start, end, text: url, url });
+    claimed.push([start, end]);
   }
-  // Pass 2 — bare hostname. Require a leading word boundary so we
-  // don't slice the back half of an unmatched scheme, and a known
-  // TLD so we don't preview `e.g.` or `lib.ts`.
+
+  // Pass 2 — bare hostname.
   const reBare =
     /(^|[\s(<[{"'`])([a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+)(\/[^\s<>"'`]*)?/gi;
   // biome-ignore lint/suspicious/noAssignInExpressions: regex iteration idiom
@@ -151,14 +189,20 @@ export function extractFirstUrl(text: string): string | null {
     const path = m[3] ?? '';
     const tld = host.slice(host.lastIndexOf('.') + 1).toLowerCase();
     if (!KNOWN_TLDS.has(tld)) continue;
-    // Skip emails: a `@` immediately before the start of the host
-    // means we matched the right side of `user@example.com`.
     const startIdx = m.index + (m[1]?.length ?? 0);
+    // Skip emails: `@` immediately before the host means we matched the
+    // right side of `user@example.com`.
     if (startIdx > 0 && text[startIdx - 1] === '@') continue;
-    const url = `https://${stripTrailingPunct(host + path)}`;
-    return url;
+    const literal = stripTrailingPunct(host + path);
+    const end = startIdx + literal.length;
+    // Skip if this overlaps a Pass-1 span (the scheme match already
+    // covers the same characters).
+    if (claimed.some(([s, e]) => startIdx < e && end > s)) continue;
+    spans.push({ start: startIdx, end, text: literal, url: `https://${literal}` });
   }
-  return null;
+
+  spans.sort((a, b) => a.start - b.start);
+  return spans;
 }
 
 /**

@@ -90,6 +90,9 @@ function pickStrategy(request, url) {
   if (request.method !== 'GET') return null;
   if (url.origin !== self.location.origin) return null; // cross-origin: passthrough
   if (url.pathname === '/sw.js') return null;
+  // Serverless functions (e.g. /api/preview) must always hit the
+  // network — never the offline shell or any cache.
+  if (url.pathname.startsWith('/api/')) return null;
 
   if (url.pathname.startsWith('/assets/')) return 'cache-first-assets';
   if (url.pathname === '/favicon.svg' || url.pathname === '/og-cover.jpg') {

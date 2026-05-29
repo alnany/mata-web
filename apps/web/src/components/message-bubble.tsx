@@ -9,7 +9,7 @@ import type {
 } from '@mata/shared/matrix';
 import { shortTime } from '../lib/date-buckets.js';
 import { useBridge } from '../bridge/context.js';
-import { LinkPreviewCard, extractFirstUrl } from './link-preview.js';
+import { LinkPreviewCard, extractFirstUrl, findUrlSpans } from './link-preview.js';
 import { EmojiPicker } from './emoji-picker.js';
 
 /**
@@ -573,6 +573,26 @@ function TextWithMentions(props: {
     <>
       {segments().map((seg) => {
         if (seg.kind === 'text') return seg.text;
+        if (seg.kind === 'link') {
+          // Real anchor so the URL is clickable regardless of whether a
+          // preview card resolves. `_blank` + `noopener noreferrer` is
+          // the mandatory safe-target combo (no window.opener handle,
+          // no referrer leak); `nofollow` since this is user content.
+          // `break-all` keeps a long URL from blowing out the bubble
+          // width. The click is stopped from bubbling so it never
+          // triggers the bubble's own hover/menu handlers.
+          return (
+            <a
+              href={seg.url}
+              target="_blank"
+              rel="noopener noreferrer nofollow"
+              onClick={(e) => e.stopPropagation()}
+              class="underline decoration-1 underline-offset-2 break-all hover:opacity-80"
+            >
+              {seg.text}
+            </a>
+          );
+        }
         // Tone gradient:
         //   real-mention + self => bold mata pill
         //   real-mention        => mata pill
@@ -592,14 +612,46 @@ function TextWithMentions(props: {
   );
 }
 
-type MentionSeg = { kind: 'text'; text: string } | { kind: 'mention'; handle: string };
+type MentionSeg =
+  | { kind: 'text'; text: string }
+  | { kind: 'mention'; handle: string }
+  | { kind: 'link'; text: string; url: string };
+
+/**
+ * Tokenize a message body into text / link / mention segments.
+ *
+ * URLs are carved out FIRST (via the shared `findUrlSpans`, the same
+ * detector link previews use, so the inline link and the preview card
+ * always agree on what's a link). Mention tokenization then runs only
+ * on the plain-text gaps between links — this is what stops an `@`
+ * inside a URL's query string from being mis-rendered as a mention
+ * pill, and keeps `user@example.com` (email) as plain text.
+ */
+function splitMentions(text: string): MentionSeg[] {
+  const links = findUrlSpans(text);
+  if (links.length === 0) return splitMentionsOnly(text);
+
+  const out: MentionSeg[] = [];
+  let cursor = 0;
+  for (const span of links) {
+    if (span.start > cursor) {
+      out.push(...splitMentionsOnly(text.slice(cursor, span.start)));
+    }
+    out.push({ kind: 'link', text: span.text, url: span.url });
+    cursor = span.end;
+  }
+  if (cursor < text.length) {
+    out.push(...splitMentionsOnly(text.slice(cursor)));
+  }
+  return out;
+}
 
 /**
  * Split a string by `@<word>` mention tokens. We never split inside an
  * email-style `@` (preceded by alphanumeric) — that's how we keep
  * "foo@bar.com" rendering as plain text.
  */
-function splitMentions(text: string): MentionSeg[] {
+function splitMentionsOnly(text: string): MentionSeg[] {
   const re = /(^|[\s,.;:!?\n])@([A-Za-z0-9._-]+)/g;
   const out: MentionSeg[] = [];
   let last = 0;
