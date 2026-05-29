@@ -73,8 +73,8 @@ const handlers: Handlers = {
 
   // Phase 2 handlers — fully wired to MatrixCore.
   loadRoomHistory: async (req, core) => {
-    const { events, prevToken } = await core.loadRoomHistory(req.roomId, req.fromToken, req.limit);
-    return { kind: 'loadRoomHistory', events, prevToken };
+    const { events, prevToken, readUpToEventId } = await core.loadRoomHistory(req.roomId, req.fromToken, req.limit);
+    return { kind: 'loadRoomHistory', events, prevToken, readUpToEventId };
   },
   sendMessage: async (req, core) => {
     // INSTRUMENTATION (send-pipeline trace).
