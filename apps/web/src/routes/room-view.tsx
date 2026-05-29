@@ -387,6 +387,20 @@ export function RoomView(props: {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
         e.preventDefault();
         setSearchOpen((v) => !v);
+        return;
+      }
+      // Esc cancels an active reply or edit without consuming the key
+      // for other handlers (search close, lightbox close, etc. have
+      // their own listeners and run first via capture — none of them
+      // call stopPropagation, so we don't interfere with them).
+      if (e.key === 'Escape') {
+        if (editing()) {
+          setEditing(null);
+          return; // don't preventDefault — let the composer keep focus
+        }
+        if (replyingTo()) {
+          setReplyingTo(null);
+        }
       }
     };
     window.addEventListener('keydown', onKey);
@@ -1376,7 +1390,7 @@ export function RoomView(props: {
 
   return (
     <section
-      class="relative grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-conv"
+      class="relative grid min-h-0 flex-1 grid-rows-[auto_1fr_auto] bg-conv"
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
