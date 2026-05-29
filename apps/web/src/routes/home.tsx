@@ -81,6 +81,28 @@ export function HomePage() {
   // -------- Room list ----------------------------------------------------
   const [rooms, setRooms] = createSignal<RoomSummary[] | null>(null);
   const [filter, setFilter] = createSignal('');
+  // Room-list scope tabs. 'all' = everything joined, 'unread' = rooms with
+  // a non-zero unread count, 'people' = direct messages only. Persisted so
+  // the user's preferred lens survives a reload (Telegram-style folders).
+  const [listScope, setListScope] = createSignal<'all' | 'unread' | 'people'>(
+    (() => {
+      try {
+        const v = localStorage.getItem('mata:listScope');
+        if (v === 'unread' || v === 'people') return v;
+      } catch {
+        /* private mode */
+      }
+      return 'all';
+    })(),
+  );
+  const setScope = (s: 'all' | 'unread' | 'people') => {
+    setListScope(s);
+    try {
+      localStorage.setItem('mata:listScope', s);
+    } catch {
+      /* private mode; non-fatal */
+    }
+  };
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   // When the timeline's "Restore from backup" CTA opens settings, we
   // jump straight to the Encryption tab instead of the default Profile
@@ -364,7 +386,12 @@ export function HomePage() {
 
   const filteredRooms = (): RoomSummary[] => {
     const q = filter().trim().toLowerCase();
-    const list = joinedRooms();
+    const scope = listScope();
+    let list = joinedRooms();
+    // Scope tab narrows the set before the text query is applied, so a
+    // search inside "Unread" stays inside the unread subset.
+    if (scope === 'unread') list = list.filter((r) => r.unreadCount > 0);
+    else if (scope === 'people') list = list.filter((r) => r.type === 'direct');
     if (!q) return list;
     return list.filter(
       (r) =>
@@ -373,6 +400,11 @@ export function HomePage() {
         r.roomId.toLowerCase().includes(q),
     );
   };
+
+  // Total unread room count drives the badge on the "Unread" tab.
+  const unreadRoomCount = createMemo(
+    () => joinedRooms().filter((r) => r.unreadCount > 0).length,
+  );
 
   // Direct/Rooms partition — DMs first, then named rooms.
   const directList = createMemo(() => filteredRooms().filter((r) => r.type === 'direct'));
@@ -474,6 +506,48 @@ export function HomePage() {
           </div>
         </div>
 
+        {/* Scope tabs — All / Unread / People. Telegram-style chat lens. */}
+        <div class="flex items-center gap-1 px-[14px] pb-2">
+          <For
+            each={
+              [
+                { key: 'all', label: 'All' },
+                { key: 'unread', label: 'Unread' },
+                { key: 'people', label: 'People' },
+              ] as { key: 'all' | 'unread' | 'people'; label: string }[]
+            }
+          >
+            {(tab) => {
+              const isActive = () => listScope() === tab.key;
+              return (
+                <button
+                  type="button"
+                  onClick={() => setScope(tab.key)}
+                  class="flex items-center gap-1.5 rounded-[7px] px-2.5 py-[5px] text-[12px] transition-colors"
+                  style={{
+                    background: isActive() ? 'var(--color-elev)' : 'transparent',
+                    color: isActive() ? 'var(--color-fg)' : 'var(--color-fg-3)',
+                    'font-weight': isActive() ? 500 : 400,
+                  }}
+                >
+                  {tab.label}
+                  <Show when={tab.key === 'unread' && unreadRoomCount() > 0}>
+                    <span
+                      class="mono inline-flex min-w-[16px] items-center justify-center rounded-full px-1 text-[9.5px] leading-[15px]"
+                      style={{
+                        background: 'var(--color-accent)',
+                        color: 'var(--color-accent-ink)',
+                      }}
+                    >
+                      {unreadRoomCount() > 99 ? '99+' : unreadRoomCount()}
+                    </span>
+                  </Show>
+                </button>
+              );
+            }}
+          </For>
+        </div>
+
         {/* Pending invites — minimal sleeve, sized to count */}
         <Show when={invitedRooms().length > 0}>
           <section class="px-[14px] pt-2">
@@ -551,6 +625,19 @@ export function HomePage() {
                   )}
                 </For>
               </ul>
+            </Show>
+            {/* Empty result — a scope tab or search filtered everything out
+                even though the account does have joined rooms. */}
+            <Show when={directList().length === 0 && roomsList().length === 0}>
+              <div class="px-4 py-8 text-center">
+                <span class="mono text-[10.5px] uppercase tracking-[0.08em] text-fg-4">
+                  {listScope() === 'unread'
+                    ? 'All caught up'
+                    : filter().trim()
+                      ? 'No rooms match'
+                      : 'Nothing here'}
+                </span>
+              </div>
             </Show>
           </div>
         </Show>
