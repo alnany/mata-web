@@ -85,7 +85,11 @@ export class MatrixCore {
     roomId: RoomId,
     fromToken: string | null,
     limit: number,
-  ): Promise<{ events: TimelineEvent[]; prevToken: string | null }> {
+  ): Promise<{
+    events: TimelineEvent[];
+    prevToken: string | null;
+    readUpToEventId: string | null;
+  }> {
     return this.requireSession().loadRoomHistory(roomId, fromToken, limit);
   }
 
