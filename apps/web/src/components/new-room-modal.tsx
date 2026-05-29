@@ -2,11 +2,12 @@
 // NewRoomModal — create a private room or a 1:1 DM.
 //
 // Two modes selectable via a tab strip:
-//   - "Room": multi-person private room with name + optional topic. Invitees
+//   - "Room": multi-person private room with name. Invitees
 //     are comma-separated Matrix IDs (`@user:server`). E2EE on by default;
 //     user can untick for a plain room (rare — explained next to the
-//     toggle).
-//   - "Direct message": exactly one Matrix ID. Name/topic are server-derived
+//     toggle). Topic is intentionally omitted here — most users skip it
+//     anyway, and the room-settings drawer lets them set one later.
+//   - "Direct message": exactly one Matrix ID. Name is server-derived
 //     ('' lets the homeserver fill it from the member list). Always
 //     encrypted; the toggle is hidden.
 //
@@ -40,7 +41,6 @@ export function NewRoomModal(props: {
   const bridge = useBridge();
   const [mode, setMode] = createSignal<Mode>('dm');
   const [name, setName] = createSignal('');
-  const [topic, setTopic] = createSignal('');
   const [encrypted, setEncrypted] = createSignal(true);
   const [submitting, setSubmitting] = createSignal(false);
 
@@ -200,7 +200,6 @@ export function NewRoomModal(props: {
   const reset = () => {
     setMode('dm');
     setName('');
-    setTopic('');
     setEncrypted(true);
     setSubmitting(false);
     setDmTerm('');
@@ -278,7 +277,7 @@ export function NewRoomModal(props: {
       const res = await bridge.request({
         kind: 'createRoom',
         name: mode() === 'dm' ? '' : name().trim(),
-        topic: mode() === 'dm' ? null : topic().trim() || null,
+        topic: null,
         isDirect: mode() === 'dm',
         encrypted: mode() === 'dm' ? true : encrypted(),
         invite: inviteList,
@@ -350,15 +349,6 @@ export function NewRoomModal(props: {
                 value={name()}
                 onInput={(e) => setName(e.currentTarget.value)}
                 placeholder="Project Alpha"
-                class="w-full rounded-lg border border-line bg-elev px-3 py-2 text-sm focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20"
-              />
-            </Field>
-            <Field label="Topic (optional)">
-              <input
-                type="text"
-                value={topic()}
-                onInput={(e) => setTopic(e.currentTarget.value)}
-                placeholder="What's it about?"
                 class="w-full rounded-lg border border-line bg-elev px-3 py-2 text-sm focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20"
               />
             </Field>
