@@ -29,6 +29,88 @@ import { useBridge } from '../bridge/context.js';
 const cache = new Map<string, UrlPreview | null>();
 const inflight = new Map<string, Promise<UrlPreview | null>>();
 
+// ─── Persistent cache (IDB) ────────────────────────────────────────────────
+//
+// The in-memory `cache` above survives within one session but is wiped on
+// refresh — every reload re-fetches every URL on the visible viewport.
+// For URLs that recur (project docs, shared GitHub PRs, the same image
+// link in multiple threads), that's wasted bytes and a visible "card
+// pops in late" flash.
+//
+// Persisted entries carry a TTL: hits live 24h, misses 1h (so a fix to
+// our client-side OG fallback path is picked up within an hour without
+// pinning the old null forever — important after the 13:32 fallback
+// landed and stale nulls were observed in the wild).
+//
+// All operations are best-effort: a broken IDB never blocks the UI.
+
+const LP_DB_NAME = 'mata-cache';
+const LP_DB_VERSION = 2; // shares the v2 schema bump that added `timeline`
+const LP_STORE = 'linkPreviews';
+const LP_HIT_TTL = 24 * 60 * 60 * 1000;
+const LP_MISS_TTL = 60 * 60 * 1000;
+
+interface LpEntry {
+  preview: UrlPreview | null;
+  expiresAt: number;
+}
+
+let lpDb: Promise<IDBDatabase> | null = null;
+function lpOpen(): Promise<IDBDatabase> {
+  if (lpDb) return lpDb;
+  lpDb = new Promise((resolve, reject) => {
+    const req = indexedDB.open(LP_DB_NAME, LP_DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      // We're inside the same `mata-cache` DB the room-list / timeline
+      // caches use, so the upgrade handler must be idempotent — it may
+      // run while another module also has the connection open.
+      if (!db.objectStoreNames.contains(LP_STORE)) db.createObjectStore(LP_STORE);
+      // Defensive: ensure the other stores exist too, in case this
+      // module gets there first on a fresh install.
+      if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+      if (!db.objectStoreNames.contains('timeline')) db.createObjectStore('timeline');
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error ?? new Error('idb open failed'));
+  });
+  lpDb.catch(() => {
+    lpDb = null;
+  });
+  return lpDb;
+}
+
+async function lpRead(url: string): Promise<LpEntry | null> {
+  try {
+    const db = await lpOpen();
+    return await new Promise<LpEntry | null>((resolve, reject) => {
+      const tx = db.transaction(LP_STORE, 'readonly');
+      const r = tx.objectStore(LP_STORE).get(url);
+      r.onsuccess = () => resolve((r.result as LpEntry | undefined) ?? null);
+      r.onerror = () => reject(r.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function lpWrite(url: string, preview: UrlPreview | null): Promise<void> {
+  try {
+    const db = await lpOpen();
+    const ttl = preview ? LP_HIT_TTL : LP_MISS_TTL;
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(LP_STORE, 'readwrite');
+      const r = tx
+        .objectStore(LP_STORE)
+        .put({ preview, expiresAt: Date.now() + ttl } satisfies LpEntry, url);
+      r.onsuccess = () => resolve();
+      r.onerror = () => reject(r.error);
+    });
+  } catch {
+    /* swallow */
+  }
+}
+
 /**
  * Extract the first http(s) URL we'd want to preview from a message
  * body. Bounded — at most one preview per message even if the body
@@ -133,6 +215,16 @@ export function LinkPreviewCard(props: { url: string; isMine: boolean }) {
   onMount(async () => {
     if (cache.has(props.url)) return; // already settled (hit or known-null)
 
+    // Check the persistent cache first — a fresh entry skips the
+    // bridge round-trip entirely and lands within ~1ms (IDB read).
+    // Expired entries fall through to the bridge so we re-fetch.
+    const persisted = await lpRead(props.url);
+    if (persisted && persisted.expiresAt > Date.now()) {
+      cache.set(props.url, persisted.preview);
+      setPreview(persisted.preview);
+      return;
+    }
+
     let p = inflight.get(props.url);
     if (!p) {
       p = (async () => {
@@ -149,6 +241,9 @@ export function LinkPreviewCard(props: { url: string; isMine: boolean }) {
     inflight.delete(props.url);
     cache.set(props.url, result);
     setPreview(result);
+    // Persist the result (including nulls — the short miss TTL keeps
+    // them from pinning a stale "no preview" forever).
+    void lpWrite(props.url, result).catch(() => {});
   });
 
   return (
