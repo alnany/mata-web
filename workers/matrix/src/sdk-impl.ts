@@ -1125,6 +1125,19 @@ export class SdkSession {
           contextAfter: next ? extractPreview(next) : null,
         };
       });
+
+      // Global search: the server cannot index encrypted rooms, and Mata
+      // is E2EE by default, so a server-only pass would silently miss most
+      // content. Always augment the global path with a local scan across
+      // every joined room and merge (dedupe by eventId, newest first).
+      if (!roomId) {
+        const localHits = this.searchLocalAllRooms(client, trimmed);
+        const merged = this.mergeHits(serverHits, localHits);
+        const highlights =
+          Array.isArray(raw.highlights) && raw.highlights.length ? raw.highlights : [trimmed];
+        return { results: merged, count: merged.length, highlights };
+      }
+
       if (serverHits.length > 0) {
         const count = typeof raw.count === 'number' ? raw.count : serverHits.length;
         const highlights = Array.isArray(raw.highlights) ? raw.highlights : [];
@@ -1138,8 +1151,44 @@ export class SdkSession {
     } catch (_err) {
       // Server search failed (404, 403, etc.) — degrade to local.
       if (room) return this.searchLocal(room, trimmed);
+      if (!roomId) {
+        const localHits = this.searchLocalAllRooms(client, trimmed);
+        return { results: localHits, count: localHits.length, highlights: [trimmed] };
+      }
       return { results: [], count: 0, highlights: [trimmed] };
     }
+  }
+
+  // Cross-room local scan for the global ("All chats") surface. Walks
+  // every joined room's decrypted live timeline, substring-matches, and
+  // returns a merged list newest-first. This is what makes global search
+  // actually return content from encrypted rooms — the server can't.
+  private searchLocalAllRooms(
+    client: MatrixClient,
+    term: string,
+  ): SearchHit[] {
+    const joined = client
+      .getRooms()
+      .filter((r) => r.getMyMembership() === 'join');
+    const all: SearchHit[] = [];
+    for (const room of joined) {
+      for (const hit of this.searchLocal(room, term).results) all.push(hit);
+    }
+    all.sort((a, b) => b.originServerTs - a.originServerTs);
+    return all.slice(0, 100);
+  }
+
+  // Merge two hit lists, dedupe by eventId, newest-first, capped.
+  private mergeHits(a: SearchHit[], b: SearchHit[]): SearchHit[] {
+    const seen = new Set<string>();
+    const out: SearchHit[] = [];
+    for (const hit of [...a, ...b]) {
+      if (seen.has(hit.eventId)) continue;
+      seen.add(hit.eventId);
+      out.push(hit);
+    }
+    out.sort((x, y) => y.originServerTs - x.originServerTs);
+    return out.slice(0, 100);
   }
 
   // Local timeline scan for encrypted rooms and server-empty cases.

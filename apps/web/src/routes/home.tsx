@@ -9,7 +9,7 @@ import {
   showToast,
 } from '../stores/toast.js';
 import { activeCall } from '../stores/call.js';
-import type { RoomId, RoomSummary } from '@mata/shared/matrix';
+import type { EventId, RoomId, RoomSummary } from '@mata/shared/matrix';
 import { RoomView, createRoomCache, type RoomCache } from './room-view.js';
 import { SettingsDrawer } from '../components/settings-drawer.js';
 import { dispatchSyncDeltas, setRoomCounts } from '../stores/notifications.js';
@@ -371,6 +371,17 @@ export function HomePage() {
     } catch {
       /* private mode; non-fatal */
     }
+  };
+
+  // Cross-room jump from global search: switch to the target room and
+  // stash the event so the freshly-mounted RoomView scrolls to it.
+  const [pendingJump, setPendingJump] = createSignal<EventId | null>(null);
+  const jumpToRoom = (roomId: RoomId, eventId: EventId) => {
+    const target = (rooms() ?? []).find((r) => r.roomId === roomId);
+    if (target) openRoom(target);
+    else setActiveId(roomId);
+    navigate(`/rooms/${encodeURIComponent(roomId)}`);
+    setPendingJump(eventId);
   };
 
   // Mark a room read straight from the list — no need to open it.
@@ -780,6 +791,9 @@ export function HomePage() {
                   setSettingsInitialTab('encryption');
                   setSettingsOpen(true);
                 }}
+                onJumpToRoom={jumpToRoom}
+                pendingJumpEventId={pendingJump()}
+                onPendingJumpConsumed={() => setPendingJump(null)}
                 onRoomUnavailable={(rid) => {
                   // Drop the stale list entry locally so the user
                   // doesn't immediately click it again, then refetch

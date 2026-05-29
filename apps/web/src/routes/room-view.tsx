@@ -156,6 +156,18 @@ export function RoomView(props: {
    * next /sync delta merge.
    */
   onRoomUnavailable?: (roomId: RoomId) => void;
+  /**
+   * Global search picked a hit in a DIFFERENT room. Home switches the
+   * active room and stashes a pending jump (see `pendingJumpEventId`).
+   */
+  onJumpToRoom?: (roomId: RoomId, eventId: EventId) => void;
+  /**
+   * When set, this view should scroll to + pulse the given event once
+   * its timeline is rendered. Used by global search to land on a hit
+   * after a cross-room switch. Cleared via `onPendingJumpConsumed`.
+   */
+  pendingJumpEventId?: EventId | null;
+  onPendingJumpConsumed?: () => void;
 }) {
   const bridge = useBridge();
   const me = (): UserId | null => {
@@ -1173,6 +1185,40 @@ export function RoomView(props: {
     },
   };
 
+  // Pending cross-room jump from global search. When home switches the
+  // active room to land on a search hit, the target event may not be in
+  // the rendered timeline yet (it loads async). Retry the DOM-based jump
+  // a few times, then give up gracefully (onJumpTo itself toasts a
+  // "scroll up to load older history" hint on a miss).
+  createEffect(
+    on(
+      () => props.pendingJumpEventId,
+      (eventId) => {
+        if (!eventId) return;
+        if (eventId !== props.pendingJumpEventId) return;
+        let attempts = 0;
+        const tryJump = () => {
+          const el = document.querySelector(`[data-event-id="${cssEsc(eventId)}"]`);
+          if (el instanceof HTMLElement) {
+            actions.onJumpTo(eventId);
+            props.onPendingJumpConsumed?.();
+            return;
+          }
+          attempts += 1;
+          if (attempts >= 12) {
+            // Last attempt routes through onJumpTo so the user gets the
+            // "scroll up to load older history" hint instead of silence.
+            actions.onJumpTo(eventId);
+            props.onPendingJumpConsumed?.();
+            return;
+          }
+          window.setTimeout(tryJump, 300);
+        };
+        window.setTimeout(tryJump, 200);
+      },
+    ),
+  );
+
   // ---- Render list with day separators + grouping ------------------------
   type Row =
     | { kind: 'day'; ts: number; key: string }
@@ -1702,8 +1748,17 @@ export function RoomView(props: {
       <SearchPanel
         room={props.room}
         open={searchOpen()}
+        rooms={props.rooms}
         onClose={() => setSearchOpen(false)}
-        onSelect={(eventId) => actions.onJumpTo(eventId)}
+        onSelect={(roomId, eventId) => {
+          if (roomId === props.room.roomId) {
+            actions.onJumpTo(eventId);
+          } else {
+            // Cross-room hit (global scope): hand off to home, which
+            // switches the active room and replays the jump on mount.
+            props.onJumpToRoom?.(roomId, eventId);
+          }
+        }}
       />
       <ForwardModal
         open={forwardSource() !== null}

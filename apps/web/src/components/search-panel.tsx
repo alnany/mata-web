@@ -1,27 +1,27 @@
 // ============================================================================
-// SearchPanel — slide-in right rail for room message search.
+// SearchPanel — slide-in right rail for message search.
 //
-// Maps Cmd/Ctrl+F (and the header search button) to Synapse's
-// `/_matrix/client/v3/search` via the worker's `searchMessages` RPC.
-// Scope is the current room. We debounce the input by 300ms so each
-// keystroke doesn't fire a request; an in-flight token guards against
-// out-of-order responses (older request resolves after a newer one
-// already updated state).
+// Two scopes, toggled at the top of the panel:
+//   - "This room": Synapse `/_matrix/client/v3/search` scoped to the
+//     current room (local timeline scan for E2EE rooms, since the server
+//     can't index ciphertext).
+//   - "All chats": global search across every joined room. The worker
+//     merges the server result with a local scan of all rooms' decrypted
+//     timelines, so encrypted content still surfaces. Each hit shows the
+//     room it came from, and selecting it jumps to that room + message.
 //
-// Encrypted-room caveat: Synapse can't index ciphertext, so search in
-// an E2EE room reliably returns zero hits. We render a one-line
-// banner that explains this rather than presenting an empty list
-// without context.
-//
-// Click-to-jump is a future pass — for v1 the panel is a read-only
-// "where did we say X" surface. Each hit shows sender, timestamp,
-// the matching line, and short before/after context strings.
+// We debounce input by 300ms; an in-flight token guards against
+// out-of-order responses. Selecting a hit jumps to the message (and
+// switches rooms first when the hit is in a different room) — we don't
+// auto-close so users can keep scanning the next hit.
 // ============================================================================
 
-import { For, Match, Show, Switch, createEffect, createSignal, on } from 'solid-js';
-import type { EventId, RoomSummary, SearchHit } from '@mata/shared/matrix';
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on } from 'solid-js';
+import type { EventId, RoomId, RoomSummary, SearchHit } from '@mata/shared/matrix';
 import { useBridge } from '../bridge/context.js';
 import { initials, prettyName } from './message-bubble.js';
+
+type Scope = 'room' | 'all';
 
 type Phase =
   | { kind: 'idle' }
@@ -32,16 +32,18 @@ type Phase =
 export function SearchPanel(props: {
   room: RoomSummary;
   open: boolean;
+  /** All joined rooms — used to label cross-room hits in "All chats". */
+  rooms?: RoomSummary[] | null;
   onClose: () => void;
-  // Click handler when the user picks a hit. The room view wires
-  // this to its existing jump-to-event scroller, so the conversation
-  // smooth-scrolls to the message and pulses a focus ring. We
-  // deliberately don't auto-close the panel — users typically want
-  // to scan the next hit after landing on one.
-  onSelect?: (eventId: EventId) => void;
+  // Click handler when the user picks a hit. The room view wires this to
+  // its jump scroller for same-room hits, and to a room-switch + jump for
+  // cross-room hits (global scope). Panel stays open so the user can keep
+  // scanning.
+  onSelect?: (roomId: RoomId, eventId: EventId) => void;
 }) {
   const bridge = useBridge();
   const [query, setQuery] = createSignal('');
+  const [scope, setScope] = createSignal<Scope>('room');
   const [phase, setPhase] = createSignal<Phase>({ kind: 'idle' });
   // Monotonic token: only the latest in-flight request is allowed to
   // commit its result to `phase`. Race-safe against quick typing.
@@ -49,15 +51,22 @@ export function SearchPanel(props: {
 
   let inputRef: HTMLInputElement | undefined;
 
-  // Auto-focus the input every time the panel opens, and reset state
-  // when it closes so reopening starts clean. We deliberately do NOT
-  // persist the query across open/close — search is transient.
+  // roomId -> display name, for labeling cross-room hits.
+  const roomNames = createMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of props.rooms ?? []) m.set(r.roomId, r.name || r.roomId);
+    return m;
+  });
+
+  // Auto-focus the input every time the panel opens, and reset state when
+  // it closes so reopening starts clean. Scope resets to the current room.
   createEffect(
     on(
       () => props.open,
       (open) => {
         if (open) {
           setQuery('');
+          setScope('room');
           setPhase({ kind: 'idle' });
           queueMicrotask(() => inputRef?.focus());
         }
@@ -65,11 +74,10 @@ export function SearchPanel(props: {
     ),
   );
 
-  // Debounced search: 300ms after the user stops typing. createEffect
-  // runs every time `query()` changes, schedules a timer, and cleans
-  // up the previous one. An empty query resets to idle.
+  // Debounced search: 300ms after the user stops typing. Re-runs when the
+  // query OR the scope changes. An empty query resets to idle.
   createEffect(
-    on(query, (q) => {
+    on([query, scope], ([q, sc]) => {
       const trimmed = q.trim();
       if (!trimmed) {
         setPhase({ kind: 'idle' });
@@ -82,7 +90,7 @@ export function SearchPanel(props: {
           const res = await bridge.request({
             kind: 'searchMessages',
             query: trimmed,
-            roomId: props.room.roomId,
+            roomId: sc === 'all' ? null : props.room.roomId,
           });
           if (mine !== token) return;
           setPhase({
@@ -129,6 +137,12 @@ export function SearchPanel(props: {
           </button>
         </header>
 
+        {/* Scope toggle */}
+        <div class="flex gap-1 border-b border-line px-3 py-2">
+          <ScopeTab label="This room" active={scope() === 'room'} onClick={() => setScope('room')} />
+          <ScopeTab label="All chats" active={scope() === 'all'} onClick={() => setScope('all')} />
+        </div>
+
         <div class="border-b border-line px-3 py-2">
           <input
             ref={inputRef}
@@ -141,10 +155,16 @@ export function SearchPanel(props: {
                 props.onClose();
               }
             }}
-            placeholder="Search this room…"
+            placeholder={scope() === 'all' ? 'Search all chats…' : 'Search this room…'}
             class="w-full rounded-md border border-line bg-elev px-2.5 py-1.5 text-xs focus:border-mata-500 focus:bg-elev focus:outline-none focus:ring-2 focus:ring-mata-500/20 dark:focus:bg-neutral-900"
           />
-          <Show when={props.room.isEncrypted}>
+          <Show when={scope() === 'all'}>
+            <p class="mt-1.5 text-[10.5px] leading-snug text-fg-4">
+              Searching across all your chats. Encrypted rooms are matched against history
+              already loaded on this device — open a room and scroll up to widen its window.
+            </p>
+          </Show>
+          <Show when={scope() === 'room' && props.room.isEncrypted}>
             <p class="mt-1.5 text-[10.5px] leading-snug text-fg-4">
               Encrypted room — searching messages already loaded on this device. Scroll up to
               load more history into the search window.
@@ -155,7 +175,13 @@ export function SearchPanel(props: {
         <div class="flex-1 overflow-y-auto">
           <Switch>
             <Match when={phase().kind === 'idle'}>
-              <EmptyState text="Type a word or phrase to search." />
+              <EmptyState
+                text={
+                  scope() === 'all'
+                    ? 'Type to search across all chats.'
+                    : 'Type a word or phrase to search.'
+                }
+              />
             </Match>
             <Match when={phase().kind === 'loading'}>
               <EmptyState text="Searching…" />
@@ -175,16 +201,18 @@ export function SearchPanel(props: {
               })()}
             >
               {(p) => (
-                <Show
-                  when={p().hits.length > 0}
-                  fallback={<EmptyState text="No matches." />}
-                >
+                <Show when={p().hits.length > 0} fallback={<EmptyState text="No matches." />}>
                   <ul class="divide-y divide-line">
                     <For each={p().hits}>
                       {(hit) => (
                         <HitRow
                           hit={hit}
                           highlights={p().highlights}
+                          roomLabel={
+                            scope() === 'all' && hit.roomId !== props.room.roomId
+                              ? roomNames().get(hit.roomId) ?? prettyName(hit.roomId as never)
+                              : null
+                          }
                           onSelect={props.onSelect}
                         />
                       )}
@@ -200,6 +228,22 @@ export function SearchPanel(props: {
   );
 }
 
+function ScopeTab(props: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      class="rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors"
+      classList={{
+        'bg-input text-fg': props.active,
+        'text-fg-3 hover:bg-input/60 hover:text-fg-2': !props.active,
+      }}
+    >
+      {props.label}
+    </button>
+  );
+}
+
 function EmptyState(props: { text: string }) {
   return <p class="px-3 py-6 text-center text-[11.5px] text-fg-3">{props.text}</p>;
 }
@@ -207,7 +251,9 @@ function EmptyState(props: { text: string }) {
 function HitRow(props: {
   hit: SearchHit;
   highlights: string[];
-  onSelect?: (eventId: EventId) => void;
+  /** Non-null in global scope when the hit is in another room. */
+  roomLabel: string | null;
+  onSelect?: (roomId: RoomId, eventId: EventId) => void;
 }) {
   const ts = () =>
     new Date(props.hit.originServerTs).toLocaleString(undefined, {
@@ -216,17 +262,20 @@ function HitRow(props: {
       hour: '2-digit',
       minute: '2-digit',
     });
-  // Whole row is a button when onSelect is wired. We use a
-  // `<button>` inside the `<li>` (rather than putting the role on
-  // the `<li>` itself) so the focus ring + keyboard activation come
-  // from the browser for free.
   return (
     <li>
       <button
         type="button"
-        onClick={() => props.onSelect?.(props.hit.eventId)}
+        onClick={() => props.onSelect?.(props.hit.roomId, props.hit.eventId)}
         class="block w-full cursor-pointer px-3 py-2.5 text-left hover:bg-input focus:bg-input focus:outline-none"
       >
+        <Show when={props.roomLabel}>
+          {(label) => (
+            <div class="mb-1 inline-flex max-w-full items-center gap-1 rounded-full bg-input px-2 py-0.5 text-[10px] font-medium text-fg-3">
+              <span class="truncate">{label()}</span>
+            </div>
+          )}
+        </Show>
         <div class="flex items-center gap-2">
           <span
             class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-input text-[9px] font-semibold text-fg-2"
