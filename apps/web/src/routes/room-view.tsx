@@ -10,7 +10,7 @@ import {
 } from 'solid-js';
 import { useBridge } from '../bridge/context.js';
 import { session } from '../stores/session.js';
-import { dismissToast, showToast } from '../stores/toast.js';
+import { dismissToast, showBootGuardedError, showToast } from '../stores/toast.js';
 import type {
   EventId,
   MessageBody,
@@ -311,7 +311,14 @@ export function RoomView(props: {
         );
         props.onRoomUnavailable?.(props.room.roomId);
       } else {
-        showToast('error', `Could not load messages: ${m}`);
+        // Boot-gate: if the initial-history fetch fires while
+        // SdkSession is still restoring (auto-open the last room
+        // races the worker), it rejects with `Not logged in`. The
+        // syncUpdate that lands a moment later re-triggers the
+        // load. No need to alarm the user in that window — the
+        // skeleton/loading state already communicates "we're
+        // catching up".
+        showBootGuardedError(`Could not load messages: ${m}`);
       }
     }
   };
@@ -587,7 +594,11 @@ export function RoomView(props: {
         c.paginating = false;
         c.reachedStart = true;
       });
-      showToast('error', `Could not load older messages: ${msgOf(err)}`);
+      // Same boot-gate as loadInitial: a scroll-to-top firing while
+      // the worker is still restoring rejects with `Not logged in`.
+      // Boot-settled rejections (genuine pagination failures) still
+      // toast.
+      showBootGuardedError(`Could not load older messages: ${msgOf(err)}`);
     }
   };
 
