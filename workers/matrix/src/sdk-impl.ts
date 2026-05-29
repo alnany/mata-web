@@ -62,6 +62,7 @@ import {
   clearSession,
   touchSession,
 } from './session-store.js';
+import { clearMediaCache } from './media-cache.js';
 
 const CRYPTO_DB_NAME = 'mata/crypto';
 
@@ -426,6 +427,9 @@ export class SdkSession {
     }
     c.stopClient();
     if (uid) await clearSession(uid);
+    // Drop the per-account decrypted media cache so a different
+    // account signing in next can't see the previous user's plaintext.
+    await clearMediaCache();
   }
 
   async listRoomSummaries(): Promise<RoomSummary[]> {
