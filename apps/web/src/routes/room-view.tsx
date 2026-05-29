@@ -45,6 +45,19 @@ export interface RoomCache {
   loading: boolean;
   paginating: boolean;
   reachedStart: boolean;
+  /**
+   * Read-marker anchor for the "New messages" unread divider. Captured
+   * ONCE from the first `loadRoomHistory` response (the user's own
+   * read-receipt up-to event id at open time, before the post-load
+   * markLatestRead advances it), then frozen for the room session so
+   * the divider stays put while you read instead of chasing the
+   * advancing receipt. `null` = resolved to "no unread anchor";
+   * `undefined` (the initial state via `unreadResolved`) = not captured
+   * yet.
+   */
+  unreadAnchorEventId: string | null;
+  /** True once the unread anchor has been captured (freezes the value). */
+  unreadResolved: boolean;
 }
 
 interface PendingEvent {
@@ -84,6 +97,8 @@ export function createRoomCache(roomId: RoomId): RoomCache {
     loading: false,
     paginating: false,
     reachedStart: false,
+    unreadAnchorEventId: null,
+    unreadResolved: false,
   };
 }
 
@@ -286,6 +301,14 @@ export function RoomView(props: {
         c.reachedStart = res.prevToken === null;
         c.loaded = true;
         c.loading = false;
+        // Freeze the unread-divider anchor on the first real load only.
+        // Subsequent reopens of the same room short-circuit before this
+        // block (c.loaded guard at the top of loadInitial), so the
+        // divider position stays stable for the whole session.
+        if (!c.unreadResolved) {
+          c.unreadAnchorEventId = res.readUpToEventId;
+          c.unreadResolved = true;
+        }
       });
       // Persist tail for next-boot fast paint. Debounced inside
       // writeRoomTimeline so it's safe to fire on every successful load.
@@ -295,7 +318,12 @@ export function RoomView(props: {
         res.prevToken,
         res.prevToken === null,
       ).catch(() => {});
-      requestAnimationFrame(() => scrollToBottom('auto'));
+      // Land on the unread divider if there is one, else bottom. Two
+      // rAFs: first lets the rows memo + <For> commit the divider node,
+      // second runs after layout so offsetTop is real.
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => scrollToUnreadOrBottom()),
+      );
     } catch (err) {
       props.setCache(props.room.roomId, (c) => {
         c.loading = false;
@@ -605,6 +633,31 @@ export function RoomView(props: {
   const scrollToBottom = (behavior: ScrollBehavior) => {
     if (!scrollerRef) return;
     scrollerRef.scrollTo({ top: scrollerRef.scrollHeight, behavior });
+  };
+
+  /**
+   * On room open, land on the "New messages" divider if one was drawn,
+   * positioning it a little below the top so the last-read message is
+   * still visible for context. Falls back to the bottom when there's
+   * no unread divider in the DOM (all caught up, or anchor outside the
+   * loaded window). Only used for the initial paint — live updates and
+   * the jump pill keep using scrollToBottom.
+   */
+  const scrollToUnreadOrBottom = () => {
+    if (!scrollerRef) {
+      return;
+    }
+    const divider = scrollerRef.querySelector<HTMLElement>(
+      '[data-unread-divider]',
+    );
+    if (divider) {
+      // ~72px of breathing room above the line so the previous message
+      // peeks in — matches Telegram's "you were here" framing.
+      const top = Math.max(0, divider.offsetTop - 72);
+      scrollerRef.scrollTo({ top, behavior: 'auto' });
+      return;
+    }
+    scrollToBottom('auto');
   };
 
   // ---- Composer submission -----------------------------------------------
@@ -981,6 +1034,7 @@ export function RoomView(props: {
   // ---- Render list with day separators + grouping ------------------------
   type Row =
     | { kind: 'day'; ts: number; key: string }
+    | { kind: 'unread'; key: string }
     | { kind: 'msg'; ev: TimelineEvent; showHeader: boolean; key: string }
     | {
         // Collapsed run of consecutive undecryptable events. Renders as
@@ -1094,6 +1148,31 @@ export function RoomView(props: {
       })
       .slice()
       .sort((a, b) => a.originServerTs - b.originServerTs);
+
+    // ── Resolve the "New messages" divider position ─────────────────
+    // The anchor is the user's read-receipt up-to event captured at
+    // open time. The divider goes before the FIRST event newer than
+    // that anchor, but only when:
+    //   • the anchor event is actually inside the loaded window (so we
+    //     don't slam the line to the very top when the marker is older
+    //     than the 50-event tail — that would be misleading), and
+    //   • there's at least one newer event, and
+    //   • that first newer event isn't the user's own (no point telling
+    //     you your own just-sent message is "new").
+    // Computed once per memo run; cheap on a ~50-event tail.
+    let firstUnreadEventId: string | null = null;
+    const anchorId = props.cache.unreadAnchorEventId;
+    if (anchorId) {
+      const anchorIdx = evs.findIndex((e) => e.eventId === anchorId);
+      if (anchorIdx >= 0 && anchorIdx < evs.length - 1) {
+        const candidate = evs[anchorIdx + 1];
+        if (candidate.sender !== me()) {
+          firstUnreadEventId = candidate.eventId;
+        }
+      }
+    }
+    let unreadEmitted = false;
+
     for (let i = 0; i < evs.length; i++) {
       const ev = evs[i];
       // ---- collapse runs of undecryptable events ------------------------
@@ -1193,6 +1272,26 @@ export function RoomView(props: {
         }
         seen.add(dayKey);
         out.push(dayRow);
+        lastSender = null;
+      }
+      // "New messages" divider — emitted once, immediately before the
+      // first unread event (after any day divider for that event so the
+      // chronological boundary still reads first). Stable key tied to
+      // the anchored event so the row reconciles cleanly across memo
+      // runs and survives until the room cache is dropped.
+      if (firstUnreadEventId && !unreadEmitted && ev.eventId === firstUnreadEventId) {
+        const unreadKey = `unread-${firstUnreadEventId}`;
+        let unreadRow = rowCache.get(unreadKey);
+        if (!unreadRow || unreadRow.kind !== 'unread') {
+          unreadRow = { kind: 'unread', key: unreadKey };
+          rowCache.set(unreadKey, unreadRow);
+        }
+        seen.add(unreadKey);
+        out.push(unreadRow);
+        unreadEmitted = true;
+        // Force a header on the first unread message so the sender
+        // avatar/name shows right under the divider, not merged into a
+        // run that started above the line.
         lastSender = null;
       }
       const showHeader =
@@ -1329,6 +1428,8 @@ export function RoomView(props: {
                 {(row) =>
                   row.kind === 'day' ? (
                     <DayDivider ts={row.ts} />
+                  ) : row.kind === 'unread' ? (
+                    <UnreadDivider />
                   ) : row.kind === 'utdGroup' ? (
                     <UndecryptableGroupRow
                       count={row.count}
@@ -1544,6 +1645,38 @@ function DayDivider(props: { ts: number }) {
       <span
         class="h-px flex-1"
         style={{ 'background-color': 'var(--color-line)' }}
+        aria-hidden="true"
+      />
+    </li>
+  );
+}
+
+/**
+ * "New messages" divider. Same floating-pill-over-a-rule structure as
+ * DayDivider, but tinted with the accent token so the eye snaps to it,
+ * and carries `data-unread-divider` so the room-open scroll logic
+ * (scrollToUnreadOrBottom) can find and land on it. Drawn once, before
+ * the first event newer than the read marker captured at open time.
+ */
+function UnreadDivider() {
+  return (
+    <li
+      data-unread-divider
+      class="my-4 flex items-center gap-3 px-1"
+    >
+      <span
+        class="h-px flex-1"
+        style={{ 'background-color': 'var(--color-mata-300)' }}
+        aria-hidden="true"
+      />
+      <span
+        class="rounded-full px-3 py-0.5 text-[10.5px] font-semibold uppercase tracking-[0.06em] bg-accent text-accent-ink"
+      >
+        New messages
+      </span>
+      <span
+        class="h-px flex-1"
+        style={{ 'background-color': 'var(--color-mata-300)' }}
         aria-hidden="true"
       />
     </li>
