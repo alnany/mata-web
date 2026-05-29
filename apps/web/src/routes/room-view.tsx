@@ -29,6 +29,7 @@ import { RoomHeader } from '../components/room-header.js';
 import { MembersPanel } from '../components/members-panel.js';
 import { SearchPanel } from '../components/search-panel.js';
 import { ForwardModal } from '../components/forward-modal.js';
+import { readRoomTimeline, writeRoomTimeline } from '../lib/persistent-cache.js';
 
 /**
  * Per-room state held by the parent so re-opening a previously-loaded
@@ -236,6 +237,27 @@ export function RoomView(props: {
     props.setCache(props.room.roomId, (c) => {
       c.loading = true;
     });
+
+    // Fast-paint from the persisted timeline tail. This is where the
+    // "Telegram silk" feel comes from on cold refresh: paint a
+    // believable view before the loadRoomHistory round-trip returns,
+    // then the live result replaces it below. Best-effort — failed
+    // reads or empty caches just fall through to the network path.
+    void readRoomTimeline(props.room.roomId)
+      .then((snap) => {
+        if (!snap) return;
+        props.setCache(props.room.roomId, (c) => {
+          // Don't clobber a live update that already landed first
+          // (fast network beats IDB read on warm hardware).
+          if (c.loaded || c.events.length > 0) return;
+          c.events = snap.events;
+          c.prevToken = snap.prevToken;
+          c.reachedStart = snap.reachedStart;
+        });
+        requestAnimationFrame(() => scrollToBottom('auto'));
+      })
+      .catch(() => {});
+
     try {
       await bridge.request({ kind: 'subscribeRoom', roomId: props.room.roomId });
       const res = await bridge.request({
@@ -251,6 +273,14 @@ export function RoomView(props: {
         c.loaded = true;
         c.loading = false;
       });
+      // Persist tail for next-boot fast paint. Debounced inside
+      // writeRoomTimeline so it's safe to fire on every successful load.
+      void writeRoomTimeline(
+        props.room.roomId,
+        res.events,
+        res.prevToken,
+        res.prevToken === null,
+      ).catch(() => {});
       requestAnimationFrame(() => scrollToBottom('auto'));
     } catch (err) {
       props.setCache(props.room.roomId, (c) => {
