@@ -360,10 +360,16 @@ export function Composer(props: {
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               class="hidden"
               onChange={(e) => {
-                const file = e.currentTarget.files?.[0];
-                if (file && props.onAttach) props.onAttach(file);
+                // Stage every selected file. Picking a batch of photos
+                // at once is the common case; staging only the first
+                // (the old behavior) silently dropped the rest.
+                const files = e.currentTarget.files;
+                if (files && props.onAttach) {
+                  for (const file of Array.from(files)) props.onAttach(file);
+                }
                 e.currentTarget.value = '';
               }}
             />
