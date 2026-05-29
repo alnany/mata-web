@@ -89,6 +89,14 @@ export class MatrixCore {
     return this.requireSession().loadRoomHistory(roomId, fromToken, limit);
   }
 
+  subscribeRoom(roomId: RoomId): void {
+    this.requireSession().subscribeRoom(roomId);
+  }
+
+  unsubscribeRoom(): void {
+    this.requireSession().unsubscribeRoom();
+  }
+
   async sendMessage(
     roomId: RoomId,
     content: MessageBody,
