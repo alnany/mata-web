@@ -10,6 +10,7 @@ import {
   showToast,
 } from '../stores/toast.js';
 import { activeCall } from '../stores/call.js';
+import { mountPresence } from '../stores/presence.js';
 import type { EventId, RoomId, RoomSummary } from '@mata/shared/matrix';
 import { RoomView, createRoomCache, type RoomCache } from './room-view.js';
 import { SettingsDrawer } from '../components/settings-drawer.js';
@@ -314,6 +315,10 @@ export function HomePage() {
   onCleanup(() => {
     if (refetchTimer !== null) clearTimeout(refetchTimer);
   });
+
+  // Live presence (online dot + "last seen") — latch every m.presence
+  // ephemeral the worker forwards into the global presence store.
+  onCleanup(mountPresence(bridge));
 
   onCleanup(
     bridge.on('syncUpdate', (e) => {

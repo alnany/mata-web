@@ -159,6 +159,7 @@ export type MainToWorkerRequest =
    * `/event/{id}` fetch (and decrypts) when not already in the room.
    */
   | { kind: 'fetchEvent'; roomId: RoomId; eventId: EventId }
+  | { kind: 'fetchPresence'; userId: UserId }
   | { kind: 'sendReaction'; roomId: RoomId; eventId: EventId; key: string }
   | { kind: 'sendTyping'; roomId: RoomId; timeoutMs: number }
   | { kind: 'sendReadReceipt'; roomId: RoomId; eventId: EventId }
@@ -399,6 +400,12 @@ export type MainToWorkerResponse =
   | { kind: 'pinEvent' }
   | { kind: 'unpinEvent' }
   | { kind: 'fetchEvent'; event: TimelineEvent | null }
+  | {
+      kind: 'fetchPresence';
+      presence: 'online' | 'offline' | 'unavailable';
+      lastActiveAgoMs: number | null;
+      currentlyActive: boolean | null;
+    }
   | { kind: 'sendReaction' }
   | { kind: 'sendTyping' }
   | { kind: 'sendReadReceipt' }
@@ -547,6 +554,7 @@ export type WorkerEvent =
       userId: UserId;
       presence: 'online' | 'offline' | 'unavailable';
       lastActiveAgoMs: number | null;
+      currentlyActive: boolean | null;
     }
   | {
       kind: 'workerCrashed';

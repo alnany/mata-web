@@ -248,6 +248,20 @@ select:-webkit-autofill {
   animation: mata-toast-in 160ms ease-out;
 }
 
+/* Reply-jump flash: a double accent pulse so the eye catches the target
+   message after a jump. Applied to the inner bubble (rounded), removed
+   when the animation ends. */
+@keyframes mata-jump-flash {
+  0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-accent) 0%, transparent); }
+  12%  { box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-accent) 75%, transparent); }
+  32%  { box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-accent) 12%, transparent); }
+  52%  { box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-accent) 75%, transparent); }
+  100% { box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-accent) 0%, transparent); }
+}
+.mata-jump-flash {
+  animation: mata-jump-flash 1.4s ease-out;
+}
+
 /* =========================================================================
    Virtualization hint — keep, this is perf hygiene
    ========================================================================= */
@@ -295,4 +309,29 @@ select:-webkit-autofill {
   border-radius: 999px;
   background: var(--color-accent);
   box-shadow: 0 0 8px var(--color-accent);
+}
+
+/* Presence: online indicator (lime accent + glow). Inline by default;
+   `--overlay` pins it to an avatar's bottom-right with a bg-coloured ring
+   so it reads cleanly over the avatar disc. */
+.presence-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  box-shadow: 0 0 6px color-mix(in oklab, var(--color-accent) 55%, transparent);
+}
+.presence-dot--overlay {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--color-bg);
+}
+/* Top-right variant — used where a trust badge already owns bottom-right. */
+.presence-dot--tr {
+  bottom: auto;
+  top: -1px;
 }

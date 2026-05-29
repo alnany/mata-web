@@ -22,6 +22,7 @@ import {
   RoomEvent,
   RoomMemberEvent,
   RoomStateEvent,
+  UserEvent,
   MatrixEventEvent,
   EventType,
   MsgType,
@@ -30,6 +31,7 @@ import {
   IndexedDBStore,
   type MatrixClient,
   type Room,
+  type User,
   type MatrixEvent,
   type IContent,
   type IRoomTimelineData,
@@ -662,6 +664,28 @@ export class SdkSession {
         }
       }
       return room ? this.toTev(mxEv, room as Room) : toTimelineEvent(mxEv);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fetch a one-shot presence snapshot for a user via
+   * `/presence/{userId}/status`. Used to seed the online dot / "last seen"
+   * for a DM peer or member-list row before any live m.presence ephemeral
+   * arrives. Returns null on error (e.g. server presence disabled).
+   */
+  async fetchPresence(
+    userId: UserId,
+  ): Promise<{ presence: 'online' | 'offline' | 'unavailable'; lastActiveAgoMs: number | null; currentlyActive: boolean | null } | null> {
+    const c = this.requireClient();
+    try {
+      const res = await c.getPresence(userId);
+      return {
+        presence: (res.presence as 'online' | 'offline' | 'unavailable') ?? 'offline',
+        lastActiveAgoMs: typeof res.last_active_ago === 'number' ? res.last_active_ago : null,
+        currentlyActive: typeof res.currently_active === 'boolean' ? res.currently_active : null,
+      };
     } catch {
       return null;
     }
@@ -2566,6 +2590,16 @@ export class SdkSession {
       if (room) this.emitRoomDelta(room);
     });
 
+    // Presence: the homeserver streams m.presence ephemerals via /sync;
+    // matrix-js-sdk fans them out as User.* events. We forward online
+    // status + last-active to the UI presence store (online dot + "last
+    // seen"). All three sub-events collapse to one emit — the UI reads
+    // the freshest snapshot off the User model each time.
+    const onPresence = (_ev: MatrixEvent | undefined, user: User) => this.emitPresence(user);
+    client.on(UserEvent.Presence, onPresence);
+    client.on(UserEvent.CurrentlyActive, onPresence);
+    client.on(UserEvent.LastPresenceTs, onPresence);
+
     client.on(RoomMemberEvent.Typing, (_ev: MatrixEvent, member) => {
       const room = client.getRoom(member.roomId);
       if (!room) return;
@@ -2607,6 +2641,17 @@ export class SdkSession {
         },
       ],
       nextBatch: c.getSyncStateData()?.nextSyncToken ?? '',
+    });
+  }
+
+  /** Forward a User model's presence snapshot to the main thread. */
+  private emitPresence(user: User): void {
+    this.emit({
+      kind: 'presence',
+      userId: user.userId as UserId,
+      presence: ((user.presence as 'online' | 'offline' | 'unavailable') ?? 'offline'),
+      lastActiveAgoMs: typeof user.lastActiveAgo === 'number' ? user.lastActiveAgo : null,
+      currentlyActive: typeof user.currentlyActive === 'boolean' ? user.currentlyActive : null,
     });
   }
 }

@@ -114,6 +114,15 @@ const handlers: Handlers = {
     await core.unpinEvent(req.roomId, req.eventId);
     return { kind: 'unpinEvent' };
   },
+  fetchPresence: async (req, core) => {
+    const p = await core.fetchPresence(req.userId);
+    return {
+      kind: 'fetchPresence',
+      presence: p?.presence ?? 'offline',
+      lastActiveAgoMs: p?.lastActiveAgoMs ?? null,
+      currentlyActive: p?.currentlyActive ?? null,
+    };
+  },
   fetchEvent: async (req, core) => {
     const event = await core.fetchEvent(req.roomId, req.eventId);
     return { kind: 'fetchEvent', event };

@@ -164,6 +164,12 @@ export class MatrixCore {
     return this.requireSession().fetchEvent(roomId, eventId);
   }
 
+  async fetchPresence(
+    userId: UserId,
+  ): Promise<{ presence: 'online' | 'offline' | 'unavailable'; lastActiveAgoMs: number | null; currentlyActive: boolean | null } | null> {
+    return this.requireSession().fetchPresence(userId);
+  }
+
   async setWebPusher(
     subscription: WebPushSubscriptionJson,
     gatewayUrl: string,

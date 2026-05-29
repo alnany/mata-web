@@ -1,9 +1,11 @@
-import { createSignal, Show } from 'solid-js';
-import type { RoomSummary } from '@mata/shared/matrix';
+import { createSignal, onMount, Show } from 'solid-js';
+import type { RoomSummary, UserId } from '@mata/shared/matrix';
 import { prettyName } from './message-bubble.js';
+import { PresenceDot } from './presence-dot.js';
 import { useBridge } from '../bridge/context.js';
 import { activeCall, placeCall } from '../stores/call.js';
 import { showToast } from '../stores/toast.js';
+import { presenceOf, lastSeenLabel, ensurePresence } from '../stores/presence.js';
 
 /**
  * Conversation header — design layout (HANDOFF.md §"Conversation header"):
@@ -45,12 +47,27 @@ export function RoomHeader(props: {
     }
   };
 
+  // DM peer (if any) — drives the online dot + "last seen" subtitle.
+  const dmPeer = (): UserId | null =>
+    props.room.type === 'dm' ? (props.room.dmTargetUserId ?? null) : null;
+  onMount(() => {
+    const peer = dmPeer();
+    if (peer) ensurePresence(bridge, peer);
+  });
+
   const subtitle = () => {
     const typers = props.typingUserIds.filter((u) => u !== '');
-    if (typers.length === 0) return props.room.topic || '';
     if (typers.length === 1) return `${prettyName(typers[0])} is typing…`;
     if (typers.length === 2) return `${prettyName(typers[0])} and ${prettyName(typers[1])} are typing…`;
-    return `${typers.length} people are typing…`;
+    if (typers.length > 2) return `${typers.length} people are typing…`;
+    // No one typing — for a DM prefer the peer's presence ("online" /
+    // "last seen 5m ago"); fall back to the room topic otherwise.
+    const peer = dmPeer();
+    if (peer) {
+      const label = lastSeenLabel(presenceOf(peer));
+      if (label) return label;
+    }
+    return props.room.topic || '';
   };
 
   return (
@@ -66,8 +83,14 @@ export function RoomHeader(props: {
             style={{ 'font-weight': 500, 'letter-spacing': '-0.01em' }}
           >
             <Show
-              when={props.room.type !== 'direct'}
-              fallback={<span class="dot-accent mr-1" style={{ display: 'inline-block' }} />}
+              when={props.room.type !== 'dm'}
+              fallback={
+                <Show when={dmPeer()} fallback={<span class="dot-accent mr-1" style={{ display: 'inline-block' }} />}>
+                  <span class="relative mr-1 inline-flex h-2.5 w-2.5 items-center justify-center">
+                    <PresenceDot userId={dmPeer()!} />
+                  </span>
+                </Show>
+              }
             >
               <span class="text-fg-4" style={{ 'font-weight': 400 }}>
                 #

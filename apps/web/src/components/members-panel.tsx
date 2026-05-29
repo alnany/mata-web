@@ -29,6 +29,8 @@ import type { RoomMember, RoomSummary, UserId } from '@mata/shared/matrix';
 import { useBridge } from '../bridge/context.js';
 import { showToast } from '../stores/toast.js';
 import { initials, prettyName } from './message-bubble.js';
+import { PresenceDot } from './presence-dot.js';
+import { presenceOf, lastSeenLabel } from '../stores/presence.js';
 import { InviteUserModal } from './invite-user-modal.js';
 
 export function MembersPanel(props: {
@@ -245,6 +247,15 @@ function MemberRow(props: {
     if (m.powerLevel >= 50) return 'Mod';
     return null;
   };
+  // Secondary line: prefer a meaningful presence label ("online" /
+  // "last seen 5m ago") for joined members, else fall back to the user id.
+  const secondaryLine = (): string => {
+    if (m.membership === 'join') {
+      const label = lastSeenLabel(presenceOf(m.userId));
+      if (label && label !== 'offline') return label;
+    }
+    return m.userId;
+  };
   return (
     <div class="group flex items-center gap-2.5 border-b border-neutral-100 px-3 py-2 last:border-b-0/60">
       <div class="relative shrink-0">
@@ -270,6 +281,9 @@ function MemberRow(props: {
             {m.trust === 'verified' ? '✓' : m.trust === 'unverified' ? '!' : '?'}
           </span>
         </Show>
+        <Show when={m.membership === 'join'}>
+          <PresenceDot userId={m.userId} overlay corner="tr" />
+        </Show>
       </div>
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-1.5">
@@ -292,7 +306,7 @@ function MemberRow(props: {
             )}
           </Show>
         </div>
-        <div class="truncate text-[10px] text-fg-3">{m.userId}</div>
+        <div class="truncate text-[10px] text-fg-3">{secondaryLine()}</div>
       </div>
       <Show when={props.canKick}>
         <button

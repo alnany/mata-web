@@ -11,6 +11,7 @@ import { shortTime } from '../lib/date-buckets.js';
 import { normalizeWaveform, formatDuration } from '../lib/voice.js';
 import { useBridge } from '../bridge/context.js';
 import { LinkPreviewCard, extractFirstUrl, findUrlSpans } from './link-preview.js';
+import { PresenceDot } from './presence-dot.js';
 import { EmojiPicker } from './emoji-picker.js';
 
 /**
@@ -276,10 +277,11 @@ export function MessageBubble(props: {
         <div class="mr-2 w-8 shrink-0">
           <Show when={props.showHeader}>
             <div
-              class="flex h-8 w-8 items-center justify-center rounded-full bg-input text-xs font-semibold text-fg-2"
+              class="relative flex h-8 w-8 items-center justify-center rounded-full bg-input text-xs font-semibold text-fg-2"
               title={msg.sender}
             >
               {initials(msg.sender)}
+              <PresenceDot userId={msg.sender} overlay />
             </div>
           </Show>
         </div>
