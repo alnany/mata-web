@@ -137,6 +137,37 @@ function playChime() {
 
 // ---- dispatch -----------------------------------------------------------
 
+// Phantom-notification guard. Two independent sources re-deliver events
+// the user has ALREADY seen, both arriving through `syncUpdate` deltas:
+//
+//   1. The worker re-emits the subscribed room's last ~60 timeline events
+//      as a syncUpdate on EVERY sync tick (the "reconcile tail" that keeps
+//      the open room in sync). Those events carry their ORIGINAL, past
+//      timestamps.
+//   2. The initial /sync delivers the historical backlog of every room as
+//      `newEvents` on boot.
+//   3. A single new E2EE message is itself delivered 2–3 times (encrypted
+//      placeholder from RoomEvent.Timeline, then the decrypted re-emit,
+//      then subsequent reconcile tails).
+//
+// Without a guard the chime + desktop toast fired again for every one of
+// these — the "I get a notification but there's no new message" bug. We
+// gate on BOTH freshness (skip anything not recent) and identity (notify
+// at most once per eventId).
+const FRESH_WINDOW_MS = 60_000;
+const NOTIFIED_CAP = 800;
+const notifiedIds = new Set<string>();
+const notifiedOrder: string[] = [];
+function markNotified(id: string): void {
+  if (notifiedIds.has(id)) return;
+  notifiedIds.add(id);
+  notifiedOrder.push(id);
+  if (notifiedOrder.length > NOTIFIED_CAP) {
+    const drop = notifiedOrder.splice(0, notifiedOrder.length - NOTIFIED_CAP);
+    for (const d of drop) notifiedIds.delete(d);
+  }
+}
+
 export interface NotifyDispatchInput {
   deltas: RoomDelta[];
   activeRoomId: RoomId | null;
@@ -160,6 +191,22 @@ export function dispatchSyncDeltas(input: NotifyDispatchInput): void {
       if (ev.type !== 'm.room.message') continue;
       if (me && ev.sender === me) continue;
       const msg = ev as RoomMessageEvent;
+
+      // Freshness gate — drop anything that isn't actually recent. This
+      // is what kills the reconcile-tail re-emits and the boot backlog:
+      // both carry past timestamps, so they never pass. A genuinely new
+      // message has originServerTs ≈ now.
+      const ts = msg.originServerTs ?? 0;
+      if (!ts || Date.now() - ts > FRESH_WINDOW_MS) continue;
+
+      // Identity gate — a single new message is re-delivered several
+      // times (encrypted placeholder → decrypted re-emit → later tails
+      // within the freshness window). Decide exactly once per eventId.
+      // Mark BEFORE the active-room skip so a message seen live while
+      // focused is never re-notified when the tail re-emits it.
+      if (notifiedIds.has(ev.eventId)) continue;
+      markNotified(ev.eventId);
+
       const isMention = !!me && isMentionEvent(msg, me);
       if (roomIsActive && !isMention) continue;
 
