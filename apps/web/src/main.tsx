@@ -45,6 +45,35 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
             }
           });
         });
+
+        // CRITICAL: the browser only auto-checks /sw.js for changes on
+        // navigation (and roughly once a day). A long-lived SPA tab would
+        // otherwise never notice a deploy until the user manually reloads —
+        // which defeats the whole point of the banner. So we proactively
+        // poll registration.update(): on a 30s interval, and whenever the
+        // tab regains focus / visibility / connectivity (covers the common
+        // "came back to the tab" case instantly). update() re-fetches the
+        // worker; if its bytes changed, the browser fires `updatefound`
+        // above and the banner appears with no reload.
+        const checkForUpdate = () => {
+          registration.update().catch(() => {
+            /* offline / transient — next poll retries */
+          });
+        };
+        const POLL_MS = 30_000;
+        let timer = window.setInterval(checkForUpdate, POLL_MS);
+        const onVisible = () => {
+          if (document.visibilityState === 'visible') {
+            // Re-arm the interval so a backgrounded tab (where timers are
+            // throttled) checks immediately on return, then resumes polling.
+            window.clearInterval(timer);
+            checkForUpdate();
+            timer = window.setInterval(checkForUpdate, POLL_MS);
+          }
+        };
+        document.addEventListener('visibilitychange', onVisible);
+        window.addEventListener('focus', checkForUpdate);
+        window.addEventListener('online', checkForUpdate);
       })
       .catch(() => {
         /* SW registration failures are non-fatal — the app still works,
