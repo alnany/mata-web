@@ -106,6 +106,26 @@ const handlers: Handlers = {
     await core.redactMessage(req.roomId, req.eventId, req.reason);
     return { kind: 'redactMessage' };
   },
+  pinEvent: async (req, core) => {
+    await core.pinEvent(req.roomId, req.eventId);
+    return { kind: 'pinEvent' };
+  },
+  unpinEvent: async (req, core) => {
+    await core.unpinEvent(req.roomId, req.eventId);
+    return { kind: 'unpinEvent' };
+  },
+  fetchEvent: async (req, core) => {
+    const event = await core.fetchEvent(req.roomId, req.eventId);
+    return { kind: 'fetchEvent', event };
+  },
+  setWebPusher: async (req, core) => {
+    await core.setWebPusher(req.subscription, req.gatewayUrl, req.appId, req.lang);
+    return { kind: 'setWebPusher' };
+  },
+  removeWebPusher: async (req, core) => {
+    await core.removeWebPusher(req.endpoint, req.appId);
+    return { kind: 'removeWebPusher' };
+  },
   sendReaction: async (req, core) => {
     await core.sendReaction(req.roomId, req.eventId, req.key);
     return { kind: 'sendReaction' };

@@ -42,6 +42,14 @@ export interface RoomSummary {
    * for member lists.
    */
   dmTargetUserId?: UserId | null;
+  /**
+   * Event ids pinned in this room, read from the `m.room.pinned_events`
+   * state event (`content.pinned`), newest-pin-last per spec. Drives the
+   * tap-to-jump pinned bar. OPTIONAL for back-compat with cached
+   * RoomSummary payloads written before pinning shipped — treat
+   * `undefined` as an empty list.
+   */
+  pinnedEventIds?: EventId[];
 }
 
 export interface RoomDelta {

@@ -18,6 +18,7 @@ import type {
 } from '@mata/shared/matrix';
 import { authError } from '@mata/shared/errors';
 import type { SearchHit } from '@mata/shared/matrix';
+import type { WebPushSubscriptionJson } from '@mata/shared/rpc';
 import type { WorkerEvent } from '@mata/shared/rpc';
 import type { LoggedIn, LoginInput, SdkSession } from './sdk-impl.js';
 import { loadActiveSession, type SessionRecord } from './session-store.js';
@@ -149,6 +150,31 @@ export class MatrixCore {
 
   async redactMessage(roomId: RoomId, eventId: EventId, reason: string | null): Promise<void> {
     return this.requireSession().redactMessage(roomId, eventId, reason);
+  }
+
+  async pinEvent(roomId: RoomId, eventId: EventId): Promise<void> {
+    return this.requireSession().pinEvent(roomId, eventId);
+  }
+
+  async unpinEvent(roomId: RoomId, eventId: EventId): Promise<void> {
+    return this.requireSession().unpinEvent(roomId, eventId);
+  }
+
+  async fetchEvent(roomId: RoomId, eventId: EventId): Promise<TimelineEvent | null> {
+    return this.requireSession().fetchEvent(roomId, eventId);
+  }
+
+  async setWebPusher(
+    subscription: WebPushSubscriptionJson,
+    gatewayUrl: string,
+    appId: string,
+    lang: string,
+  ): Promise<void> {
+    return this.requireSession().setWebPusher(subscription, gatewayUrl, appId, lang);
+  }
+
+  async removeWebPusher(endpoint: string, appId: string): Promise<void> {
+    return this.requireSession().removeWebPusher(endpoint, appId);
   }
 
   async sendReaction(roomId: RoomId, eventId: EventId, key: string): Promise<void> {

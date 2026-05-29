@@ -207,7 +207,24 @@ export function toSummary(room: Room, client: MatrixClient): RoomSummary {
     isMuted: isRoomMuted(client, room.roomId as RoomId),
     membership: (room.getMyMembership() as 'join' | 'invite' | 'leave') ?? 'leave',
     dmTargetUserId,
+    pinnedEventIds: readPinnedEventIds(room),
   };
+}
+
+/**
+ * Read pinned event ids from the room's `m.room.pinned_events` state.
+ * Per spec the content is `{ pinned: string[] }`, ordered oldest-first.
+ * Returns an empty array when unset or malformed.
+ */
+export function readPinnedEventIds(room: Room): EventId[] {
+  try {
+    const ev = room.currentState.getStateEvents('m.room.pinned_events', '') as MatrixEvent | null;
+    const pinned = ev?.getContent()?.pinned;
+    if (!Array.isArray(pinned)) return [];
+    return pinned.filter((id): id is EventId => typeof id === 'string');
+  } catch {
+    return [];
+  }
 }
 
 /**

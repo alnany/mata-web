@@ -30,6 +30,7 @@ import { MembersPanel } from '../components/members-panel.js';
 import { SearchPanel } from '../components/search-panel.js';
 import { ImageGallery, type GalleryImage } from '../components/image-gallery.js';
 import { ForwardModal } from '../components/forward-modal.js';
+import { PinnedBar } from '../components/pinned-bar.js';
 import { readRoomTimeline, writeRoomTimeline } from '../lib/persistent-cache.js';
 
 /**
@@ -1309,6 +1310,18 @@ export function RoomView(props: {
     },
     onOpenImage: (eventId) => setGalleryStart(eventId),
     onToggleSelect: (ev) => toggleSelect(ev),
+    onPin: (eventId) => {
+      void bridge
+        .request({ kind: 'pinEvent', roomId: props.room.roomId, eventId })
+        .then(() => showToast('success', 'Pinned'))
+        .catch((err) => showToast('error', `Pin failed: ${msgOf(err)}`));
+    },
+    onUnpin: (eventId) => {
+      void bridge
+        .request({ kind: 'unpinEvent', roomId: props.room.roomId, eventId })
+        .then(() => showToast('success', 'Unpinned'))
+        .catch((err) => showToast('error', `Unpin failed: ${msgOf(err)}`));
+    },
     onJumpTo: (eventId) => {
       const target = document.querySelector(`[data-event-id="${cssEsc(eventId)}"]`);
       if (target instanceof HTMLElement) {
@@ -1805,6 +1818,12 @@ export function RoomView(props: {
       </Show>
 
       {/* Timeline */}
+      <PinnedBar
+        pinnedIds={props.room.pinnedEventIds ?? []}
+        liveEvents={() => props.cache.events}
+        onJump={(id) => actions.onJumpTo(id)}
+        onUnpin={(id) => actions.onUnpin?.(id)}
+      />
       <div class="relative min-h-0">
       {/* Floating day header — fades in while scrolling. */}
       <Show when={floatingDayTs() != null}>
@@ -1860,6 +1879,7 @@ export function RoomView(props: {
                       showHeader={row.showHeader}
                       selectMode={selectMode()}
                       selected={selectedIds().has(row.ev.eventId)}
+                      isPinned={(props.room.pinnedEventIds ?? []).includes(row.ev.eventId)}
                       inReplyToEvent={
                         row.ev.type === 'm.room.message' && row.ev.inReplyTo
                           ? eventById().get(row.ev.inReplyTo)

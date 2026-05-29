@@ -57,7 +57,7 @@ import type {
 } from '@mata/shared/matrix';
 import { authError, networkError, syncError } from '@mata/shared/errors';
 import type { WorkerEvent } from '@mata/shared/rpc';
-import type { IceServer, UrlPreview, UserSearchHit } from '@mata/shared/rpc';
+import type { IceServer, UrlPreview, UserSearchHit, WebPushSubscriptionJson } from '@mata/shared/rpc';
 import { parseHsPreview, fetchPreviewViaProxy, fetchPreviewClientSide } from './preview.js';
 import { VerificationService } from './verification.js';
 import {
@@ -77,6 +77,7 @@ import {
   mapLoginError,
   classifyRoom,
   toSummary,
+  readPinnedEventIds,
   isRoomMuted,
   partialSummary,
   extractPreview,
@@ -607,6 +608,113 @@ export class SdkSession {
   ): Promise<void> {
     const c = this.requireClient();
     await c.redactEvent(roomId, eventId, undefined, reason ? { reason } : undefined);
+  }
+
+  /**
+   * Pin a message: append `eventId` to the room's pinned list (deduped,
+   * preserving existing order with the new pin last per spec) and write
+   * `m.room.pinned_events` back. The RoomStateEvent.Events listener
+   * re-emits the summary, so the bar updates without a manual refresh.
+   */
+  async pinEvent(roomId: RoomId, eventId: EventId): Promise<void> {
+    const c = this.requireClient();
+    const room = c.getRoom(roomId);
+    if (!room) throw new Error('room not found');
+    const current = readPinnedEventIds(room);
+    if (current.includes(eventId)) return;
+    const pinned = [...current, eventId];
+    await c.sendStateEvent(roomId, 'm.room.pinned_events' as never, { pinned } as never, '');
+  }
+
+  /** Unpin: remove `eventId` from the pinned list and write it back. */
+  async unpinEvent(roomId: RoomId, eventId: EventId): Promise<void> {
+    const c = this.requireClient();
+    const room = c.getRoom(roomId);
+    if (!room) throw new Error('room not found');
+    const current = readPinnedEventIds(room);
+    if (!current.includes(eventId)) return;
+    const pinned = current.filter((id) => id !== eventId);
+    await c.sendStateEvent(roomId, 'm.room.pinned_events' as never, { pinned } as never, '');
+  }
+
+  /**
+   * Resolve a single event by id for previews (pinned bar). Tries the
+   * already-loaded room timeline first, then falls back to a homeserver
+   * `/rooms/{roomId}/event/{eventId}` fetch. Decrypts E2EE events before
+   * mapping. Returns null when the event can't be retrieved.
+   */
+  async fetchEvent(roomId: RoomId, eventId: EventId): Promise<TimelineEvent | null> {
+    const c = this.requireClient();
+    const room = c.getRoom(roomId);
+    const cached = room?.findEventById(eventId);
+    if (cached) return this.toTev(cached, room as Room);
+    try {
+      const raw = await c.fetchRoomEvent(roomId, eventId);
+      // fetchRoomEvent returns a plain event object; wrap it so the SDK
+      // mapper / decryptor can operate on a real MatrixEvent.
+      const { MatrixEvent } = await import('matrix-js-sdk');
+      const mxEv = new MatrixEvent(raw);
+      if (mxEv.isEncrypted() && room) {
+        try {
+          await c.decryptEventIfNeeded(mxEv);
+        } catch {
+          /* fall through — preview will read as encrypted */
+        }
+      }
+      return room ? this.toTev(mxEv, room as Room) : toTimelineEvent(mxEv);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Register a Web Push pusher. The homeserver will POST a Matrix Push
+   * Gateway notification to `gatewayUrl` whenever a push rule matches —
+   * including when this client is offline / the tab is closed. We carry
+   * the browser PushSubscription (endpoint + p256dh + auth) inside the
+   * pusher `data` so the gateway has everything it needs to encrypt and
+   * dispatch the actual Web Push (RFC 8291) without any extra store.
+   *
+   * pushkey = the subscription endpoint: a stable per-subscription id, so
+   * re-subscribing with the same browser updates the same pusher instead
+   * of piling up duplicates (`append: false`).
+   *
+   * `format` is deliberately omitted (full format) so the gateway gets
+   * sender + room_name for unencrypted rooms; encrypted rooms simply
+   * arrive without content and the gateway shows a generic title.
+   */
+  async setWebPusher(
+    subscription: WebPushSubscriptionJson,
+    gatewayUrl: string,
+    appId: string,
+    lang: string,
+  ): Promise<void> {
+    const c = this.requireClient();
+    const data = {
+      url: gatewayUrl,
+      endpoint: subscription.endpoint,
+      p256dh: subscription.keys.p256dh,
+      auth: subscription.keys.auth,
+    };
+    await c.setPusher({
+      app_id: appId,
+      // pushkey must be ≤512 bytes (spec). Push endpoints are well under.
+      pushkey: subscription.endpoint,
+      kind: 'http',
+      app_display_name: 'Mata',
+      device_display_name: 'Mata Web',
+      lang,
+      append: false,
+      // `data` is spec'd as open-ended; the SDK's type only models
+      // url/format/brand, so widen it to carry the subscription keys.
+      data: data as unknown as { url?: string; format?: string; brand?: string },
+    });
+  }
+
+  /** Delete the Web Push pusher identified by its endpoint (= pushkey). */
+  async removeWebPusher(endpoint: string, appId: string): Promise<void> {
+    const c = this.requireClient();
+    await c.removePusher(endpoint, appId);
   }
 
   /**
@@ -2446,6 +2554,15 @@ export class SdkSession {
     client.on(RoomEvent.Receipt, (_ev: MatrixEvent, room: Room) => this.emitRoomDelta(room));
     client.on(RoomStateEvent.Members, (_ev: MatrixEvent, _state, member) => {
       const room = client.getRoom(member.roomId);
+      if (room) this.emitRoomDelta(room);
+    });
+
+    // Pinned-message changes arrive as a generic state event; re-emit the
+    // room summary so the tap-to-jump pinned bar reflects pin/unpin live.
+    client.on(RoomStateEvent.Events, (ev: MatrixEvent) => {
+      if (ev.getType() !== 'm.room.pinned_events') return;
+      const roomId = ev.getRoomId();
+      const room = roomId ? client.getRoom(roomId) : null;
       if (room) this.emitRoomDelta(room);
     });
 

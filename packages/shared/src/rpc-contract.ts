@@ -60,6 +60,16 @@ import type {
  * fields except `url` are optional — the homeserver may return
  * just a title, just an image, or any combination.
  */
+/**
+ * Browser PushSubscription serialized to JSON (`subscription.toJSON()`).
+ * Carries the endpoint the push service exposes plus the two keys a
+ * gateway needs to encrypt a Web Push payload per RFC 8291.
+ */
+export interface WebPushSubscriptionJson {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+}
+
 export interface UrlPreview {
   url: string;
   title?: string;
@@ -133,6 +143,22 @@ export type MainToWorkerRequest =
     }
   | { kind: 'editMessage'; roomId: RoomId; eventId: EventId; content: MessageBody; txnId: string }
   | { kind: 'redactMessage'; roomId: RoomId; eventId: EventId; reason: string | null }
+  /**
+   * Pin / unpin a message. The worker reads the current
+   * `m.room.pinned_events` state, appends or removes `eventId`, and
+   * writes the new array back as a state event. The resulting summary
+   * delta (with updated `pinnedEventIds`) is pushed via the normal sync
+   * channel, so the client doesn't need the response to update the bar.
+   */
+  | { kind: 'pinEvent'; roomId: RoomId; eventId: EventId }
+  | { kind: 'unpinEvent'; roomId: RoomId; eventId: EventId }
+  /**
+   * Resolve a single event by id, even when it isn't in the loaded
+   * timeline. Used by the pinned bar to render a preview for a pin that
+   * scrolled out of the cached window. Falls back to a homeserver
+   * `/event/{id}` fetch (and decrypts) when not already in the room.
+   */
+  | { kind: 'fetchEvent'; roomId: RoomId; eventId: EventId }
   | { kind: 'sendReaction'; roomId: RoomId; eventId: EventId; key: string }
   | { kind: 'sendTyping'; roomId: RoomId; timeoutMs: number }
   | { kind: 'sendReadReceipt'; roomId: RoomId; eventId: EventId }
@@ -330,7 +356,23 @@ export type MainToWorkerRequest =
    * directory entries + shared-room members on Synapse — so
    * results stay useful without requiring federation-wide enum.
    */
-  | { kind: 'searchUsers'; term: string; limit: number };
+  | { kind: 'searchUsers'; term: string; limit: number }
+  /**
+   * Register a Web Push pusher on the homeserver so it forwards
+   * push notifications to our gateway (`gatewayUrl`) even when the
+   * tab is frozen or closed. `subscription` is the browser
+   * PushSubscription JSON; the worker stuffs it into the pusher
+   * `data` so the gateway has the endpoint + VAPID keys to dispatch.
+   */
+  | {
+      kind: 'setWebPusher';
+      subscription: WebPushSubscriptionJson;
+      gatewayUrl: string;
+      appId: string;
+      lang: string;
+    }
+  /** Remove a previously-registered Web Push pusher (by endpoint = pushkey). */
+  | { kind: 'removeWebPusher'; endpoint: string; appId: string };
 
 export type MainToWorkerResponse =
   | { kind: 'ping'; pong: true }
@@ -354,6 +396,9 @@ export type MainToWorkerResponse =
   | { kind: 'sendMessage'; queued: true }
   | { kind: 'editMessage'; queued: true }
   | { kind: 'redactMessage' }
+  | { kind: 'pinEvent' }
+  | { kind: 'unpinEvent' }
+  | { kind: 'fetchEvent'; event: TimelineEvent | null }
   | { kind: 'sendReaction' }
   | { kind: 'sendTyping' }
   | { kind: 'sendReadReceipt' }
@@ -401,6 +446,8 @@ export type MainToWorkerResponse =
    * null as "skip — render the link as plain text".
    */
   | { kind: 'getUrlPreview'; preview: UrlPreview | null }
+  | { kind: 'setWebPusher' }
+  | { kind: 'removeWebPusher' }
   | {
       kind: 'searchUsers';
       results: UserSearchHit[];

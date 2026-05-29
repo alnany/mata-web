@@ -60,6 +60,14 @@ export type MessageActions = {
    * mode. While select mode is active the whole row toggles on click.
    */
   onToggleSelect?: (ev: RoomMessageEvent) => void;
+  /**
+   * Pin / unpin this message in the room (writes `m.room.pinned_events`).
+   * The room-view shows the resulting tap-to-jump bar. Optional so the
+   * bubble still renders in contexts without pinning (thread panel).
+   * `onUnpin` is only invoked for a message that's already pinned.
+   */
+  onPin?: (eventId: EventId) => void;
+  onUnpin?: (eventId: EventId) => void;
 };
 
 export function MessageBubble(props: {
@@ -70,6 +78,8 @@ export function MessageBubble(props: {
   selectMode?: boolean;
   /** True when this message is in the current selection set. */
   selected?: boolean;
+  /** True when this message is currently pinned in the room. */
+  isPinned?: boolean;
   inReplyToEvent?: TimelineEvent;
   /**
    * Set when this message is the root of an active thread. The
@@ -508,6 +518,17 @@ export function MessageBubble(props: {
                 >
                   Forward
                 </MenuItem>
+                <Show when={props.actions.onPin}>
+                  <MenuItem
+                    onClick={() => {
+                      if (props.isPinned) props.actions.onUnpin?.(msg.eventId);
+                      else props.actions.onPin?.(msg.eventId);
+                      setShowMenu(false);
+                    }}
+                  >
+                    {props.isPinned ? 'Unpin' : 'Pin'}
+                  </MenuItem>
+                </Show>
                 <Show when={props.actions.onToggleSelect}>
                   <MenuItem
                     onClick={() => {
