@@ -1487,6 +1487,7 @@ export class SdkSession {
     filename: string;
     info: import('@mata/shared/matrix').MediaInfo;
     txnId: string;
+    extraContent?: Record<string, unknown>;
   }) {
     const c = this.requireClient();
     const { sendFileMessage } = await import('./attachments.js');

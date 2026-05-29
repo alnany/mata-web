@@ -498,8 +498,24 @@ export function encodeMessageBody(body: MessageBody): IContent {
       return { msgtype: MsgType.Image, body: body.body, url: body.url, info: mediaInfo(body.info) };
     case 'm.video':
       return { msgtype: MsgType.Video, body: body.body, url: body.url, info: mediaInfo(body.info) };
-    case 'm.audio':
-      return { msgtype: MsgType.Audio, body: body.body, url: body.url, info: mediaInfo(body.info) };
+    case 'm.audio': {
+      const out: Record<string, unknown> = {
+        msgtype: MsgType.Audio,
+        body: body.body,
+        url: body.url,
+        info: mediaInfo(body.info),
+      };
+      // Re-emit MSC3245 voice keys so a re-encoded voice body (e.g. local
+      // echo) stays a voice note on the wire.
+      if (body.voice) out['org.matrix.msc3245.voice'] = {};
+      if (body.audio) {
+        const a: { duration?: number; waveform?: number[] } = {};
+        if (body.audio.duration !== undefined) a.duration = body.audio.duration;
+        if (body.audio.waveform) a.waveform = body.audio.waveform;
+        out['org.matrix.msc1767.audio'] = a;
+      }
+      return out as IContent;
+    }
     case 'm.file':
       return { msgtype: MsgType.File, body: body.body, url: body.url, info: mediaInfo(body.info) };
     case 'm.location':
@@ -595,6 +611,23 @@ export function decodeMessageBody(c: IContent): MessageBody {
         info: decodeMediaInfo(c.info),
       };
       if (file) (base as MediaMessageBody).file = file;
+      // MSC3245 voice-message keys. matrix-js-sdk passes unknown content
+      // keys through untouched, so we read them straight off the raw
+      // content. Only attach for audio to keep other media bodies clean.
+      if (msgtype === MsgType.Audio) {
+        const rec = c as Record<string, unknown>;
+        if (rec['org.matrix.msc3245.voice'] !== undefined) base.voice = true;
+        const audioExt = rec['org.matrix.msc1767.audio'];
+        if (audioExt && typeof audioExt === 'object') {
+          const a = audioExt as { duration?: unknown; waveform?: unknown };
+          const out: { duration?: number; waveform?: number[] } = {};
+          if (typeof a.duration === 'number') out.duration = a.duration;
+          if (Array.isArray(a.waveform)) {
+            out.waveform = a.waveform.filter((n): n is number => typeof n === 'number');
+          }
+          if (out.duration !== undefined || out.waveform) base.audio = out;
+        }
+      }
       return base;
     }
     default:

@@ -8,6 +8,7 @@ import type {
   UserId,
 } from '@mata/shared/matrix';
 import { shortTime } from '../lib/date-buckets.js';
+import { normalizeWaveform, formatDuration } from '../lib/voice.js';
 import { useBridge } from '../bridge/context.js';
 import { LinkPreviewCard, extractFirstUrl, findUrlSpans } from './link-preview.js';
 import { EmojiPicker } from './emoji-picker.js';
@@ -52,12 +53,23 @@ export type MessageActions = {
    * works standalone (thread panel, tests) with a local lightbox.
    */
   onOpenImage?: (eventId: EventId) => void;
+  /**
+   * Toggle this message's membership in the multi-select set. Entering
+   * select mode is implied: the "Select" menu item calls this on a
+   * message that isn't yet selected, which flips the room into select
+   * mode. While select mode is active the whole row toggles on click.
+   */
+  onToggleSelect?: (ev: RoomMessageEvent) => void;
 };
 
 export function MessageBubble(props: {
   ev: TimelineEvent;
   me: UserId | null;
   showHeader: boolean;
+  /** True while the room is in multi-select mode. */
+  selectMode?: boolean;
+  /** True when this message is in the current selection set. */
+  selected?: boolean;
   inReplyToEvent?: TimelineEvent;
   /**
    * Set when this message is the root of an active thread. The
@@ -117,6 +129,7 @@ export function MessageBubble(props: {
     }
   };
   const onBubbleTouchStart = () => {
+    if (props.selectMode) return;
     cancelPress();
     pressTimer = window.setTimeout(() => {
       setShowMenu(true);
@@ -124,6 +137,7 @@ export function MessageBubble(props: {
     }, 450);
   };
   const onBubbleContextMenu = (e: MouseEvent) => {
+    if (props.selectMode) return;
     e.preventDefault();
     setShowMenu(true);
   };
@@ -167,11 +181,44 @@ export function MessageBubble(props: {
       // Re-fading the bubble at mount = "flash on the message I just
       // sent." Incoming bubbles still animate because they really are
       // new content from the user's POV.
-      class={`${isMine() ? '' : 'msg-enter'} group flex ${isMine() ? 'justify-end' : 'justify-start'} ${
+      class={`${isMine() ? '' : 'msg-enter'} group relative flex ${isMine() ? 'justify-end' : 'justify-start'} ${
         props.showHeader ? 'mt-3' : 'mt-0.5'
+      } ${props.selectMode ? 'cursor-pointer pl-9' : ''} ${
+        props.selected ? 'rounded-lg bg-mata-50' : ''
       }`}
       data-event-id={msg.eventId}
+      onClick={
+        props.selectMode
+          ? (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              props.actions.onToggleSelect?.(msg);
+            }
+          : undefined
+      }
     >
+      {/* Select-mode checkbox gutter (far left, both sides' messages) */}
+      <Show when={props.selectMode}>
+        <span
+          class={`absolute left-1.5 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-full border transition-colors ${
+            props.selected
+              ? 'border-accent bg-accent text-accent-ink'
+              : 'border-line-2 bg-elev text-transparent'
+          }`}
+          aria-hidden="true"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        </span>
+      </Show>
+
+      {/* Click-capture overlay so taps select instead of triggering
+          links / images / menus while in select mode. */}
+      <Show when={props.selectMode}>
+        <span class="absolute inset-0 z-20" aria-hidden="true" />
+      </Show>
+
       {/* Left gutter avatar for non-mine */}
       <Show when={!isMine()}>
         <div class="mr-2 w-8 shrink-0">
@@ -391,6 +438,16 @@ export function MessageBubble(props: {
                 >
                   Forward
                 </MenuItem>
+                <Show when={props.actions.onToggleSelect}>
+                  <MenuItem
+                    onClick={() => {
+                      props.actions.onToggleSelect?.(msg);
+                      setShowMenu(false);
+                    }}
+                  >
+                    Select
+                  </MenuItem>
+                </Show>
                 <MenuDivider />
                 <MenuItem onClick={copyText}>Copy text</MenuItem>
                 <MenuItem onClick={copyPermalink}>Copy link</MenuItem>
@@ -983,6 +1040,17 @@ function MediaPlayer(props: {
     return <video src={props.loaded.url} controls class="max-h-80 max-w-full rounded-lg" />;
   }
   if (c.msgtype === 'm.audio') {
+    // Voice messages (MSC3245) render as a play button + waveform.
+    // Plain audio attachments fall back to the native player.
+    if (c.voice || (c.audio?.waveform && c.audio.waveform.length > 0)) {
+      return (
+        <VoiceMessage
+          url={props.loaded.url}
+          waveform={c.audio?.waveform}
+          durationMs={c.audio?.duration ?? c.info.duration ?? 0}
+        />
+      );
+    }
     return <audio src={props.loaded.url} controls class="w-full" />;
   }
   // m.file
@@ -998,6 +1066,130 @@ function MediaPlayer(props: {
         {formatBytes(c.info.size)}
       </span>
     </a>
+  );
+}
+
+/**
+ * Voice-message player — play/pause button, a clickable waveform that
+ * doubles as a scrubber, and a live mm:ss readout. The waveform bars
+ * fill with the accent colour up to the current play-head; clicking or
+ * dragging anywhere on the bars seeks. Mirrors the WhatsApp / Telegram
+ * voice-note affordance.
+ */
+function VoiceMessage(props: { url: string; waveform?: number[]; durationMs: number }) {
+  let audioEl: HTMLAudioElement | undefined;
+  const [playing, setPlaying] = createSignal(false);
+  const [progress, setProgress] = createSignal(0); // 0..1
+  const [elapsedMs, setElapsedMs] = createSignal(0);
+  // Prefer the embedded duration; fall back to the element's metadata
+  // once it loads (some containers report duration only after decode).
+  const [metaMs, setMetaMs] = createSignal(props.durationMs);
+
+  const bars = () => normalizeWaveform(props.waveform);
+  const totalMs = () => metaMs() || props.durationMs;
+
+  const toggle = () => {
+    const el = audioEl;
+    if (!el) return;
+    if (el.paused) void el.play();
+    else el.pause();
+  };
+
+  const seekTo = (ratio: number) => {
+    const el = audioEl;
+    if (!el) return;
+    const dur = el.duration;
+    if (Number.isFinite(dur) && dur > 0) {
+      el.currentTime = Math.max(0, Math.min(dur, ratio * dur));
+      setProgress(Math.max(0, Math.min(1, ratio)));
+    }
+  };
+
+  const onBarsClick = (e: MouseEvent) => {
+    const track = e.currentTarget as HTMLElement;
+    const rect = track.getBoundingClientRect();
+    const ratio = (e.clientX - rect.left) / Math.max(1, rect.width);
+    seekTo(ratio);
+  };
+
+  return (
+    <div class="flex w-[min(280px,100%)] items-center gap-3 py-1">
+      <audio
+        ref={audioEl}
+        src={props.url}
+        preload="metadata"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => {
+          setPlaying(false);
+          setProgress(0);
+          setElapsedMs(0);
+        }}
+        onLoadedMetadata={(e) => {
+          const d = e.currentTarget.duration;
+          if (Number.isFinite(d) && d > 0) setMetaMs(Math.round(d * 1000));
+        }}
+        onTimeUpdate={(e) => {
+          const el = e.currentTarget;
+          if (Number.isFinite(el.duration) && el.duration > 0) {
+            setProgress(el.currentTime / el.duration);
+          }
+          setElapsedMs(Math.round(el.currentTime * 1000));
+        }}
+        class="hidden"
+      />
+      <button
+        type="button"
+        onClick={toggle}
+        class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink transition-[filter] hover:brightness-95"
+        aria-label={playing() ? 'Pause' : 'Play'}
+      >
+        <Show
+          when={playing()}
+          fallback={
+            <svg viewBox="0 0 24 24" fill="currentColor" class="h-[15px] w-[15px] translate-x-[1px]">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          }
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" class="h-[15px] w-[15px]">
+            <rect x="6" y="5" width="4" height="14" rx="1" />
+            <rect x="14" y="5" width="4" height="14" rx="1" />
+          </svg>
+        </Show>
+      </button>
+
+      <div class="min-w-0 flex-1">
+        <div
+          class="flex h-7 cursor-pointer items-center gap-[2px]"
+          onClick={onBarsClick}
+          role="slider"
+          aria-label="Seek"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress() * 100)}
+        >
+          <For each={bars()}>
+            {(level, i) => {
+              const filled = () => i() / Math.max(1, bars().length) < progress();
+              return (
+                <span
+                  class="flex-1 rounded-full transition-colors"
+                  style={{
+                    height: `${Math.max(12, Math.round(level * 100))}%`,
+                    background: filled() ? 'var(--color-accent)' : 'var(--color-line-2)',
+                    'min-width': '2px',
+                  }}
+                />
+              );
+            }}
+          </For>
+        </div>
+        <div class="mono mt-[2px] text-[10.5px] tabular-nums text-fg-3">
+          {formatDuration(playing() || elapsedMs() > 0 ? elapsedMs() : totalMs())}
+        </div>
+      </div>
+    </div>
   );
 }
 

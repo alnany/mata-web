@@ -85,6 +85,17 @@ export type MediaMessageBody = {
   info: MediaInfo;
   url?: MxcUri;
   file?: EncryptedFile;
+  /**
+   * MSC3245 voice-message marker. True when the audio event carried
+   * `org.matrix.msc3245.voice`. Only meaningful for `m.audio`.
+   */
+  voice?: boolean;
+  /**
+   * MSC1767 extensible-audio metadata (`org.matrix.msc1767.audio`):
+   * playback `duration` in ms and a `waveform` of 0..1024 loudness
+   * samples. Present on voice messages; optional on plain audio.
+   */
+  audio?: { duration?: number; waveform?: number[] };
 };
 
 /**

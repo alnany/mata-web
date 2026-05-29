@@ -262,6 +262,54 @@ export function RoomView(props: {
   // either picks a target (modal closes via its own success path) or
   // dismisses (we clear via onClose).
   const [forwardSource, setForwardSource] = createSignal<RoomMessageEvent | null>(null);
+  // Multi-forward: set when forwarding a multi-select batch.
+  const [forwardSources, setForwardSources] = createSignal<RoomMessageEvent[] | null>(null);
+  // Multi-select: bulk forward / delete. selectMode is implied by a
+  // non-empty set, but kept as an explicit signal so the user can enter
+  // the mode (via "Select") before any row is checked, and so cancelling
+  // clears the chrome even when nothing was picked.
+  const [selectMode, setSelectMode] = createSignal(false);
+  const [selectedIds, setSelectedIds] = createSignal<Set<EventId>>(new Set());
+  const selectedCount = () => selectedIds().size;
+  const toggleSelect = (ev: RoomMessageEvent) => {
+    setSelectMode(true);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(ev.eventId)) next.delete(ev.eventId);
+      else next.add(ev.eventId);
+      return next;
+    });
+  };
+  const exitSelect = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+  // Selected events resolved back to objects, in timeline order.
+  const selectedEvents = (): RoomMessageEvent[] => {
+    const ids = selectedIds();
+    return props.cache.events.filter(
+      (e): e is RoomMessageEvent => e.type === 'm.room.message' && ids.has(e.eventId),
+    );
+  };
+  // Only my own messages can be redacted in a bulk delete (server would
+  // reject others without PL); used to label the Delete button.
+  const deletableCount = () => selectedEvents().filter((e) => e.sender === me()).length;
+  const bulkDelete = () => {
+    const mine = selectedEvents().filter((e) => e.sender === me());
+    if (mine.length === 0) return;
+    if (!confirm(`Delete ${mine.length} message${mine.length > 1 ? 's' : ''}?`)) return;
+    for (const e of mine) {
+      void bridge
+        .request({
+          kind: 'redactMessage',
+          roomId: props.room.roomId,
+          eventId: e.eventId,
+          reason: null,
+        })
+        .catch((err) => showToast('error', `Delete failed: ${msgOf(err)}`));
+    }
+    exitSelect();
+  };
   // Room-level image album. Clicking any image opens this overlay and the
   // user can page through every image in the room (← / → / chevrons).
   const [galleryStart, setGalleryStart] = createSignal<EventId | null>(null);
@@ -1174,6 +1222,52 @@ export function RoomView(props: {
     stageAttachment(file);
   };
 
+  /**
+   * Send a recorded voice note as an MSC3245 voice message: an m.audio
+   * event tagged with `org.matrix.msc3245.voice` + the MSC1767 audio
+   * extension (duration + waveform). Unlike file attachments these go
+   * straight out — there's no "preview before send" step for a voice
+   * note (you just re-record). Encryption is handled transparently by
+   * the worker's sendFileMessage path.
+   */
+  const sendVoiceClip = async (clip: {
+    blob: Blob;
+    mimetype: string;
+    durationMs: number;
+    waveform: number[];
+  }): Promise<void> => {
+    try {
+      const data = await clip.blob.arrayBuffer();
+      const ext = clip.mimetype.includes('ogg')
+        ? 'ogg'
+        : clip.mimetype.includes('mp4')
+          ? 'm4a'
+          : 'webm';
+      await bridge.request({
+        kind: 'sendFileMessage',
+        roomId: props.room.roomId,
+        data,
+        filename: `voice-message.${ext}`,
+        info: {
+          mimetype: clip.mimetype,
+          size: clip.blob.size,
+          duration: clip.durationMs,
+        },
+        txnId: mkTxn(),
+        extraContent: {
+          body: 'Voice message',
+          'org.matrix.msc3245.voice': {},
+          'org.matrix.msc1767.audio': {
+            duration: clip.durationMs,
+            waveform: clip.waveform,
+          },
+        },
+      });
+    } catch (err) {
+      showToast('error', `Voice message failed: ${msgOf(err)}`);
+    }
+  };
+
   // ---- Message action wiring ---------------------------------------------
   const actions: MessageActions = {
     onReply: (ev) => {
@@ -1214,14 +1308,21 @@ export function RoomView(props: {
       setForwardSource(ev);
     },
     onOpenImage: (eventId) => setGalleryStart(eventId),
+    onToggleSelect: (ev) => toggleSelect(ev),
     onJumpTo: (eventId) => {
       const target = document.querySelector(`[data-event-id="${cssEsc(eventId)}"]`);
       if (target instanceof HTMLElement) {
         target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        target.classList.add('ring-2', 'ring-mata-500/60', 'rounded-2xl');
-        setTimeout(() => {
-          target.classList.remove('ring-2', 'ring-mata-500/60', 'rounded-2xl');
-        }, 1200);
+        // Flash the inner bubble (tighter, more eye-catching than ringing
+        // the full-width row). Falls back to the row if no bubble found.
+        const flashEl =
+          target.querySelector<HTMLElement>('.mata-msg-text') ?? target;
+        flashEl.classList.remove('mata-jump-flash');
+        // Force reflow so re-triggering the same target restarts the anim.
+        void flashEl.offsetWidth;
+        flashEl.classList.add('mata-jump-flash');
+        const clear = () => flashEl.classList.remove('mata-jump-flash');
+        flashEl.addEventListener('animationend', clear, { once: true });
       } else {
         showToast(
           'info',
@@ -1643,14 +1744,65 @@ export function RoomView(props: {
           </div>
         </div>
       </Show>
-      <RoomHeader
-        room={props.room}
-        typingUserIds={typingUsers()}
-        membersOpen={membersOpen()}
-        onShowMembers={() => setMembersOpen((v) => !v)}
-        searchOpen={searchOpen()}
-        onShowSearch={() => setSearchOpen((v) => !v)}
-      />
+      <Show
+        when={selectMode()}
+        fallback={
+          <RoomHeader
+            room={props.room}
+            typingUserIds={typingUsers()}
+            membersOpen={membersOpen()}
+            onShowMembers={() => setMembersOpen((v) => !v)}
+            searchOpen={searchOpen()}
+            onShowSearch={() => setSearchOpen((v) => !v)}
+          />
+        }
+      >
+        <div class="flex h-[57px] flex-none items-center gap-3 border-b border-line px-4">
+          <button
+            type="button"
+            onClick={exitSelect}
+            class="grid h-8 w-8 place-items-center rounded-md text-fg-2 hover:bg-input hover:text-fg"
+            aria-label="Cancel selection"
+            title="Cancel"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+          </button>
+          <span class="text-sm font-semibold">
+            {selectedCount() === 0
+              ? 'Select messages'
+              : `${selectedCount()} selected`}
+          </span>
+          <div class="ml-auto flex items-center gap-1">
+            <button
+              type="button"
+              disabled={selectedCount() === 0}
+              onClick={() => {
+                const evs = selectedEvents();
+                if (evs.length > 0) setForwardSources(evs);
+              }}
+              class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-fg-2 hover:bg-input hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+              title="Forward selected"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 17 5-5-5-5" /><path d="M4 18v-2a4 4 0 0 1 4-4h12" /></svg>
+              Forward
+            </button>
+            <button
+              type="button"
+              disabled={deletableCount() === 0}
+              onClick={bulkDelete}
+              class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-red-500 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+              title={
+                deletableCount() === 0
+                  ? 'You can only delete your own messages'
+                  : 'Delete selected'
+              }
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+              Delete{deletableCount() > 0 ? ` (${deletableCount()})` : ''}
+            </button>
+          </div>
+        </div>
+      </Show>
 
       {/* Timeline */}
       <div class="relative min-h-0">
@@ -1706,6 +1858,8 @@ export function RoomView(props: {
                       ev={row.ev}
                       me={me()}
                       showHeader={row.showHeader}
+                      selectMode={selectMode()}
+                      selected={selectedIds().has(row.ev.eventId)}
                       inReplyToEvent={
                         row.ev.type === 'm.room.message' && row.ev.inReplyTo
                           ? eventById().get(row.ev.inReplyTo)
@@ -1810,6 +1964,7 @@ export function RoomView(props: {
         onEditLast={editLast}
         onTyping={sendTyping}
         onAttach={handleAttach}
+        onSendVoice={(clip) => void sendVoiceClip(clip)}
         hasStagedAttachments={() => staged().length > 0}
         focusToken={focusToken}
         loadMembers={loadMembersForComposer}

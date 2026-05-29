@@ -152,6 +152,13 @@ export type MainToWorkerRequest =
       filename: string;
       info: MediaInfo;
       txnId: string;
+      /**
+       * Extra event-content keys merged verbatim into the outgoing
+       * `m.room.message`. Used for MSC3245 voice messages
+       * (`org.matrix.msc3245.voice` + `org.matrix.msc1767.audio`); the
+       * worker shallow-merges this over the built media body.
+       */
+      extraContent?: Record<string, unknown>;
     }
   | {
       /**

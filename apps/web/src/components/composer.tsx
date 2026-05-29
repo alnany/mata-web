@@ -1,8 +1,23 @@
-import { createEffect, createSignal, on, Show, type Accessor } from 'solid-js';
+import { createEffect, createSignal, on, onCleanup, Show, type Accessor } from 'solid-js';
 import type { RoomMessageEvent, RoomMember, UserId } from '@mata/shared/matrix';
 import { prettyName } from './message-bubble.js';
 import { MentionPopover, matchMembers, type MentionMatch } from './mention-popover.js';
 import { EmojiPicker } from './emoji-picker.js';
+import {
+  canRecordVoice,
+  computeWaveform,
+  flatWaveform,
+  formatDuration,
+  pickRecordingMime,
+} from '../lib/voice.js';
+
+/** Payload handed to the parent when a voice note finishes recording. */
+export interface VoiceClip {
+  blob: Blob;
+  mimetype: string;
+  durationMs: number;
+  waveform: number[];
+}
 
 /**
  * Composer with reply/edit indicator strip + @mention autocomplete.
@@ -40,6 +55,12 @@ export function Composer(props: {
   /** Called when the user picks a file from the attach button. */
   onAttach?: (file: File) => void;
   /**
+   * Called when a voice note finishes recording. When omitted, the mic
+   * button is hidden. The parent owns the upload (it has the room id +
+   * worker handle); the composer only captures + measures the clip.
+   */
+  onSendVoice?: (clip: VoiceClip) => void;
+  /**
    * Optional: tells the composer the parent has staged attachments
    * pending send. When >0 the Send button enables even with empty
    * text (pure attachment send is legal) and the Enter handler fires
@@ -64,6 +85,119 @@ export function Composer(props: {
 }) {
   let textareaRef: HTMLTextAreaElement | undefined;
   let fileInputRef: HTMLInputElement | undefined;
+
+  // ── Voice recording ───────────────────────────────────────────────
+  // recState drives the composer's swap between the normal input row
+  // and the recording bar. 'processing' covers the brief gap between
+  // MediaRecorder.stop() and the decoded-waveform handoff.
+  const voiceSupported = canRecordVoice();
+  const [recState, setRecState] = createSignal<'idle' | 'recording' | 'processing'>('idle');
+  const [recMs, setRecMs] = createSignal(0);
+  let mediaRecorder: MediaRecorder | undefined;
+  let mediaStream: MediaStream | undefined;
+  let recChunks: Blob[] = [];
+  let recTimer: ReturnType<typeof setInterval> | undefined;
+  let recMime = '';
+  let recCancelled = false;
+
+  function stopTracks() {
+    if (recTimer) {
+      clearInterval(recTimer);
+      recTimer = undefined;
+    }
+    mediaStream?.getTracks().forEach((t) => t.stop());
+    mediaStream = undefined;
+  }
+
+  async function startRecording() {
+    if (recState() !== 'idle' || !voiceSupported) return;
+    const mime = pickRecordingMime();
+    if (!mime) return;
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      // Permission denied / no device — stay idle, no nag.
+      return;
+    }
+    recChunks = [];
+    recCancelled = false;
+    recMime = mime;
+    try {
+      mediaRecorder = new MediaRecorder(mediaStream, { mimeType: mime });
+    } catch {
+      mediaRecorder = new MediaRecorder(mediaStream);
+      recMime = mediaRecorder.mimeType || mime;
+    }
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) recChunks.push(e.data);
+    };
+    mediaRecorder.onstop = () => void finalizeRecording();
+    mediaRecorder.start();
+    setRecState('recording');
+    const startTs = Date.now();
+    setRecMs(0);
+    recTimer = setInterval(() => setRecMs(Date.now() - startTs), 100);
+  }
+
+  function cancelRecording() {
+    recCancelled = true;
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+    } else {
+      stopTracks();
+      setRecState('idle');
+      setRecMs(0);
+    }
+  }
+
+  function finishRecording() {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      setRecState('processing');
+      mediaRecorder.stop();
+    }
+  }
+
+  async function finalizeRecording() {
+    stopTracks();
+    const wasCancelled = recCancelled;
+    const chunks = recChunks;
+    const elapsed = recMs();
+    recChunks = [];
+    mediaRecorder = undefined;
+    if (wasCancelled || chunks.length === 0) {
+      setRecState('idle');
+      setRecMs(0);
+      return;
+    }
+    const blob = new Blob(chunks, { type: recMime });
+    // Drop accidental sub-half-second taps so the mic doesn't spam empty
+    // blips into the room.
+    if (elapsed < 500 && blob.size < 2048) {
+      setRecState('idle');
+      setRecMs(0);
+      return;
+    }
+    let durationMs = elapsed;
+    let waveform: number[];
+    try {
+      const wf = await computeWaveform(blob);
+      waveform = wf.waveform;
+      if (wf.durationMs > 0) durationMs = wf.durationMs;
+    } catch {
+      waveform = flatWaveform();
+    }
+    props.onSendVoice?.({ blob, mimetype: recMime, durationMs, waveform });
+    setRecState('idle');
+    setRecMs(0);
+  }
+
+  onCleanup(() => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      recCancelled = true;
+      mediaRecorder.stop();
+    }
+    stopTracks();
+  });
 
   // Emoji popover open state. We anchor it above the smiley button via
   // a position:absolute element inside the composer frame so it
@@ -336,6 +470,17 @@ export function Composer(props: {
         class="rounded-[12px] border bg-input px-[12px] pb-[8px] pt-[10px] transition-colors focus-within:border-[var(--color-line-2)]"
         style={{ 'border-color': 'var(--color-line)' }}
       >
+        <Show
+          when={recState() === 'idle'}
+          fallback={
+            <RecordingBar
+              ms={recMs()}
+              processing={recState() === 'processing'}
+              onCancel={cancelRecording}
+              onSend={finishRecording}
+            />
+          }
+        >
         <div class="relative">
           <MentionPopover
             results={mentionState()?.results ?? []}
@@ -441,26 +586,56 @@ export function Composer(props: {
             <span>e2ee</span>
           </span>
 
-          {/* Send button */}
-          <button
-            type="button"
-            onClick={() => {
-              props.onSubmit();
-              requestAnimationFrame(() => autosize());
-            }}
-            disabled={!props.draft().trim() && !props.hasStagedAttachments?.()}
-            class="flex h-[30px] shrink-0 items-center gap-[6px] rounded-[7px] bg-accent pl-[14px] pr-[12px] text-[12px] text-accent-ink transition-[filter] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
-            style={{ 'font-weight': 500 }}
+          {/* Voice record — Telegram-style mic. Hidden while editing,
+              while a draft is in flight (send takes priority), or when
+              the runtime can't record. */}
+          <Show
+            when={
+              props.onSendVoice &&
+              voiceSupported &&
+              !props.editing &&
+              !props.draft().trim() &&
+              !props.hasStagedAttachments?.()
+            }
           >
-            <span>{props.editing ? 'Save' : 'Send'}</span>
-            <span
-              class="mono rounded-[4px] px-[5px] py-[1px] text-[10px]"
-              style={{ background: 'rgba(0,0,0,0.18)' }}
+            <ComposerIconButton label="Record voice message" onClick={() => void startRecording()}>
+              <IconMic class="h-[15px] w-[15px]" />
+            </ComposerIconButton>
+          </Show>
+
+          {/* Send button */}
+          <Show
+            when={
+              !(
+                props.onSendVoice &&
+                voiceSupported &&
+                !props.editing &&
+                !props.draft().trim() &&
+                !props.hasStagedAttachments?.()
+              )
+            }
+          >
+            <button
+              type="button"
+              onClick={() => {
+                props.onSubmit();
+                requestAnimationFrame(() => autosize());
+              }}
+              disabled={!props.draft().trim() && !props.hasStagedAttachments?.()}
+              class="flex h-[30px] shrink-0 items-center gap-[6px] rounded-[7px] bg-accent pl-[14px] pr-[12px] text-[12px] text-accent-ink transition-[filter] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ 'font-weight': 500 }}
             >
-              ⌘↩
-            </span>
-          </button>
+              <span>{props.editing ? 'Save' : 'Send'}</span>
+              <span
+                class="mono rounded-[4px] px-[5px] py-[1px] text-[10px]"
+                style={{ background: 'rgba(0,0,0,0.18)' }}
+              >
+                ⌘↩
+              </span>
+            </button>
+          </Show>
         </div>
+        </Show>
       </div>
     </div>
   );
@@ -477,6 +652,86 @@ function ComposerIconButton(props: { label: string; onClick: () => void; childre
     >
       {props.children}
     </button>
+  );
+}
+
+/**
+ * In-composer recording bar. Replaces the textarea + actions row while
+ * a voice note is being captured: pulsing record dot, live mm:ss timer,
+ * a discard (trash) button, and a send button. The send button shows a
+ * spinner during the brief decode/measure step.
+ */
+function RecordingBar(props: {
+  ms: number;
+  processing: boolean;
+  onCancel: () => void;
+  onSend: () => void;
+}) {
+  return (
+    <div class="flex items-center gap-3 py-[5px]">
+      <button
+        type="button"
+        onClick={props.onCancel}
+        class="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[7px] text-fg-3 transition-colors hover:bg-elev hover:text-fg"
+        aria-label="Discard recording"
+        title="Discard"
+      >
+        <IconTrash class="h-[15px] w-[15px]" />
+      </button>
+
+      <div class="flex flex-1 items-center gap-[10px]">
+        <span
+          class="h-[9px] w-[9px] shrink-0 rounded-full"
+          style={{ background: '#ff4d4f' }}
+          classList={{ 'animate-pulse': !props.processing }}
+        />
+        <span class="text-[13px] text-fg-2">
+          {props.processing ? 'Processing…' : 'Recording'}
+        </span>
+        <span class="mono text-[12.5px] tabular-nums text-fg-3">{formatDuration(props.ms)}</span>
+      </div>
+
+      <button
+        type="button"
+        onClick={props.onSend}
+        disabled={props.processing}
+        class="flex h-[30px] shrink-0 items-center gap-[6px] rounded-[7px] bg-accent pl-[13px] pr-[13px] text-[12px] text-accent-ink transition-[filter] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
+        style={{ 'font-weight': 500 }}
+        aria-label="Send voice message"
+      >
+        <IconSend class="h-[14px] w-[14px]" />
+        <span>Send</span>
+      </button>
+    </div>
+  );
+}
+
+function IconMic(p: { class?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class={p.class}>
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M5 10v1a7 7 0 0 0 14 0v-1" />
+      <line x1="12" y1="18" x2="12" y2="22" />
+      <line x1="8" y1="22" x2="16" y2="22" />
+    </svg>
+  );
+}
+function IconTrash(p: { class?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class={p.class}>
+      <path d="M3 6h18" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
+    </svg>
+  );
+}
+function IconSend(p: { class?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class={p.class}>
+      <line x1="22" y1="2" x2="11" y2="13" />
+      <polygon points="22 2 15 22 11 13 2 9 22 2" />
+    </svg>
   );
 }
 

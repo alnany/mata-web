@@ -161,11 +161,12 @@ export async function sendFileMessage(
     filename: string;
     info: MediaInfo;
     txnId: string;
+    extraContent?: Record<string, unknown>;
   },
 ): Promise<{ eventId: EventId }> {
   if (!client.getUserId()) throw authError('Not logged in');
 
-  const { roomId, data, filename, info, txnId } = args;
+  const { roomId, data, filename, info, txnId, extraContent } = args;
   const isEncrypted = (() => {
     try {
       return client.isRoomEncrypted(roomId);
@@ -187,16 +188,20 @@ export async function sendFileMessage(
       type: 'application/octet-stream',
     });
     enc.url = uploadRes.content_uri;
-    content = buildBody(msgtype, filename, info, { file: enc });
+    content = buildBody(msgtype, filename, info, { file: enc }, extraContent);
   } else {
     const blob = new Blob([data], { type: info.mimetype });
     const uploadRes = await client.uploadContent(blob, {
       name: filename,
       type: info.mimetype,
     });
-    content = buildBody(msgtype, filename, info, {
-      url: uploadRes.content_uri as MxcUri,
-    });
+    content = buildBody(
+      msgtype,
+      filename,
+      info,
+      { url: uploadRes.content_uri as MxcUri },
+      extraContent,
+    );
   }
 
   try {
@@ -230,6 +235,7 @@ function buildBody(
   filename: string,
   info: MediaInfo,
   ref: { url?: MxcUri; file?: EncryptedFileWire },
+  extraContent?: Record<string, unknown>,
 ): MessageBody {
   // Build a content object that matches MessageBody for *plain* rooms
   // (which requires `url`) and slips the `file` payload through as an
@@ -247,6 +253,8 @@ function buildBody(
   // encrypted rooms `url` will be empty — readers must check `file`
   // first.
   if (!ref.url) (out as { url: MxcUri }).url = '' as MxcUri;
+  // Merge MSC3245 voice keys (and any future extras) over the body.
+  if (extraContent) Object.assign(out, extraContent);
   return out;
 }
 

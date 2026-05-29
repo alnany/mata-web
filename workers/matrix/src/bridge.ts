@@ -129,6 +129,7 @@ const handlers: Handlers = {
       filename: req.filename,
       info: req.info,
       txnId: req.txnId,
+      extraContent: req.extraContent,
     });
     return { kind: 'sendFileMessage', eventId };
   },
