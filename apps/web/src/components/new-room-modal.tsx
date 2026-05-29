@@ -131,12 +131,15 @@ export function NewRoomModal(props: {
   // making the empty slot feel intentional rather than stale).
   const frequentUsers = createMemo<UserSearchHit[]>(() => {
     const all = props.rooms ?? [];
+    // Treat undefined and null as "no counterparty resolved" — older
+    // cached RoomSummary entries in IndexedDB predate dmTargetUserId
+    // and the worker rolls it out incrementally.
     const dms = all
       .filter(
         (r) =>
           r.type === 'dm' &&
           r.membership === 'join' &&
-          r.dmTargetUserId !== null,
+          r.dmTargetUserId != null,
       )
       .sort((a, b) => b.lastActivityTs - a.lastActivityTs);
     const seen = new Set<string>();
