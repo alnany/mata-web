@@ -47,13 +47,29 @@
     </script>
 
     <!-- Fonts: Geist (UI), Geist Mono (metadata), Instrument Serif (the M
-         glyph on the workspace-rail brand square). -->
+         glyph on the workspace-rail brand square).
+
+         The Google Fonts stylesheet used to be a *blocking* <link
+         rel="stylesheet">, which meant ~2 RTT (CSS fetch + WOFF2
+         fetch) before any text could paint. Preload-as-style with
+         a one-shot rel-flip avoids the render block; the font
+         faces themselves still use `display=swap` so we never
+         hide text waiting on the network. <noscript> fallback
+         keeps fonts working with JS disabled. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
+      rel="preload"
+      as="style"
       href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap"
-      rel="stylesheet"
+      onload="this.onload=null;this.rel='stylesheet'"
     />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap"
+        rel="stylesheet"
+      />
+    </noscript>
   </head>
   <body class="h-full antialiased">
     <div id="root" class="h-full"></div>
