@@ -516,25 +516,65 @@ export function RoomView(props: {
       for (let i = 0; i < next.length; i++) {
         indexById.set(next[i].eventId, i);
       }
+      // Track whether anything actually changed. The reconcile tail
+      // (subscribeRoom re-emits the last 60 events on EVERY sync tick)
+      // re-sends content-identical events with fresh object references.
+      // The rows() memo invalidates a Row on `msgRow.ev !== ev` (strict
+      // identity), so blindly assigning `next[existing] = ev` for every
+      // re-emit re-mints every Row → <For> remounts every <li> → every
+      // bubble re-fires its 120 ms enter-fade. THAT is the "flashing"
+      // regression. Guard: only replace an existing event when its
+      // rendered content genuinely differs (decrypt placeholder →
+      // cleartext, new edit, reaction count change). Otherwise keep the
+      // OLD reference so unchanged re-emits are a no-op and nothing
+      // re-renders.
+      let mutated = false;
       for (const ev of delta.newEvents) {
         const existing = indexById.get(ev.eventId);
         if (existing !== undefined) {
-          next[existing] = ev;
+          if (!sameRenderedEvent(next[existing], ev)) {
+            next[existing] = ev;
+            mutated = true;
+          }
         } else {
           indexById.set(ev.eventId, next.length);
           next.push(ev);
+          mutated = true;
         }
       }
-      c.events = next;
+      // Only assign a fresh array reference when something changed —
+      // an untouched array reference keeps the rows() memo from
+      // recomputing at all on idle reconcile ticks.
+      if (mutated) c.events = next;
 
-      // Atomic pending-bubble lock-in. For every pending entry whose
-      // expectedEventId just arrived in this delta, drop the pending
-      // entry now — the real event is already present in `events`
-      // above, so the swap is a single-frame transition. Same fresh
-      // array semantics as events above to guarantee reactivity.
+      // Atomic pending-bubble lock-in. Drop a pending entry the moment
+      // its confirmed server event lands in this same delta — the real
+      // event is already in `events` above, so the swap is a single
+      // frame (no coexistence = no double, no gap = no flash).
+      //
+      // Two correlation paths, OR'd together:
+      //   1. txnId echo — the homeserver stamps our own
+      //      `unsigned.transaction_id` on the event delivered back to
+      //      THIS device. This is the deterministic match and the real
+      //      double-bubble fix: it does NOT depend on the `sendStatus`
+      //      'sent' message arriving first. The previous code only had
+      //      path 2, so when the reconcile tail delivered the server
+      //      event before sendStatus recorded expectedEventId, the
+      //      optimistic bubble had nothing to match against and lingered
+      //      next to the real one — the "double sent message" the user
+      //      saw.
+      //   2. expectedEventId — fallback for the (rare) event whose
+      //      echoed txnId the server dropped; still resolved once
+      //      sendStatus has recorded the canonical id.
       if (c.pending.length > 0) {
+        const incomingTxns = new Set<string>();
+        for (const ev of delta.newEvents) {
+          if (ev.txnId) incomingTxns.add(ev.txnId);
+        }
         const nextPending = c.pending.filter(
-          (p) => !(p.expectedEventId && incomingIds.has(p.expectedEventId)),
+          (p) =>
+            !incomingTxns.has(p.txnId) &&
+            !(p.expectedEventId && incomingIds.has(p.expectedEventId)),
         );
         if (nextPending.length !== c.pending.length) {
           c.pending = nextPending;
@@ -1888,6 +1928,33 @@ function readImageDimensions(file: File): Promise<{ w: number; h: number } | nul
 
 function msgOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * True when two versions of the SAME event (matched by eventId) carry
+ * identical rendered content — so the timeline can keep the existing
+ * object reference and avoid re-minting its Row (which would remount the
+ * <li> and re-fire its enter-fade = flash).
+ *
+ * Both operands are produced by the worker's `toTimelineEvent`, which
+ * emits a stable key order per event type, so a structural JSON compare
+ * is deterministic. It's only ever called on a same-eventId pair from
+ * the reconcile tail (≤60 events/tick), so the cost is negligible.
+ *
+ * Returning `false` here is always safe (worst case: one extra Row
+ * re-mint). Returning `true` when content actually changed would pin a
+ * stale bubble — so the compare is total: JSON covers every rendered
+ * field (content, decryptionStatus, edits, reactions, inReplyTo,
+ * threadRoot) without us enumerating them and risking a miss as the
+ * schema grows.
+ */
+function sameRenderedEvent(a: TimelineEvent, b: TimelineEvent): boolean {
+  if (a === b) return true;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
 }
 
 function cssEsc(s: string): string {

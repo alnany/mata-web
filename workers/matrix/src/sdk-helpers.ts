@@ -296,6 +296,15 @@ export function toTimelineEvent(ev: MatrixEvent): TimelineEvent | null {
     roomId: ev.getRoomId() as RoomId,
     sender: sender as UserId,
     originServerTs: ev.getTs(),
+    // Echoed back by the homeserver only on the delivery to the sending
+    // device. Drives deterministic local-echo reconciliation in the UI
+    // (kills the double-bubble race). matrix-js-sdk also exposes it via
+    // getUnsigned().transaction_id; we read both to be safe across
+    // SDK versions.
+    txnId:
+      (ev.getUnsigned()?.transaction_id as string | undefined) ??
+      (ev as unknown as { getTxnId?: () => string | null }).getTxnId?.() ??
+      null,
   } as const;
 
   // Intercept decryption failures BEFORE the type branching below. When

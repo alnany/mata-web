@@ -128,6 +128,16 @@ interface BaseEvent {
   roomId: RoomId;
   sender: UserId;
   originServerTs: number;
+  /**
+   * The sender's own client transaction id, echoed back by the
+   * homeserver in `unsigned.transaction_id` ONLY on the delivery to the
+   * device that sent it. Lets the timeline reconcile an optimistic
+   * local-echo bubble against its confirmed server event deterministically
+   * — independent of `sendStatus` arrival order — which is what prevents
+   * the same message rendering twice. `null`/absent for events we didn't
+   * send or once the server drops the field on later re-deliveries.
+   */
+  txnId?: string | null;
 }
 
 export interface RoomMessageEvent extends BaseEvent {
