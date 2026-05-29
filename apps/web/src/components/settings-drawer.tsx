@@ -83,6 +83,12 @@ export function SettingsDrawer(props: {
     // stores are cleared by the `logout` RPC above; these two are
     // main-thread state.
     await Promise.all([clearRoomList(), clearAllTimelines()]).catch(() => {});
+    try {
+      // Persisted "last opened room" pointer (see home.tsx auto-select).
+      localStorage.removeItem('mata:lastRoomId');
+    } catch {
+      /* private mode */
+    }
     setSession({ phase: 'anonymous' });
     props.onClose();
     navigate('/login', { replace: true });
