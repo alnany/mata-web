@@ -32,6 +32,15 @@ export interface RoomSummary {
    */
   isMuted: boolean;
   membership: 'join' | 'invite' | 'leave';
+  /**
+   * For DM rooms (`type === 'dm'`), the other party's user id. Null
+   * for group rooms and spaces, and null for DM rooms where the
+   * counterparty couldn't be resolved (rare — typically a left-room
+   * or invite-only DM where the inviter hasn't accepted yet). The
+   * client uses this to power "frequent chats" quick-add chips in
+   * the new-room modal without round-tripping for member lists.
+   */
+  dmTargetUserId: UserId | null;
 }
 
 export interface RoomDelta {
