@@ -213,8 +213,14 @@ const handlers: Handlers = {
     const mxc = await core.uploadMedia(req.data, req.mime, req.filename);
     return { kind: 'uploadMedia', mxc };
   },
-  subscribeRoom: async () => ({ kind: 'subscribeRoom' }),
-  unsubscribeRoom: async () => ({ kind: 'unsubscribeRoom' }),
+  subscribeRoom: async (req, core) => {
+    core.subscribeRoom(req.roomId);
+    return { kind: 'subscribeRoom' };
+  },
+  unsubscribeRoom: async (_req, core) => {
+    core.unsubscribeRoom();
+    return { kind: 'unsubscribeRoom' };
+  },
   listDevices: async (_req, core) => {
     const devices = await core.listDevices();
     return { kind: 'listDevices', devices };
