@@ -3,7 +3,11 @@ import { createStore, produce } from 'solid-js/store';
 import { useNavigate } from '@solidjs/router';
 import { useBridge } from '../bridge/context.js';
 import { session, setSession } from '../stores/session.js';
-import { showToast } from '../stores/toast.js';
+import {
+  markBootSettled,
+  showBootGuardedError,
+  showToast,
+} from '../stores/toast.js';
 import { activeCall } from '../stores/call.js';
 import type { RoomId, RoomSummary } from '@mata/shared/matrix';
 import { RoomView, createRoomCache, type RoomCache } from './room-view.js';
@@ -73,8 +77,20 @@ export function HomePage() {
     bridge.on('syncStatus', (e) => {
       setSyncState(e.status);
       setSyncReason(e.reason ?? '');
+      // `syncing` is the SDK's first "we're live" tick. From here on,
+      // background errors (loadRoomList rejecting, RPC racing the
+      // worker startup, etc.) are real failures worth toasting.
+      if (e.status === 'syncing') markBootSettled();
+      // Only toast sync errors AFTER we've been live at least once.
+      // The initial connecting phase emits transient errors during
+      // crypto bootstrap retries / DNS warmup that resolve on their
+      // own — flashing them in the corner felt like a "broken app"
+      // signal even though the sync indicator already shows the
+      // state inline. Persistent errors still surface because the
+      // sync indicator stays red and any subsequent error event
+      // after bootSettled passes the gate.
       if (e.status === 'error' && e.reason) {
-        showToast('error', `Sync error: ${e.reason}`, 8000);
+        showBootGuardedError(`Sync error: ${e.reason}`, 8000);
       }
     }),
   );
@@ -135,7 +151,14 @@ export function HomePage() {
       void writeRoomList(merged);
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
-      showToast('error', `Failed to load rooms: ${m}`);
+      // `Not logged in` here is a transient race between the
+      // auto-refetch effect (gated on session.phase ===
+      // 'authenticated') and SdkSession finishing its restore.
+      // The next syncUpdate or syncStatus tick will refetch
+      // successfully. Showing a red pill in that window felt like
+      // a logout/error to users. After boot settles, every
+      // failure surfaces normally.
+      showBootGuardedError(`Failed to load rooms: ${m}`);
     }
   };
 
