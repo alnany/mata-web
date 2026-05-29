@@ -58,6 +58,20 @@ export interface RoomCache {
   unreadAnchorEventId: string | null;
   /** True once the unread anchor has been captured (freezes the value). */
   unreadResolved: boolean;
+  /**
+   * Last scroll offset (px from top) the user left this room at, saved
+   * on scroll and restored on reopen so hopping between rooms doesn't
+   * snap you back to the bottom — the Telegram "you were reading here"
+   * behavior. `undefined` until the user has scrolled this room at
+   * least once in the session.
+   */
+  scrollTop?: number;
+  /**
+   * Whether the saved `scrollTop` had the room pinned to the bottom.
+   * When true we restore by re-pinning to the live bottom (which may
+   * have grown since) instead of the stale pixel offset.
+   */
+  scrollAtBottom?: boolean;
 }
 
 interface PendingEvent {
@@ -322,7 +336,11 @@ export function RoomView(props: {
       // rAFs: first lets the rows memo + <For> commit the divider node,
       // second runs after layout so offsetTop is real.
       requestAnimationFrame(() =>
-        requestAnimationFrame(() => scrollToUnreadOrBottom()),
+        requestAnimationFrame(() => {
+          // A remembered position wins (room reopened mid-session);
+          // otherwise land on the unread divider or the bottom.
+          if (!restoreScroll()) scrollToUnreadOrBottom();
+        }),
       );
     } catch (err) {
       props.setCache(props.room.roomId, (c) => {
@@ -407,6 +425,7 @@ export function RoomView(props: {
     onCleanup(() => {
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keydown', onKey);
+      if (scrollPersistTimer) clearTimeout(scrollPersistTimer);
     });
   });
 
@@ -430,7 +449,18 @@ export function RoomView(props: {
         setEditing(null);
         setOpenThread(null);
         requestAnimationFrame(() => {
-          if (stickToBottom()) scrollToBottom('auto');
+          // Restore the destination room's remembered scroll position.
+          // If the room was already loaded earlier this session and the
+          // user had scrolled it, this lands them back where they left
+          // off; a never-visited / caught-up room falls through to the
+          // unread-divider-or-bottom heuristic. Reset stick state from
+          // the restored position so the jump-to-bottom pill is correct.
+          if (!restoreScroll()) scrollToUnreadOrBottom();
+          if (scrollerRef) {
+            const dist =
+              scrollerRef.scrollHeight - scrollerRef.scrollTop - scrollerRef.clientHeight;
+            setStickToBottom(dist < SCROLL_STICK_THRESHOLD);
+          }
           bumpFocus();
         });
       },
@@ -575,7 +605,12 @@ export function RoomView(props: {
     if (!scrollerRef) return;
     const distFromBottom =
       scrollerRef.scrollHeight - scrollerRef.scrollTop - scrollerRef.clientHeight;
-    setStickToBottom(distFromBottom < SCROLL_STICK_THRESHOLD);
+    const atBottom = distFromBottom < SCROLL_STICK_THRESHOLD;
+    setStickToBottom(atBottom);
+
+    // Remember where the user is so reopening the room restores it.
+    // Debounced so we don't thrash the store on every scroll frame.
+    persistScrollSoon(scrollerRef.scrollTop, atBottom);
 
     // Load older page when near the top.
     if (
@@ -644,9 +679,50 @@ export function RoomView(props: {
     }
   };
 
+  // Debounced write-through of the live scroll offset into the room
+  // cache. The room id is captured at call time so a write that fires
+  // after a fast room-switch still lands on the room it belongs to.
+  let scrollPersistTimer: ReturnType<typeof setTimeout> | undefined;
+  const persistScrollSoon = (top: number, atBottom: boolean) => {
+    const roomId = props.room.roomId;
+    if (scrollPersistTimer) clearTimeout(scrollPersistTimer);
+    scrollPersistTimer = setTimeout(() => {
+      props.setCache(roomId, (c) => {
+        c.scrollTop = top;
+        c.scrollAtBottom = atBottom;
+      });
+    }, 200);
+  };
+
   const scrollToBottom = (behavior: ScrollBehavior) => {
     if (!scrollerRef) return;
     scrollerRef.scrollTo({ top: scrollerRef.scrollHeight, behavior });
+  };
+
+  /**
+   * Restore scroll on (re)open. Priority:
+   *   1. A remembered offset from a previous visit this session — the
+   *      "you were reading here" restore. If it was pinned to bottom,
+   *      re-pin to the (possibly grown) live bottom instead.
+   *   2. Otherwise the unread divider / bottom heuristic for a first
+   *      open.
+   * Returns true if a remembered position was applied.
+   */
+  const restoreScroll = (): boolean => {
+    if (!scrollerRef) return false;
+    const { scrollTop, scrollAtBottom } = props.cache;
+    if (scrollAtBottom) {
+      scrollToBottom('auto');
+      return true;
+    }
+    if (typeof scrollTop === 'number') {
+      // Clamp to the current scrollable range in case the timeline
+      // shrank (e.g. old undecryptable events were filtered out).
+      const max = scrollerRef.scrollHeight - scrollerRef.clientHeight;
+      scrollerRef.scrollTo({ top: Math.min(scrollTop, Math.max(0, max)), behavior: 'auto' });
+      return true;
+    }
+    return false;
   };
 
   /**
