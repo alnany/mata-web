@@ -1,6 +1,33 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import solid from 'vite-plugin-solid';
 import tailwindcss from '@tailwindcss/vite';
+
+// Stamps a unique build id into dist/sw.js after the bundle is written.
+// public/sw.js ships a `__MATA_BUILD_ID__` placeholder; replacing it per
+// deploy is what makes the service worker's bytes differ each release so
+// the browser fires `updatefound` and the in-app update banner appears.
+// Vite copies public/ to dist/ verbatim, so we patch dist/sw.js here.
+function swBuildStamp() {
+  return {
+    name: 'mata-sw-build-stamp',
+    apply: 'build' as const,
+    closeBundle() {
+      try {
+        const swPath = fileURLToPath(new URL('./dist/sw.js', import.meta.url));
+        const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        const src = readFileSync(swPath, 'utf8');
+        writeFileSync(swPath, src.replace('__MATA_BUILD_ID__', id));
+        // eslint-disable-next-line no-console
+        console.log(`[mata-sw-build-stamp] sw.js build id = ${id}`);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[mata-sw-build-stamp] could not stamp sw.js:', err);
+      }
+    },
+  };
+}
 
 const ENABLE_E2EE = process.env.MATA_ENABLE_E2EE === 'true';
 
@@ -17,7 +44,7 @@ const cryptoAlias = ENABLE_E2EE
     ];
 
 export default defineConfig({
-  plugins: [solid(), tailwindcss()],
+  plugins: [solid(), tailwindcss(), swBuildStamp()],
   resolve: { alias: cryptoAlias },
   define: {
     // Compile-time feature flag. When false, the crypto-wasm chunk is

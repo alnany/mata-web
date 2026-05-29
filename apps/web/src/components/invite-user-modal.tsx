@@ -1,38 +1,55 @@
 // ============================================================================
-// InviteUserModal — invite a single Matrix ID to an existing room.
+// InviteUserModal — invite someone to an existing room.
 //
-// Triggered from the MembersPanel header. Reuses the existing
-// `inviteToRoom` RPC (already wired through bridge.ts → sdk-impl).
-// We deliberately keep it single-shot rather than the comma-list shape
-// of NewRoomModal: invites in an existing room are usually a "oh, add
-// Bob" moment, not a batch operation. For batch we'd reopen the modal.
+// Two fast paths, mirroring NewRoomModal's person picker:
+//   - "Recent chats" quick-select: the user's DM partners sorted by recent
+//     activity, one tap to invite. This is the "oh, add Bob" moment most
+//     invites actually are.
+//   - Live directory search by display name, with a raw `@user:server`
+//     paste fallback for power users / off-directory IDs.
 //
-// On success we fire `onInvited` so the parent can bump its members
-// resource and the new invitee appears in the panel under "Invited"
-// without waiting on the next sync delta.
+// Reuses the existing `inviteToRoom` RPC. People already in the room
+// (joined OR invited) are filtered out of both the quick row and the
+// search results so you can't double-invite. On success we fire
+// `onInvited` so the parent bumps its members resource.
 // ============================================================================
 
-import { createSignal, Show } from 'solid-js';
-import type { RoomId, UserId } from '@mata/shared/matrix';
+import { createEffect, createMemo, createSignal, For, on, Show } from 'solid-js';
+import type { RoomId, RoomSummary, UserId } from '@mata/shared/matrix';
+import type { UserSearchHit } from '@mata/shared/rpc';
 import { useBridge } from '../bridge/context.js';
 import { showToast } from '../stores/toast.js';
+import { initials, prettyName } from './message-bubble.js';
 
 export function InviteUserModal(props: {
   open: boolean;
   roomId: RoomId;
   roomName: string;
+  /** Room list, used to derive recent DM partners for quick-invite. */
+  rooms?: RoomSummary[] | null;
+  /** MXIDs already in the room (joined or invited) — filtered out. */
+  existingMemberIds?: string[];
   onClose: () => void;
   onInvited: () => void;
 }) {
   const bridge = useBridge();
-  const [userId, setUserId] = createSignal('');
-  const [submitting, setSubmitting] = createSignal(false);
-
+  const [term, setTerm] = createSignal('');
+  const [results, setResults] = createSignal<UserSearchHit[]>([]);
+  const [limited, setLimited] = createSignal(false);
+  const [searching, setSearching] = createSignal(false);
+  const [submitting, setSubmitting] = createSignal('');
   let inputRef: HTMLInputElement | undefined;
+  let searchSeq = 0;
+
+  const isFullMxid = (s: string): boolean => /^@[^:\s]+:[^\s]+$/.test(s.trim());
 
   const reset = () => {
-    setUserId('');
-    setSubmitting(false);
+    setTerm('');
+    setResults([]);
+    setLimited(false);
+    setSearching(false);
+    setSubmitting('');
+    searchSeq++;
   };
 
   const close = () => {
@@ -41,34 +58,99 @@ export function InviteUserModal(props: {
     props.onClose();
   };
 
-  // Matches `@local:server.tld` — the same shape NewRoomModal accepts.
-  // Server-side will reject IDs the homeserver can't resolve; this is
-  // just a fast-fail for obvious typos before the round-trip.
-  const valid = (id: string): boolean => /^@[^:\s]+:[^\s]+$/.test(id);
+  const excluded = createMemo(() => new Set(props.existingMemberIds ?? []));
 
-  const submit = async () => {
+  // Recent DM partners, sorted by activity, minus anyone already in the
+  // room. Mapped to UserSearchHit shape so the row/avatar helpers render
+  // them the same as directory results.
+  const recentUsers = createMemo<UserSearchHit[]>(() => {
+    const all = props.rooms ?? [];
+    const skip = excluded();
+    const dms = all
+      .filter(
+        (r) =>
+          r.type === 'dm' &&
+          r.membership === 'join' &&
+          r.dmTargetUserId != null &&
+          !skip.has(r.dmTargetUserId as string),
+      )
+      .sort((a, b) => b.lastActivityTs - a.lastActivityTs);
+    const seen = new Set<string>();
+    const out: UserSearchHit[] = [];
+    for (const r of dms) {
+      const uid = r.dmTargetUserId as UserId;
+      if (seen.has(uid)) continue;
+      seen.add(uid);
+      out.push({
+        userId: uid,
+        displayName: r.name && r.name !== uid ? r.name : null,
+        avatarUrl: r.avatarUrl,
+      } as UserSearchHit);
+      if (out.length >= 8) break;
+    }
+    return out;
+  });
+
+  // Live directory search — 200ms debounce, stale-seq guard. Filters out
+  // existing members so you never invite someone twice.
+  createEffect(
+    on([term, () => props.open], ([t, open]) => {
+      if (!open) return;
+      const trimmed = t.trim();
+      if (trimmed.length < 2) {
+        setResults([]);
+        setLimited(false);
+        setSearching(false);
+        return;
+      }
+      const mySeq = ++searchSeq;
+      setSearching(true);
+      const handle = setTimeout(async () => {
+        try {
+          const res = await bridge.request({ kind: 'searchUsers', term: trimmed, limit: 8 });
+          if (mySeq !== searchSeq) return;
+          const skip = excluded();
+          setResults(res.results.filter((h) => !skip.has(h.userId as string)));
+          setLimited(res.limited);
+        } catch {
+          if (mySeq !== searchSeq) return;
+          setResults([]);
+          setLimited(false);
+        } finally {
+          if (mySeq === searchSeq) setSearching(false);
+        }
+      }, 200);
+      return () => clearTimeout(handle);
+    }),
+  );
+
+  const invite = async (rawId: string) => {
+    const id = rawId.trim();
     if (submitting()) return;
-    const id = userId().trim();
-    if (!valid(id)) {
-      showToast('error', 'Use a full Matrix ID like @alice:example.org');
+    if (!isFullMxid(id)) {
+      showToast('error', 'Pick someone from the list, or paste a full Matrix ID like @alice:example.org');
       inputRef?.focus();
       return;
     }
-    setSubmitting(true);
+    if (excluded().has(id)) {
+      showToast('error', 'They are already in this room.');
+      return;
+    }
+    setSubmitting(id);
     try {
       await bridge.request({
         kind: 'inviteToRoom',
         roomId: props.roomId,
         userId: id as UserId,
       });
-      showToast('success', `Invited ${id}`);
+      showToast('success', `Invited ${prettyName(id as UserId)}`);
       props.onInvited();
       reset();
       props.onClose();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       showToast('error', `Invite failed: ${msg}`);
-      setSubmitting(false);
+      setSubmitting('');
     }
   };
 
@@ -81,56 +163,181 @@ export function InviteUserModal(props: {
         <div
           class="w-full max-w-sm rounded-xl border border-line bg-elev p-5 shadow-2xl"
           onClick={(e) => e.stopPropagation()}
-          ref={(el) => queueMicrotask(() => inputRef?.focus()) as unknown as void & typeof el}
+          ref={() => queueMicrotask(() => inputRef?.focus())}
         >
           <div class="mb-4">
             <h2 class="text-base font-semibold">Invite to room</h2>
             <p class="mt-0.5 truncate text-[11.5px] text-fg-3">{props.roomName}</p>
           </div>
 
-          <label class="block text-[11.5px] font-medium text-fg-2">Matrix ID</label>
-          <input
-            ref={inputRef}
-            type="text"
-            value={userId()}
-            onInput={(e) => setUserId(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                void submit();
-              } else if (e.key === 'Escape') {
-                e.preventDefault();
-                close();
-              }
-            }}
-            placeholder="@alice:example.org"
-            class="mt-1 w-full rounded-md border border-line bg-elev px-2.5 py-1.5 text-sm focus:border-mata-500 focus:bg-elev focus:outline-none focus:ring-2 focus:ring-mata-500/20 dark:focus:bg-neutral-900"
-            disabled={submitting()}
-          />
-          <p class="mt-1.5 text-[10.5px] text-fg-4">
-            Full Matrix ID — local part plus the homeserver, separated by a colon.
-          </p>
+          <label class="block text-[11.5px] font-medium text-fg-2">
+            Search a name or paste a Matrix ID
+          </label>
+          <div class="relative mt-1">
+            <input
+              ref={inputRef}
+              type="text"
+              value={term()}
+              onInput={(e) => setTerm(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && isFullMxid(term())) {
+                  e.preventDefault();
+                  void invite(term());
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  close();
+                }
+              }}
+              placeholder="alice  or  @alice:example.org"
+              autocomplete="off"
+              class="w-full rounded-md border border-line bg-elev px-2.5 py-1.5 pr-8 text-sm focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20"
+              disabled={!!submitting()}
+            />
+            <Show when={searching()}>
+              <span
+                class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-fg-3"
+                aria-hidden="true"
+              >
+                …
+              </span>
+            </Show>
+          </div>
+
+          {/* Recent chats quick-invite — only when nothing typed. */}
+          <Show when={term().trim().length === 0 && recentUsers().length > 0}>
+            <div class="mt-3">
+              <div class="mb-1 text-[10px] font-medium uppercase tracking-wider text-fg-3">
+                Recent chats
+              </div>
+              <div class="max-h-56 overflow-y-auto rounded-lg border border-line bg-base">
+                <ul class="divide-y" style={{ 'border-color': 'var(--color-line)' }}>
+                  <For each={recentUsers()}>
+                    {(hit) => (
+                      <li>
+                        <UserRow
+                          hit={hit}
+                          busy={submitting() === hit.userId}
+                          onSelect={() => void invite(hit.userId)}
+                          hintLabel="Invite"
+                        />
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </div>
+            </div>
+          </Show>
+
+          {/* Search results. */}
+          <Show when={term().trim().length >= 2}>
+            <div class="mt-3 max-h-56 overflow-y-auto rounded-lg border border-line bg-base">
+              <Show
+                when={results().length > 0}
+                fallback={
+                  <Show
+                    when={isFullMxid(term())}
+                    fallback={
+                      <div class="px-3 py-3 text-center text-xs text-fg-3">
+                        {searching() ? 'Searching…' : 'No matches.'}
+                      </div>
+                    }
+                  >
+                    <UserRow
+                      hit={{ userId: term().trim() as UserId } as UserSearchHit}
+                      busy={submitting() === term().trim()}
+                      onSelect={() => void invite(term())}
+                      hintLabel="Invite this ID"
+                    />
+                  </Show>
+                }
+              >
+                <ul class="divide-y" style={{ 'border-color': 'var(--color-line)' }}>
+                  <For each={results()}>
+                    {(hit) => (
+                      <li>
+                        <UserRow
+                          hit={hit}
+                          busy={submitting() === hit.userId}
+                          onSelect={() => void invite(hit.userId)}
+                          hintLabel="Invite"
+                        />
+                      </li>
+                    )}
+                  </For>
+                  <Show when={limited()}>
+                    <li class="px-3 py-2 text-center text-[11px] text-fg-3">
+                      More matches available — refine your search.
+                    </li>
+                  </Show>
+                </ul>
+              </Show>
+            </div>
+          </Show>
 
           <div class="mt-5 flex items-center justify-end gap-2">
             <button
               type="button"
               onClick={close}
-              disabled={submitting()}
+              disabled={!!submitting()}
               class="rounded-md px-3 py-1.5 text-sm text-fg-2 hover:bg-input disabled:opacity-50"
             >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => void submit()}
-              disabled={submitting() || userId().trim().length === 0}
-              class="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-ink transition-[filter] hover:brightness-95 disabled:opacity-50"
-            >
-              {submitting() ? 'Inviting…' : 'Invite'}
+              Close
             </button>
           </div>
         </div>
       </div>
+    </Show>
+  );
+}
+
+function UserRow(props: {
+  hit: UserSearchHit;
+  onSelect: () => void;
+  busy?: boolean;
+  hintLabel?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={props.onSelect}
+      disabled={props.busy}
+      class="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-input disabled:opacity-60"
+    >
+      <UserAvatar hit={props.hit} />
+      <div class="min-w-0 flex-1">
+        <div class="truncate text-sm font-medium">
+          {props.hit.displayName || prettyName(props.hit.userId)}
+        </div>
+        <div class="truncate text-[11px] text-fg-3">{props.hit.userId}</div>
+      </div>
+      <Show when={props.hintLabel}>
+        <span class="shrink-0 rounded-md border border-line px-1.5 py-0.5 text-[10px] text-fg-3">
+          {props.busy ? 'Inviting…' : props.hintLabel}
+        </span>
+      </Show>
+    </button>
+  );
+}
+
+function UserAvatar(props: { hit: UserSearchHit }) {
+  return (
+    <Show
+      when={props.hit.avatarUrl}
+      fallback={
+        <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-input text-[11px] font-semibold text-fg-2">
+          {initials(prettyName(props.hit.userId))}
+        </div>
+      }
+    >
+      {(url) => (
+        <img
+          src={url()}
+          alt=""
+          loading="lazy"
+          referrerpolicy="no-referrer"
+          class="h-8 w-8 shrink-0 rounded-full object-cover"
+        />
+      )}
     </Show>
   );
 }

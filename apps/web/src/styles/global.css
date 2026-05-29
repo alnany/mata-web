@@ -20,18 +20,24 @@
 
 @theme {
   /* ---- Surfaces -------------------------------------------------------- */
-  --color-app: #0a0a0b;
-  --color-rail: #0d0d0e;
-  --color-list: #111113;
-  --color-conv: #0e0e0f;
-  --color-side: #111113;
-  --color-elev: #18181b;
-  --color-input: #141416;
+  /* Lightened from the original near-black HANDOFF palette per user request
+     (2026-05-29: "dark mode is too dark, it's currently ALL black, lighten
+     it up"). Values raised ~1 step on the neutral ramp while preserving the
+     same elevation hierarchy (app < conv/rail < list/side < input < elev)
+     and the faint cool tint. This intentionally deviates from HANDOFF.md. */
+  --color-app: #141416;
+  --color-rail: #171719;
+  --color-list: #1c1c1f;
+  --color-conv: #171719;
+  --color-side: #1c1c1f;
+  --color-elev: #26262b;
+  --color-input: #1f1f23;
 
   /* ---- Lines (RGBA over surface; we expose explicit hex aliases since
-     Tailwind v4 `border-*` utilities ingest the same color tokens) ------- */
-  --color-line: rgba(255, 255, 255, 0.06);
-  --color-line-2: rgba(255, 255, 255, 0.10);
+     Tailwind v4 `border-*` utilities ingest the same color tokens).
+     Bumped slightly so separators stay visible on the lighter surfaces. -- */
+  --color-line: rgba(255, 255, 255, 0.08);
+  --color-line-2: rgba(255, 255, 255, 0.13);
 
   /* ---- Text ------------------------------------------------------------ */
   --color-fg: #ededee;

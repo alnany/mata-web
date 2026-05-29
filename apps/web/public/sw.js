@@ -32,10 +32,19 @@
  */
 
 const CACHE_VERSION = 'v1';
+// Per-deploy build stamp. Replaced at build time by the `mata-sw-build-stamp`
+// Vite plugin (closeBundle) with a unique id. THIS is what makes the SW's
+// bytes differ on every release — without a changing byte, sw.js is
+// identical across deploys, the browser detects no update, never enters the
+// "waiting" state, and the in-app "new version available" banner never
+// shows. (In dev the literal placeholder is harmless: the SW only registers
+// in PROD.) The id is also folded into the cache names so a new deploy gets
+// fresh caches and the activate step prunes the previous build's entries.
+const BUILD_ID = '__MATA_BUILD_ID__';
 const CACHE_PREFIX = 'mata-cache-';
-const ASSET_CACHE = `${CACHE_PREFIX}assets-${CACHE_VERSION}`;
-const SHELL_CACHE = `${CACHE_PREFIX}shell-${CACHE_VERSION}`;
-const BRAND_CACHE = `${CACHE_PREFIX}brand-${CACHE_VERSION}`;
+const ASSET_CACHE = `${CACHE_PREFIX}assets-${CACHE_VERSION}-${BUILD_ID}`;
+const SHELL_CACHE = `${CACHE_PREFIX}shell-${CACHE_VERSION}-${BUILD_ID}`;
+const BRAND_CACHE = `${CACHE_PREFIX}brand-${CACHE_VERSION}-${BUILD_ID}`;
 
 const SHELL_URL = '/';
 

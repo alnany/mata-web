@@ -39,7 +39,7 @@ export function NewRoomModal(props: {
   rooms: RoomSummary[] | null;
 }) {
   const bridge = useBridge();
-  const [mode, setMode] = createSignal<Mode>('dm');
+  const [mode, setMode] = createSignal<Mode>('room');
   const [name, setName] = createSignal('');
   const [encrypted, setEncrypted] = createSignal(true);
   const [submitting, setSubmitting] = createSignal(false);
@@ -198,7 +198,7 @@ export function NewRoomModal(props: {
   );
 
   const reset = () => {
-    setMode('dm');
+    setMode('room');
     setName('');
     setEncrypted(true);
     setSubmitting(false);
@@ -294,8 +294,8 @@ export function NewRoomModal(props: {
   };
 
   const tabs: { id: Mode; label: string }[] = [
-    { id: 'dm', label: 'Find a person' },
     { id: 'room', label: 'New room' },
+    { id: 'dm', label: 'Find a person' },
   ];
 
   return (
@@ -349,6 +349,7 @@ export function NewRoomModal(props: {
                 value={name()}
                 onInput={(e) => setName(e.currentTarget.value)}
                 placeholder="Project Alpha"
+                autofocus
                 class="w-full rounded-lg border border-line bg-elev px-3 py-2 text-sm focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20"
               />
             </Field>

@@ -564,7 +564,7 @@ export function HomePage() {
               mata
             </span>
             <span class="mono text-[10.5px] text-fg-4" style={{ position: 'relative', top: '-1px' }}>
-              /personal
+              /secure chat
             </span>
           </div>
           <span

@@ -35,6 +35,8 @@ export function MembersPanel(props: {
   room: RoomSummary;
   open: boolean;
   myUserId: UserId | null;
+  /** All joined rooms — used to surface recent chats in the invite modal. */
+  rooms?: RoomSummary[] | null;
   onClose: () => void;
 }) {
   const bridge = useBridge();
@@ -207,6 +209,8 @@ export function MembersPanel(props: {
         open={inviteOpen()}
         roomId={props.room.roomId}
         roomName={props.room.name || props.room.roomId}
+        rooms={props.rooms}
+        existingMemberIds={(members() ?? []).map((m) => m.userId as string)}
         onClose={() => setInviteOpen(false)}
         onInvited={() => setVersion(version() + 1)}
       />

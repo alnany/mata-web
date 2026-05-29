@@ -1696,6 +1696,7 @@ export function RoomView(props: {
         room={props.room}
         open={membersOpen()}
         myUserId={me()}
+        rooms={props.rooms}
         onClose={() => setMembersOpen(false)}
       />
       <SearchPanel
