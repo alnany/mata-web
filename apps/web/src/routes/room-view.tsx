@@ -1993,10 +1993,14 @@ export function RoomView(props: {
         }}
       />
       <ForwardModal
-        open={forwardSource() !== null}
-        source={forwardSource()}
+        open={forwardSource() !== null || (forwardSources()?.length ?? 0) > 0}
+        sources={forwardSources() ?? (forwardSource() ? [forwardSource()!] : [])}
         rooms={props.rooms}
-        onClose={() => setForwardSource(null)}
+        onClose={() => {
+          setForwardSource(null);
+          setForwardSources(null);
+        }}
+        onDone={exitSelect}
       />
       <Show when={openThread()}>
         {(rootId) => (

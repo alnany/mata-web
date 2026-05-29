@@ -27,9 +27,16 @@ import { initials } from './message-bubble.js';
 
 export function ForwardModal(props: {
   open: boolean;
-  source: RoomMessageEvent | null;
+  /**
+   * Messages to forward. One entry for a single-message forward (from the
+   * bubble menu), N entries for a multi-select batch. Forwarded oldest →
+   * newest so they land in original order on the target.
+   */
+  sources: RoomMessageEvent[];
   rooms: RoomSummary[];
   onClose: () => void;
+  /** Called after a successful forward (lets the caller exit select mode). */
+  onDone?: () => void;
 }) {
   const bridge = useBridge();
   const [query, setQuery] = createSignal('');
@@ -49,8 +56,7 @@ export function ForwardModal(props: {
   };
 
   const candidates = createMemo(() => {
-    const src = props.source;
-    const exclude = src?.roomId;
+    const exclude = props.sources[0]?.roomId;
     const q = query().trim().toLowerCase();
     return props.rooms
       .filter((r) => r.membership === 'join' && r.roomId !== exclude)
@@ -71,20 +77,30 @@ export function ForwardModal(props: {
   });
 
   const submit = async (targetRoomId: RoomId) => {
-    const src = props.source;
-    if (!src || submitting()) return;
+    const list = props.sources;
+    if (list.length === 0 || submitting()) return;
     setSubmitting(targetRoomId);
     try {
-      await bridge.request({
-        kind: 'forwardEvent',
-        sourceRoomId: src.roomId,
-        sourceEventId: src.eventId,
-        targetRoomId,
-      });
+      // Sequential so the target timeline preserves the original order.
+      for (const src of list) {
+        await bridge.request({
+          kind: 'forwardEvent',
+          sourceRoomId: src.roomId,
+          sourceEventId: src.eventId,
+          targetRoomId,
+        });
+      }
       const target = props.rooms.find((r) => r.roomId === targetRoomId);
-      showToast('success', `Forwarded to ${target?.name ?? 'room'}`);
+      const n = list.length;
+      showToast(
+        'success',
+        n > 1
+          ? `Forwarded ${n} messages to ${target?.name ?? 'room'}`
+          : `Forwarded to ${target?.name ?? 'room'}`,
+      );
       reset();
       props.onClose();
+      props.onDone?.();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       showToast('error', `Forward failed: ${msg}`);
@@ -94,11 +110,13 @@ export function ForwardModal(props: {
 
   // One-line preview of the source message body — text-class messages
   // show the text, media shows the msgtype label. Mirrors the room
-  // list's `previewOf` style but kept local to avoid coupling.
+  // list's `previewOf` style but kept local to avoid coupling. For a
+  // multi-message batch we show a count instead of any single body.
   const sourcePreview = (): string => {
-    const ev = props.source;
-    if (!ev) return '';
-    const c = ev.content;
+    const list = props.sources;
+    if (list.length === 0) return '';
+    if (list.length > 1) return `${list.length} messages selected`;
+    const c = list[0].content;
     if (c.msgtype === 'm.text' || c.msgtype === 'm.notice' || c.msgtype === 'm.emote') {
       return c.body.slice(0, 200);
     }
@@ -111,7 +129,7 @@ export function ForwardModal(props: {
   };
 
   return (
-    <Show when={props.open && props.source}>
+    <Show when={props.open && props.sources.length > 0}>
       <div
         class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
         onClick={close}
@@ -123,7 +141,11 @@ export function ForwardModal(props: {
         >
           <header class="border-b border-line px-5 pb-3 pt-4">
             <div class="flex items-center gap-2">
-              <h2 class="text-base font-semibold">Forward message</h2>
+              <h2 class="text-base font-semibold">
+                {props.sources.length > 1
+                  ? `Forward ${props.sources.length} messages`
+                  : 'Forward message'}
+              </h2>
               <button
                 type="button"
                 onClick={close}
