@@ -29,6 +29,7 @@ import type {
   RoomId,
 } from '@mata/shared/matrix';
 import { authError, cryptoError, networkError } from '@mata/shared/errors';
+import { getCachedMedia, putCachedMedia } from './media-cache.js';
 
 // ---------------------------------------------------------------------------
 // base64 helpers — encrypted-attachment spec uses *unpadded* base64.
@@ -272,6 +273,20 @@ export async function loadMedia(
 ): Promise<{ data: ArrayBuffer; mime: string }> {
   const { mxc, encryptedFile, mime } = args;
 
+  // ─── Cache fast path ──────────────────────────────────────────────────
+  // mxc URIs are content-addressed by the Matrix spec — same URI ⇒ same
+  // bytes forever. We can safely return cached plaintext without any
+  // re-validation. The cache holds *decrypted* bytes, so even encrypted
+  // attachments skip both the network fetch and the AES-CTR pass on a
+  // hit. Cache failures fall through to the normal network path.
+  const cached = await getCachedMedia(mxc);
+  if (cached) {
+    // Copy the buffer so the caller can't mutate the cached bytes via a
+    // shared view. Cheap relative to the network + decrypt we're saving.
+    const copy = cached.data.slice(0);
+    return { data: copy, mime: cached.mime ?? mime };
+  }
+
   // matrix-js-sdk 34 signature:
   //   mxcUrlToHttp(mxc, width?, height?, resizeMethod?, allowDirectLinks?,
   //                allowRedirects?, useAuthentication?): string | null
@@ -310,6 +325,10 @@ export async function loadMedia(
   const cipherOrPlain = await res.arrayBuffer();
 
   if (!encryptedFile) {
+    // Unencrypted path: persist plaintext to the cache so the next
+    // render skips the network entirely. Fire-and-forget — the
+    // caller doesn't care whether the write succeeds.
+    void putCachedMedia(mxc, cipherOrPlain, mime).catch(() => {});
     return { data: cipherOrPlain, mime };
   }
 
@@ -350,6 +369,11 @@ export async function loadMedia(
     aesKey,
     cipherOrPlain,
   );
+
+  // Encrypted path: stash plaintext so the next scroll-into-view skips
+  // both the network round-trip AND the AES-CTR pass. This is the path
+  // where caching actually saves CPU, not just bytes.
+  void putCachedMedia(mxc, plaintext, mime).catch(() => {});
 
   return { data: plaintext, mime };
 }
