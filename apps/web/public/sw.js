@@ -51,9 +51,19 @@ self.addEventListener('install', (event) => {
       } catch {
         /* shell prewarm failed — non-fatal */
       }
-      // Activate immediately so users feel the win on first load,
-      // not on second tab-close-and-reopen.
-      await self.skipWaiting();
+      // NOTE: We intentionally do NOT call skipWaiting() here.
+      //
+      // Auto-activating a new SW mid-session swaps the asset cache out
+      // from under a running SPA — if the live page lazy-loads a hashed
+      // chunk that the new deploy renamed, it 404s and the app white-
+      // screens. Instead we let the new worker sit in "waiting" and
+      // surface the in-app "New version available · Update" banner
+      // (driven by registration.waiting in main.tsx). The user clicks
+      // Update -> we postMessage SKIP_WAITING (handled below) -> reload.
+      //
+      // First-ever install (no controller) still activates normally via
+      // the browser's default flow, so brand-new visitors aren't
+      // gated behind a banner.
     })(),
   );
 });

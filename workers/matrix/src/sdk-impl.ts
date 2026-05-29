@@ -2217,7 +2217,13 @@ export class SdkSession {
       data: IRoomTimelineData,
     ) => {
       if (!room || toStartOfTimeline) return;
-      if (!data.liveEvent) return;
+      // NOTE: we intentionally do NOT check `data.liveEvent` here.
+      // During reconnects, gap-fills, and the Catchup phase, matrix-js-sdk
+      // fires RoomEvent.Timeline with `liveEvent = false` for events that
+      // arrived while the client was offline. Those are EXACTLY the "new
+      // messages you missed" that users expect to see without refreshing.
+      // `toStartOfTimeline = true` is the correct guard for backwards
+      // pagination (history loads) — that's the only case we want to skip.
 
       // Phase 14 — VoIP signaling tap. We catch m.call.* events
       // BEFORE they hit `toTimelineEvent` (which only knows about

@@ -18,6 +18,52 @@ import { readRoomList, writeRoomList } from '../lib/persistent-cache.js';
 import { listTime } from '../lib/date-buckets.js';
 import { initials, gradientForUser } from '../components/message-bubble.js';
 import { Mark } from '../components/logo.js';
+import { updateAvailable } from '../main.js';
+
+/**
+ * Floating "new version available" banner. Rendered fixed at the top so it
+ * overlays the grid without reflowing the two-column layout. Visible only
+ * when a new service worker is waiting to activate (updateAvailable signal,
+ * driven from main.tsx). Clicking "Update" tells the waiting SW to skip its
+ * wait and reloads the page onto the fresh bundle.
+ */
+function UpdateBanner() {
+  const refresh = () => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistration().then((reg) => {
+        reg?.waiting?.postMessage({ type: 'SKIP_WAITING' });
+        // Reload shortly after; the new SW takes control on next load.
+        setTimeout(() => window.location.reload(), 150);
+      });
+    } else {
+      window.location.reload();
+    }
+  };
+  return (
+    <Show when={updateAvailable()}>
+      <div
+        role="status"
+        class="fixed left-1/2 top-3 z-[100] flex -translate-x-1/2 items-center gap-3 rounded-[10px] px-3.5 py-2 text-[12.5px] shadow-lg"
+        style={{
+          background: 'var(--color-accent)',
+          color: 'var(--color-accent-ink)',
+        }}
+      >
+        <span class="font-medium">A new version of Mata is available.</span>
+        <button
+          type="button"
+          onClick={refresh}
+          class="rounded-[6px] px-2.5 py-1 text-[12px] font-semibold transition-opacity hover:opacity-80"
+          style={{
+            background: 'color-mix(in oklab, var(--color-accent-ink) 18%, transparent)',
+          }}
+        >
+          Update
+        </button>
+      </div>
+    </Show>
+  );
+}
 
 /**
  * Three-column shell: rail (64) · room list (296) · conversation (flex).
@@ -191,9 +237,29 @@ export function HomePage() {
     }
   };
 
+  // Debounced room-list refresh: we only need to re-order the list when
+  // a sync delta carries room metadata (name, unread, lastActivity). The
+  // previous approach called refetchRooms() on EVERY syncUpdate — even
+  // single-event live-message deltas — which flooded the worker with a
+  // `loadRoomList` RPC for every new message, creating unnecessary
+  // contention on busy rooms. 300ms is well within human-perceptible
+  // latency for the room-list order updating, and far below the rate at
+  // which individual messages arrive in normal chat.
+  let refetchTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleRefetch = () => {
+    if (refetchTimer !== null) return; // coalesce concurrent deltas
+    refetchTimer = setTimeout(() => {
+      refetchTimer = null;
+      void refetchRooms();
+    }, 300);
+  };
+  onCleanup(() => {
+    if (refetchTimer !== null) clearTimeout(refetchTimer);
+  });
+
   onCleanup(
     bridge.on('syncUpdate', (e) => {
-      refetchRooms();
+      scheduleRefetch();
       const me = (() => {
         const s = session();
         return s.phase === 'authenticated' ? s.userId : null;
@@ -337,6 +403,8 @@ export function HomePage() {
   };
 
   return (
+    <>
+    <UpdateBanner />
     <div class="grid h-full min-h-0 w-full grid-cols-[296px_1fr] bg-app">
       {/* -------- Room list column (296px) ----------------------------
           The decorative 64px workspace rail was removed in 21:53 push —
@@ -551,6 +619,7 @@ export function HomePage() {
         }}
       />
     </div>
+    </>
   );
 }
 
