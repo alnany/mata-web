@@ -104,6 +104,41 @@ export function HomePage() {
     }
   };
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+
+  // Reactive per-room draft registry for the room-list "Draft:" preview.
+  // localStorage itself isn't reactive and its native `storage` event
+  // only fires cross-tab, so the room-view composer dispatches a
+  // same-tab `mata:draft-change` CustomEvent on every write. We seed
+  // from a one-time localStorage scan, then keep it live from both the
+  // custom event (this tab) and the storage event (other tabs).
+  const DRAFT_PREFIX = 'mata.draft.';
+  const [drafts, setDrafts] = createSignal<Record<string, string>>({});
+  const seedDrafts = () => {
+    const next: Record<string, string> = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key || !key.startsWith(DRAFT_PREFIX)) continue;
+        const text = localStorage.getItem(key) ?? '';
+        if (text.trim()) next[key.slice(DRAFT_PREFIX.length)] = text;
+      }
+    } catch {
+      /* localStorage unavailable */
+    }
+    setDrafts(next);
+  };
+  const applyDraft = (roomId: string, text: string) => {
+    setDrafts((prev) => {
+      const trimmed = (text ?? '').trim();
+      if (!trimmed) {
+        if (!(roomId in prev)) return prev;
+        const { [roomId]: _drop, ...rest } = prev;
+        return rest;
+      }
+      if (prev[roomId] === text) return prev;
+      return { ...prev, [roomId]: text };
+    });
+  };
   // When the timeline's "Restore from backup" CTA opens settings, we
   // jump straight to the Encryption tab instead of the default Profile
   // tab — otherwise the user lands on the wrong panel and the click
@@ -422,6 +457,26 @@ export function HomePage() {
   onMount(() => window.addEventListener('keydown', onKey));
   onCleanup(() => window.removeEventListener('keydown', onKey));
 
+  // Draft-preview registry: seed once, then track same-tab composer
+  // writes and cross-tab storage changes.
+  onMount(() => {
+    seedDrafts();
+    const onDraftChange = (e: Event) => {
+      const detail = (e as CustomEvent<{ roomId: string; text: string }>).detail;
+      if (detail?.roomId) applyDraft(detail.roomId, detail.text);
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (!e.key || !e.key.startsWith(DRAFT_PREFIX)) return;
+      applyDraft(e.key.slice(DRAFT_PREFIX.length), e.newValue ?? '');
+    };
+    window.addEventListener('mata:draft-change', onDraftChange);
+    window.addEventListener('storage', onStorage);
+    onCleanup(() => {
+      window.removeEventListener('mata:draft-change', onDraftChange);
+      window.removeEventListener('storage', onStorage);
+    });
+  });
+
   // -------- Derived bits for the me-bar ---------------------------------
   const myId = () => {
     const s = session();
@@ -598,6 +653,7 @@ export function HomePage() {
                       onSelect={() => openRoom(room)}
                       onMarkRead={() => markRoomRead(room.roomId)}
                       callBusyHere={activeCall()?.roomId === room.roomId}
+                      draftText={drafts()[room.roomId]}
                       myId={myId()}
                     />
                   )}
@@ -620,6 +676,7 @@ export function HomePage() {
                       onSelect={() => openRoom(room)}
                       onMarkRead={() => markRoomRead(room.roomId)}
                       callBusyHere={activeCall()?.roomId === room.roomId}
+                      draftText={drafts()[room.roomId]}
                       myId={myId()}
                     />
                   )}
@@ -802,12 +859,16 @@ function RoomRow(props: {
   onSelect: () => void;
   onMarkRead: () => void;
   callBusyHere: boolean;
+  draftText?: string;
   myId: string;
 }) {
   const r = props.room;
   const isUnread = () => r.unreadCount > 0;
   const isHighlight = () => r.highlightCount > 0;
   const isMuted = () => r.isMuted;
+  // Collapse newlines so a multi-line draft stays a single tidy row.
+  const draftPreview = () => (props.draftText ?? '').replace(/\s+/g, ' ').trim();
+  const hasDraft = () => draftPreview().length > 0;
 
   return (
     <li class="group relative">
@@ -868,27 +929,36 @@ function RoomRow(props: {
           </Show>
         </span>
 
-        {/* Name */}
-        <span
-          class="min-w-0 truncate text-[13.5px]"
-          style={{
-            color: isMuted()
-              ? 'var(--color-fg-4)'
-              : props.active || isUnread()
-                ? 'var(--color-fg)'
-                : 'var(--color-fg-2)',
-            'font-weight': isUnread() && !isMuted() ? 500 : 400,
-          }}
-        >
-          {r.name}
-          <Show when={isMuted()}>
-            <span class="ml-1 text-fg-4" title="Muted">
-              🔕
-            </span>
-          </Show>
-          <Show when={props.callBusyHere}>
-            <span class="ml-1.5 inline-flex items-center text-[10px] text-accent" title="Call in progress">
-              ●
+        {/* Name (+ draft preview line) */}
+        <span class="flex min-w-0 flex-col">
+          <span
+            class="min-w-0 truncate text-[13.5px]"
+            style={{
+              color: isMuted()
+                ? 'var(--color-fg-4)'
+                : props.active || isUnread()
+                  ? 'var(--color-fg)'
+                  : 'var(--color-fg-2)',
+              'font-weight': isUnread() && !isMuted() ? 500 : 400,
+            }}
+          >
+            {r.name}
+            <Show when={isMuted()}>
+              <span class="ml-1 text-fg-4" title="Muted">
+                🔕
+              </span>
+            </Show>
+            <Show when={props.callBusyHere}>
+              <span class="ml-1.5 inline-flex items-center text-[10px] text-accent" title="Call in progress">
+                ●
+              </span>
+            </Show>
+          </span>
+          {/* Unsent draft — Telegram-style red "Draft:" prefix. */}
+          <Show when={hasDraft()}>
+            <span class="min-w-0 truncate text-[11px] leading-[15px]">
+              <span style={{ color: 'var(--color-danger)' }}>Draft: </span>
+              <span class="text-fg-3">{draftPreview()}</span>
             </span>
           </Show>
         </span>

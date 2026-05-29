@@ -189,6 +189,18 @@ export function RoomView(props: {
     } catch {
       /* localStorage may be disabled */
     }
+    // Notify the room list (same tab) so it can show / clear a draft
+    // preview. The native `storage` event only fires in OTHER tabs, so
+    // a custom event is required for the in-tab room-list update.
+    try {
+      window.dispatchEvent(
+        new CustomEvent('mata:draft-change', {
+          detail: { roomId: props.room.roomId, text: v },
+        }),
+      );
+    } catch {
+      /* CustomEvent unsupported — list just won't live-update */
+    }
   };
   const [replyingTo, setReplyingTo] = createSignal<RoomMessageEvent | null>(null);
   const [editing, setEditing] = createSignal<RoomMessageEvent | null>(null);
