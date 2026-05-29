@@ -37,21 +37,73 @@ const inflight = new Map<string, Promise<UrlPreview | null>>();
  *
  * Excludes inline-mention pseudo-URLs (matrix.to user/event refs) so
  * a reply with `@alice` doesn't render a "matrix.to" card.
+ *
+ * Two passes:
+ *   1. Explicit `http(s)://...` scheme (high confidence).
+ *   2. Bare hostnames like `immata.app` or `vercel.com/docs` when
+ *      the TLD looks plausible (allowlist below). We assume `https://`
+ *      because every site that ships a unfurl-able OG card is on
+ *      TLS anyway, and the preview endpoint will gracefully fail
+ *      on the rare non-TLS host without hurting the user.
  */
 export function extractFirstUrl(text: string): string | null {
   if (!text) return null;
-  // Greedy is fine — we cut at whitespace / common terminators.
-  const re = /https?:\/\/[^\s<>"'`]+/gi;
+  // Pass 1 — explicit scheme.
+  const reHttp = /https?:\/\/[^\s<>"'`]+/gi;
   let m: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: regex iteration idiom
-  while ((m = re.exec(text)) !== null) {
+  while ((m = reHttp.exec(text)) !== null) {
     const url = stripTrailingPunct(m[0]);
     if (!url) continue;
     if (url.includes('matrix.to/#/')) continue;
     return url;
   }
+  // Pass 2 — bare hostname. Require a leading word boundary so we
+  // don't slice the back half of an unmatched scheme, and a known
+  // TLD so we don't preview `e.g.` or `lib.ts`.
+  const reBare =
+    /(^|[\s(<[{"'`])([a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+)(\/[^\s<>"'`]*)?/gi;
+  // biome-ignore lint/suspicious/noAssignInExpressions: regex iteration idiom
+  while ((m = reBare.exec(text)) !== null) {
+    const host = m[2];
+    const path = m[3] ?? '';
+    const tld = host.slice(host.lastIndexOf('.') + 1).toLowerCase();
+    if (!KNOWN_TLDS.has(tld)) continue;
+    // Skip emails: a `@` immediately before the start of the host
+    // means we matched the right side of `user@example.com`.
+    const startIdx = m.index + (m[1]?.length ?? 0);
+    if (startIdx > 0 && text[startIdx - 1] === '@') continue;
+    const url = `https://${stripTrailingPunct(host + path)}`;
+    return url;
+  }
   return null;
 }
+
+/**
+ * TLD allowlist — covers the long tail of bare-domain references
+ * people actually type in chat (product names, marketing sites,
+ * personal pages). Conservative on purpose: a missing TLD just
+ * means no preview, which is the safe failure mode. Extend as the
+ * product encounters new ones (better than regexing every label).
+ */
+const KNOWN_TLDS = new Set<string>([
+  // generic
+  'com', 'net', 'org', 'info', 'biz', 'name', 'pro', 'mobi',
+  // tech / startup
+  'io', 'ai', 'app', 'dev', 'sh', 'co', 'xyz', 'tech', 'cloud',
+  'run', 'page', 'site', 'store', 'link', 'chat', 'social', 'studio',
+  'design', 'agency', 'tools', 'wtf', 'lol', 'fyi', 'gg', 'ly',
+  // media / personal
+  'me', 'tv', 'fm', 'am', 'im', 'is', 'to', 'cc', 'so', 'mx',
+  'news', 'blog', 'today', 'world', 'online', 'live', 'video',
+  'photo', 'art',
+  // ccTLDs
+  'us', 'uk', 'de', 'fr', 'jp', 'ca', 'au', 'eu', 'in', 'br',
+  'cn', 'ru', 'nl', 'es', 'it', 'ch', 'se', 'no', 'fi', 'dk',
+  'pl', 'kr', 'tw', 'hk', 'sg', 'nz', 'za', 'tr', 'ar', 'cl',
+  'be', 'at', 'cz', 'ie', 'pt', 'gr', 'il', 'th', 'vn', 'id',
+  'ph', 'my', 'ua', 'ro', 'hu',
+]);
 
 function stripTrailingPunct(s: string): string {
   // ")" / "," / "." / "?" / "!" frequently end sentences, not URLs.
