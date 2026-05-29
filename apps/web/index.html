@@ -27,8 +27,9 @@
     <meta name="twitter:description" content="The eye of the day. Encrypted, end to end." />
     <meta name="twitter:image" content="https://immata.app/og-cover.jpg" />
 
-    <!-- Theme bootstrap: applies persisted choice before the JS bundle
-         loads so we never paint the wrong palette and then flip. -->
+    <!-- Theme + text-size bootstrap: applies persisted choices before
+         the JS bundle loads so we never paint the wrong palette /
+         size and then flip. -->
     <script>
       (function () {
         try {
@@ -42,6 +43,13 @@
         } catch (e) {
           /* SSR / private mode fallback: assume dark (design default). */
           document.documentElement.classList.add('dark');
+        }
+        try {
+          var ts = localStorage.getItem('mata.textSize');
+          if (ts !== 'sm' && ts !== 'md' && ts !== 'lg') ts = 'md';
+          document.documentElement.classList.add('text-size-' + ts);
+        } catch (e) {
+          document.documentElement.classList.add('text-size-md');
         }
       })();
     </script>
