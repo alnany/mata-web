@@ -16,8 +16,8 @@
 // up with the actual RoomSummary delta a moment later.
 // ============================================================================
 
-import { createEffect, createSignal, For, on, Show } from 'solid-js';
-import type { RoomId, UserId } from '@mata/shared/matrix';
+import { createEffect, createMemo, createSignal, For, on, Show } from 'solid-js';
+import type { RoomId, RoomSummary, UserId } from '@mata/shared/matrix';
 import type { UserSearchHit } from '@mata/shared/rpc';
 import { useBridge } from '../bridge/context.js';
 import { showToast } from '../stores/toast.js';
@@ -29,12 +29,18 @@ export function NewRoomModal(props: {
   open: boolean;
   onClose: () => void;
   onCreated: (roomId: RoomId) => void;
+  /**
+   * Room list, used to derive "frequent chats" (the user's DMs
+   * sorted by lastActivityTs) for one-click adding into a new
+   * group room. Pass null/undefined when no rooms loaded yet — the
+   * quick-add row hides instead of flashing empty.
+   */
+  rooms: RoomSummary[] | null;
 }) {
   const bridge = useBridge();
   const [mode, setMode] = createSignal<Mode>('dm');
   const [name, setName] = createSignal('');
   const [topic, setTopic] = createSignal('');
-  const [invites, setInvites] = createSignal('');
   const [encrypted, setEncrypted] = createSignal(true);
   const [submitting, setSubmitting] = createSignal(false);
 
@@ -93,11 +99,105 @@ export function NewRoomModal(props: {
     }),
   );
 
+  // ---- Room-mode multi-select invitees ----
+  // Replaces the legacy comma-separated `invites` input. Power users
+  // can still type a raw MXID and Enter to add it (kept as the
+  // text input's submit behaviour below); most users go through the
+  // quick-add row (recent DM partners) + the same live search the
+  // DM tab uses.
+  const [roomInvitees, setRoomInvitees] = createSignal<UserSearchHit[]>([]);
+  const [roomTerm, setRoomTerm] = createSignal('');
+  const [roomResults, setRoomResults] = createSignal<UserSearchHit[]>([]);
+  const [roomLimited, setRoomLimited] = createSignal(false);
+  const [roomSearching, setRoomSearching] = createSignal(false);
+  let roomSearchSeq = 0;
+
+  const addInvitee = (hit: UserSearchHit) => {
+    setRoomInvitees((cur) => {
+      if (cur.some((h) => h.userId === hit.userId)) return cur;
+      return [...cur, hit];
+    });
+    setRoomTerm('');
+    setRoomResults([]);
+  };
+  const removeInvitee = (userId: UserId) => {
+    setRoomInvitees((cur) => cur.filter((h) => h.userId !== userId));
+  };
+
+  // Frequent chats: the user's existing DM rooms, sorted by recent
+  // activity, mapped down to UserSearchHit shape so the existing
+  // UserRow / chip components handle rendering. Excludes anyone
+  // already in `roomInvitees` (so the chip "disappears" after pick,
+  // making the empty slot feel intentional rather than stale).
+  const frequentUsers = createMemo<UserSearchHit[]>(() => {
+    const all = props.rooms ?? [];
+    const dms = all
+      .filter(
+        (r) =>
+          r.type === 'dm' &&
+          r.membership === 'join' &&
+          r.dmTargetUserId !== null,
+      )
+      .sort((a, b) => b.lastActivityTs - a.lastActivityTs);
+    const seen = new Set<string>();
+    const picked = new Set(roomInvitees().map((h) => h.userId));
+    const out: UserSearchHit[] = [];
+    for (const r of dms) {
+      const uid = r.dmTargetUserId as UserId;
+      if (seen.has(uid) || picked.has(uid)) continue;
+      seen.add(uid);
+      out.push({
+        userId: uid,
+        // Use the room name as the display name for DMs — matrix-js-sdk
+        // already resolves it to the counterparty's display name for
+        // 2-person rooms, which is exactly what we want here.
+        displayName: r.name && r.name !== uid ? r.name : null,
+        avatarUrl: r.avatarUrl,
+      } as UserSearchHit);
+      if (out.length >= 8) break; // keep the chip strip a single row
+    }
+    return out;
+  });
+
+  // Live search for the room invitee picker. Mirrors the DM tab's
+  // logic — same 200ms debounce, same stale-seq guard — but writes
+  // into the room-mode signals so the two tabs don't fight each
+  // other. The results list filters out anyone already added.
+  createEffect(
+    on([roomTerm, mode], ([term, m]) => {
+      if (m !== 'room') return;
+      const trimmed = term.trim();
+      if (trimmed.length < 2) {
+        setRoomResults([]);
+        setRoomLimited(false);
+        setRoomSearching(false);
+        return;
+      }
+      const mySeq = ++roomSearchSeq;
+      setRoomSearching(true);
+      const handle = setTimeout(async () => {
+        try {
+          const res = await bridge.request({ kind: 'searchUsers', term: trimmed, limit: 8 });
+          if (mySeq !== roomSearchSeq) return;
+          const picked = new Set(roomInvitees().map((h) => h.userId));
+          setRoomResults(res.results.filter((h) => !picked.has(h.userId)));
+          setRoomLimited(res.limited);
+        } catch {
+          if (mySeq !== roomSearchSeq) return;
+          setRoomResults([]);
+          setRoomLimited(false);
+        } finally {
+          if (mySeq === roomSearchSeq) setRoomSearching(false);
+        }
+      }, 200);
+      return () => clearTimeout(handle);
+    }),
+  );
+
   const reset = () => {
     setMode('dm');
     setName('');
     setTopic('');
-    setInvites('');
     setEncrypted(true);
     setSubmitting(false);
     setDmTerm('');
@@ -106,20 +206,18 @@ export function NewRoomModal(props: {
     setDmLimited(false);
     setDmSearching(false);
     dmSearchSeq++;
+    setRoomInvitees([]);
+    setRoomTerm('');
+    setRoomResults([]);
+    setRoomLimited(false);
+    setRoomSearching(false);
+    roomSearchSeq++;
   };
 
   const close = () => {
     if (submitting()) return;
     reset();
     props.onClose();
-  };
-
-  const parseInvites = (raw: string): UserId[] => {
-    return raw
-      .split(/[,\s]+/)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0)
-      .map((s) => s as UserId);
   };
 
   const validInvitee = (id: string): boolean => /^@[^:]+:.+/.test(id);
@@ -143,12 +241,30 @@ export function NewRoomModal(props: {
         inviteList = [typed as UserId];
       }
     } else {
-      inviteList = parseInvites(invites());
-      const bad = inviteList.filter((u) => !validInvitee(u));
+      // Selected chips are the source of truth. Anything sitting in
+      // the search field as a raw MXID-looking string (user typed it
+      // but didn't press Enter) gets folded in too — friendlier
+      // than silently dropping it, while still rejecting partial
+      // names that don't resolve.
+      const chipIds = roomInvitees().map((h) => h.userId);
+      const trailing = roomTerm().trim();
+      if (trailing.length > 0) {
+        if (isFullMxid(trailing) && !chipIds.includes(trailing as UserId)) {
+          chipIds.push(trailing as UserId);
+        } else if (trailing.length >= 2) {
+          showToast(
+            'error',
+            'Pick a name from the list, or finish typing a full Matrix ID.',
+          );
+          return;
+        }
+      }
+      const bad = chipIds.filter((u) => !validInvitee(u));
       if (bad.length > 0) {
         showToast('error', `Bad Matrix IDs: ${bad.join(', ')}`);
         return;
       }
+      inviteList = chipIds;
       if (!name().trim()) {
         showToast('error', 'Room name is required.');
         return;
@@ -249,17 +365,146 @@ export function NewRoomModal(props: {
             when={mode() === 'dm'}
             fallback={
               <Field
-                label="Invite (optional)"
-                help="Comma-separated Matrix IDs to invite. You can also invite people later."
+                label="Add people"
+                help="Tap a recent chat below, or search by name. You can also paste a full Matrix ID."
               >
-                <input
-                  type="text"
-                  value={invites()}
-                  onInput={(e) => setInvites(e.currentTarget.value)}
-                  placeholder="@alice:chat.greatass.me"
-                  autocomplete="off"
-                  class="w-full rounded-lg border border-line bg-elev px-3 py-2 text-sm focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20"
-                />
+                {/* Picked invitees as removable chips. Renders an
+                    empty placeholder row inline with the input so
+                    the layout doesn't jump as chips appear. */}
+                <Show when={roomInvitees().length > 0}>
+                  <div class="mb-2 flex flex-wrap gap-1.5">
+                    <For each={roomInvitees()}>
+                      {(hit) => (
+                        <span class="inline-flex items-center gap-1.5 rounded-full border border-mata-500/30 bg-mata-500/10 py-0.5 pl-0.5 pr-2 text-xs">
+                          <UserAvatar hit={hit} size="xs" />
+                          <span class="max-w-[140px] truncate">
+                            {hit.displayName || prettyName(hit.userId)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removeInvitee(hit.userId)}
+                            class="rounded-full p-0.5 text-fg-3 hover:bg-input hover:text-fg"
+                            aria-label={`Remove ${hit.displayName || hit.userId}`}
+                            title="Remove"
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+
+                <div class="relative">
+                  <input
+                    type="text"
+                    value={roomTerm()}
+                    onInput={(e) => setRoomTerm(e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      // Enter on a typed full MXID adds it as a chip
+                      // without picking from results — keeps the
+                      // power-user paste-and-go flow working.
+                      if (e.key === 'Enter' && isFullMxid(roomTerm())) {
+                        e.preventDefault();
+                        addInvitee({
+                          userId: roomTerm().trim() as UserId,
+                        } as UserSearchHit);
+                      } else if (
+                        e.key === 'Backspace' &&
+                        roomTerm() === '' &&
+                        roomInvitees().length > 0
+                      ) {
+                        // Backspace on empty input pops the last
+                        // chip — standard chip-input idiom.
+                        const last = roomInvitees()[roomInvitees().length - 1];
+                        removeInvitee(last.userId);
+                      }
+                    }}
+                    placeholder="Search a name or paste a Matrix ID"
+                    autocomplete="off"
+                    class="w-full rounded-lg border border-line bg-elev px-3 py-2 pr-8 text-sm focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20"
+                  />
+                  <Show when={roomSearching()}>
+                    <span
+                      class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-fg-3"
+                      aria-hidden="true"
+                    >
+                      …
+                    </span>
+                  </Show>
+                </div>
+
+                {/* Quick-add: frequent DM partners. Only visible
+                    when nothing typed AND there are unpicked DMs
+                    to surface. */}
+                <Show
+                  when={roomTerm().trim().length === 0 && frequentUsers().length > 0}
+                >
+                  <div class="mt-2">
+                    <div class="mb-1 text-[10px] font-medium uppercase tracking-wider text-fg-3">
+                      Recent chats
+                    </div>
+                    <div class="flex flex-wrap gap-1.5">
+                      <For each={frequentUsers()}>
+                        {(hit) => (
+                          <button
+                            type="button"
+                            onClick={() => addInvitee(hit)}
+                            class="inline-flex items-center gap-1.5 rounded-full border border-line bg-elev py-0.5 pl-0.5 pr-2 text-xs transition-colors hover:border-mata-500/40 hover:bg-mata-500/5"
+                            title={hit.userId}
+                          >
+                            <UserAvatar hit={hit} size="xs" />
+                            <span class="max-w-[140px] truncate">
+                              {hit.displayName || prettyName(hit.userId)}
+                            </span>
+                          </button>
+                        )}
+                      </For>
+                    </div>
+                  </div>
+                </Show>
+
+                {/* Search-results dropdown. Only when actively
+                    searching so the recent-chats row isn't pushed
+                    around. */}
+                <Show when={roomTerm().trim().length >= 2}>
+                  <div class="mt-2 max-h-56 overflow-y-auto rounded-lg border border-line bg-base">
+                    <Show
+                      when={roomResults().length > 0}
+                      fallback={
+                        <Show
+                          when={isFullMxid(roomTerm())}
+                          fallback={
+                            <div class="px-3 py-3 text-center text-xs text-fg-3">
+                              {roomSearching() ? 'Searching…' : 'No matches.'}
+                            </div>
+                          }
+                        >
+                          <UserRow
+                            hit={{ userId: roomTerm().trim() as UserId } as UserSearchHit}
+                            onSelect={addInvitee}
+                            hintLabel="Add"
+                          />
+                        </Show>
+                      }
+                    >
+                      <ul class="divide-y" style={{ 'border-color': 'var(--color-line)' }}>
+                        <For each={roomResults()}>
+                          {(hit) => (
+                            <li>
+                              <UserRow hit={hit} onSelect={addInvitee} hintLabel="Add" />
+                            </li>
+                          )}
+                        </For>
+                        <Show when={roomLimited()}>
+                          <li class="px-3 py-2 text-center text-[11px] text-fg-3">
+                            More matches available — refine your search.
+                          </li>
+                        </Show>
+                      </ul>
+                    </Show>
+                  </div>
+                </Show>
               </Field>
             }
           >
@@ -459,12 +704,23 @@ function UserRow(props: {
   );
 }
 
-function UserAvatar(props: { hit: UserSearchHit }) {
+function UserAvatar(props: { hit: UserSearchHit; size?: 'sm' | 'xs' }) {
+  // `xs` matches the chip strip; `sm` (default) matches the result
+  // row density. Sizing decisions are kept in one place so chip
+  // and row stay visually balanced.
+  const sizeClass = () =>
+    props.size === 'xs'
+      ? 'h-5 w-5 text-[9px]'
+      : 'h-8 w-8 text-[11px]';
+  const imgSizeClass = () =>
+    props.size === 'xs' ? 'h-5 w-5' : 'h-8 w-8';
   return (
     <Show
       when={props.hit.avatarUrl}
       fallback={
-        <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-input text-[11px] font-semibold text-fg-2">
+        <div
+          class={`flex shrink-0 items-center justify-center rounded-full bg-input font-semibold text-fg-2 ${sizeClass()}`}
+        >
           {initials(prettyName(props.hit.userId))}
         </div>
       }
@@ -475,7 +731,7 @@ function UserAvatar(props: { hit: UserSearchHit }) {
           alt=""
           loading="lazy"
           referrerpolicy="no-referrer"
-          class="h-8 w-8 shrink-0 rounded-full object-cover"
+          class={`shrink-0 rounded-full object-cover ${imgSizeClass()}`}
         />
       )}
     </Show>
