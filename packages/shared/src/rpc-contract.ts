@@ -336,6 +336,12 @@ export type MainToWorkerResponse =
       events: TimelineEvent[];
       /** Token to fetch the next older page. `null` means we've reached the start. */
       prevToken: string | null;
+      /**
+       * The user's own read-receipt up-to event id at load time, used
+       * to anchor the "New messages" unread divider. `null` on paging
+       * requests (fromToken !== null) and when no receipt exists.
+       */
+      readUpToEventId: string | null;
     }
   | { kind: 'sendMessage'; queued: true }
   | { kind: 'editMessage'; queued: true }
