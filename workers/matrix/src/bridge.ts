@@ -118,6 +118,10 @@ const handlers: Handlers = {
     await core.sendReadReceipt(req.roomId, req.eventId);
     return { kind: 'sendReadReceipt' };
   },
+  markRoomRead: async (req, core) => {
+    await core.markRoomRead(req.roomId);
+    return { kind: 'markRoomRead' };
+  },
   sendFileMessage: async (req, core) => {
     const { eventId } = await core.sendFileMessage({
       roomId: req.roomId,

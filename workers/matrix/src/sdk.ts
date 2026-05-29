@@ -163,6 +163,10 @@ export class MatrixCore {
     return this.requireSession().sendReadReceipt(roomId, eventId);
   }
 
+  async markRoomRead(roomId: RoomId): Promise<void> {
+    return this.requireSession().markRoomRead(roomId);
+  }
+
   async uploadMedia(data: ArrayBuffer, mime: string, filename: string): Promise<MxcUri> {
     return this.requireSession().uploadMedia(data, mime, filename);
   }

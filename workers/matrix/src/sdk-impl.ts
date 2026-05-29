@@ -770,6 +770,56 @@ export class SdkSession {
     await c.sendReadReceipt(ev);
   }
 
+  /**
+   * Mark an entire room read from the room list — i.e. without ever
+   * opening it. The UI has no event id to anchor on (the timeline was
+   * never loaded into a RoomView), so we resolve the room's newest
+   * *live* timeline event here and send a read receipt against it.
+   *
+   * We walk the live timeline tail backwards to skip local-echo / state
+   * events that have no server event id yet (a read receipt against an
+   * un-acked local echo is rejected by the server). The first event with
+   * a real id wins.
+   *
+   * After the receipt is acked we proactively emit a room delta with
+   * unreadCount/highlightCount zeroed so the list badge clears instantly,
+   * rather than waiting for the next /sync round-trip to reflect it.
+   */
+  async markRoomRead(roomId: RoomId): Promise<void> {
+    const c = this.requireClient();
+    const room = c.getRoom(roomId);
+    if (!room) return;
+    const live = room.getLiveTimeline().getEvents();
+    let target: ReturnType<typeof room.findEventById> | undefined;
+    for (let i = live.length - 1; i >= 0; i--) {
+      const e = live[i];
+      const id = e?.getId();
+      // Skip local echoes (txn ids start with '~') and anything without
+      // a real server-assigned event id.
+      if (id && !id.startsWith('~') && !id.startsWith('$local')) {
+        target = e;
+        break;
+      }
+    }
+    if (!target) return;
+    try {
+      await c.sendReadReceipt(target);
+    } catch {
+      // best-effort; even if the receipt POST fails we still clear the
+      // local badge below so the user gets the affordance they asked for.
+    }
+    // Optimistically clear the badge in the UI. The room-summary mapper
+    // reads notification counts off the Room object; zero them so the
+    // next emitRoomDelta reflects "read", then emit immediately.
+    try {
+      room.setUnreadNotificationCount('total' as never, 0);
+      room.setUnreadNotificationCount('highlight' as never, 0);
+    } catch {
+      /* SDK internal — non-fatal if the enum shape shifts */
+    }
+    this.emitRoomDelta(room);
+  }
+
   async uploadMedia(data: ArrayBuffer, mime: string, filename: string): Promise<MxcUri> {
     const c = this.requireClient();
     const blob = new Blob([data], { type: mime });

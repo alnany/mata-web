@@ -316,6 +316,15 @@ export function HomePage() {
     }
   };
 
+  // Mark a room read straight from the list — no need to open it.
+  // The worker resolves the room's newest live event, posts the read
+  // receipt, and emits a zeroed-count delta so the badge clears at once.
+  const markRoomRead = (roomId: RoomId) => {
+    void bridge.request({ kind: 'markRoomRead', roomId }).catch(() => {
+      /* best-effort — the badge will reconcile on the next sync */
+    });
+  };
+
   // Auto-select the top room on first paint. Two scenarios:
   //   (a) persisted activeId points at a room that's still in the list →
   //       just make sure it has a cache entry (already handled below
@@ -513,6 +522,7 @@ export function HomePage() {
                       room={room}
                       active={activeId() === room.roomId}
                       onSelect={() => openRoom(room)}
+                      onMarkRead={() => markRoomRead(room.roomId)}
                       callBusyHere={activeCall()?.roomId === room.roomId}
                       myId={myId()}
                     />
@@ -534,6 +544,7 @@ export function HomePage() {
                       room={room}
                       active={activeId() === room.roomId}
                       onSelect={() => openRoom(room)}
+                      onMarkRead={() => markRoomRead(room.roomId)}
                       callBusyHere={activeCall()?.roomId === room.roomId}
                       myId={myId()}
                     />
@@ -702,6 +713,7 @@ function RoomRow(props: {
   room: RoomSummary;
   active: boolean;
   onSelect: () => void;
+  onMarkRead: () => void;
   callBusyHere: boolean;
   myId: string;
 }) {
@@ -711,13 +723,35 @@ function RoomRow(props: {
   const isMuted = () => r.isMuted;
 
   return (
-    <li class="relative">
+    <li class="group relative">
       {/* Active rail */}
       <Show when={props.active}>
         <span
           class="pointer-events-none absolute left-0 top-2 bottom-2 w-[2px] rounded-r-[2px]"
           style={{ background: 'var(--color-accent)' }}
         />
+      </Show>
+      {/* Mark-as-read affordance — revealed on row hover, only for rooms
+          that actually have unread messages. Sits above the meta column
+          (absolute, outside the row button so we don't nest buttons).
+          Clicking clears the room without opening it. */}
+      <Show when={isUnread() && !isMuted()}>
+        <button
+          type="button"
+          title="Mark as read"
+          aria-label="Mark as read"
+          onClick={(e) => {
+            // Don't let the click bubble to the row's onSelect.
+            e.stopPropagation();
+            props.onMarkRead();
+          }}
+          class="absolute right-[8px] top-1/2 z-10 hidden h-[22px] w-[22px] -translate-y-1/2 items-center justify-center rounded-[6px] text-fg-3 opacity-0 transition-opacity hover:bg-elev hover:text-fg group-hover:flex group-hover:opacity-100"
+          style={{ background: 'var(--color-list)' }}
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M13.5 4.5L6 12L2.5 8.5" />
+          </svg>
+        </button>
       </Show>
       <button
         type="button"

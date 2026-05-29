@@ -136,6 +136,7 @@ export type MainToWorkerRequest =
   | { kind: 'sendReaction'; roomId: RoomId; eventId: EventId; key: string }
   | { kind: 'sendTyping'; roomId: RoomId; timeoutMs: number }
   | { kind: 'sendReadReceipt'; roomId: RoomId; eventId: EventId }
+  | { kind: 'markRoomRead'; roomId: RoomId }
   | { kind: 'uploadMedia'; data: ArrayBuffer; mime: string; filename: string }
   | {
       /**
@@ -349,6 +350,7 @@ export type MainToWorkerResponse =
   | { kind: 'sendReaction' }
   | { kind: 'sendTyping' }
   | { kind: 'sendReadReceipt' }
+  | { kind: 'markRoomRead' }
   | { kind: 'uploadMedia'; mxc: MxcUri }
   | { kind: 'sendFileMessage'; eventId: EventId }
   | { kind: 'loadMedia'; data: ArrayBuffer; mime: string }
