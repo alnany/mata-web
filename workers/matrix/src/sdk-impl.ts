@@ -27,6 +27,7 @@ import {
   MsgType,
   RelationType,
   PendingEventOrdering,
+  IndexedDBStore,
   type MatrixClient,
   type Room,
   type MatrixEvent,
@@ -1684,12 +1685,49 @@ export class SdkSession {
       reason: 'creating client',
     });
 
+    // Persistent sync store. Without this, matrix-js-sdk defaults to an
+    // in-memory MemoryStore: every page refresh throws away the sync
+    // token and forces a full initial /sync (the ~10s cold-boot the user
+    // reported). IndexedDBStore persists rooms + the sync token to disk,
+    // so on refresh the SDK loads cached rooms and reaches `Prepared`
+    // near-instantly, then resumes /sync incrementally from the saved
+    // token. dbName is scoped per-user so accounts never share state.
+    // startup() is awaited so the cached state is loaded before the SDK
+    // begins syncing; a failure here is non-fatal — we fall back to the
+    // default in-memory behavior rather than blocking boot.
+    let syncStore: IndexedDBStore | undefined;
+    try {
+      const safeUserId = record.userId.replace(/[^a-zA-Z0-9._-]/g, '_');
+      syncStore = new IndexedDBStore({
+        indexedDB: globalThis.indexedDB,
+        dbName: `mata-sync:${safeUserId}`,
+        localStorage: undefined,
+      });
+      const storeStart = Date.now();
+      await syncStore.startup();
+      this.emit({
+        kind: 'syncStatus',
+        status: 'connecting',
+        reason: `sync cache loaded (${Date.now() - storeStart}ms)`,
+      });
+    } catch (storeErr) {
+      syncStore = undefined;
+      this.emit({
+        kind: 'syncStatus',
+        status: 'connecting',
+        reason: `sync cache unavailable, using memory store: ${describe(storeErr)}`,
+      });
+    }
+
     const client = createClient({
       baseUrl: record.homeserverBaseUrl,
       accessToken: record.accessToken,
       userId: record.userId,
       deviceId: record.deviceId,
       timelineSupport: true,
+      // Persist rooms + sync token across refreshes (see above). Undefined
+      // falls back to the SDK's default MemoryStore.
+      store: syncStore,
       // `Detached` keeps locally-echoed sends OUT of the live timeline
       // until the server's /sync confirms them. With the default
       // `Chronological`, matrix-js-sdk inserts the local echo into the
