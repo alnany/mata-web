@@ -89,6 +89,221 @@ function describe(err: unknown): string {
   return String(err);
 }
 
+// ─── Link preview helpers ────────────────────────────────────────────────
+//
+// Two paths converge on the same UrlPreview shape: (1) homeserver
+// `preview_url` payload, (2) client-side OG scrape of the page HTML.
+// Both live here so getUrlPreview can chain them without dragging
+// 100 lines of string-munging into the class body.
+
+function parseHsPreview(
+  raw: Record<string, unknown>,
+  url: string,
+): UrlPreview | null {
+  const pick = (k: string): string | undefined => {
+    const v = raw[k];
+    return typeof v === 'string' && v.length > 0 ? v : undefined;
+  };
+  const pickNum = (k: string): number | undefined => {
+    const v = raw[k];
+    return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+  };
+  const title = pick('og:title');
+  const description = pick('og:description');
+  const image = pick('og:image');
+  const siteName = pick('og:site_name');
+  if (!title && !description && !image) return null;
+  return {
+    url,
+    title,
+    description,
+    image,
+    imageWidth: pickNum('og:image:width'),
+    imageHeight: pickNum('og:image:height'),
+    siteName,
+  };
+}
+
+/**
+ * Direct-from-browser OG scrape, used when the homeserver can't (or
+ * won't) preview the URL. CORS-bound by nature: works for sites that
+ * ship `access-control-allow-origin: *` (Vercel-hosted projects, many
+ * CDNs, the Mata marketing site itself); silently returns null for
+ * everything else. That's intentional — the failure mode is "no
+ * card", same as a homeserver miss.
+ *
+ * Bounded read: OG / twitter meta lives in <head>, so reading the
+ * first ~96 KB and cutting at </head> is enough for >99% of pages.
+ */
+async function fetchPreviewClientSide(url: string): Promise<UrlPreview | null> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      mode: 'cors',
+      credentials: 'omit',
+      redirect: 'follow',
+      // Some servers gate HTML on a real-ish UA. The default fetch
+      // UA inside a Worker is too sparse for picky CDNs (e.g.
+      // Cloudflare's bot-fight). We can't override `User-Agent`
+      // from the browser, but we can ask explicitly for HTML.
+      headers: { Accept: 'text/html,application/xhtml+xml' },
+    });
+    if (!res.ok || !res.body) return null;
+
+    const ct = (res.headers.get('content-type') ?? '').toLowerCase();
+    if (!ct.includes('html')) return null;
+
+    // Stream up to ~96KB, decoding incrementally so a long page
+    // doesn't pull the whole body into memory just to throw it
+    // away after the </head>.
+    const decoder = new TextDecoder('utf-8', { fatal: false });
+    const reader = res.body.getReader();
+    let text = '';
+    const MAX = 96 * 1024;
+    while (text.length < MAX) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+      const idx = text.toLowerCase().indexOf('</head>');
+      if (idx !== -1) {
+        text = text.slice(0, idx);
+        break;
+      }
+    }
+    try {
+      reader.cancel();
+    } catch {
+      // already done — irrelevant
+    }
+
+    const head = text;
+
+    const metaContent = (matcher: RegExp): string | undefined => {
+      const m = head.match(matcher);
+      if (!m) return undefined;
+      const raw = m[1];
+      return raw ? decodeEntities(raw.trim()) : undefined;
+    };
+
+    // Two attribute orderings per key — `property="og:x" content="y"`
+    // and the reversed `content="y" property="og:x"`. Keep regexes
+    // anchored to <meta ...> so we don't pick up content from unrelated
+    // tags that happen to share a substring.
+    const og = (key: string): string | undefined => {
+      const k = escapeRegex(key);
+      return (
+        metaContent(
+          new RegExp(
+            `<meta\\b[^>]*?(?:property|name)\\s*=\\s*["']${k}["'][^>]*?content\\s*=\\s*["']([^"']*)["']`,
+            'i',
+          ),
+        ) ??
+        metaContent(
+          new RegExp(
+            `<meta\\b[^>]*?content\\s*=\\s*["']([^"']*)["'][^>]*?(?:property|name)\\s*=\\s*["']${k}["']`,
+            'i',
+          ),
+        )
+      );
+    };
+
+    const titleTag = (() => {
+      const m = head.match(/<title[^>]*>([^<]+)<\/title>/i);
+      return m?.[1] ? decodeEntities(m[1].trim()) : undefined;
+    })();
+    const descMeta = og('description');
+
+    const title = og('og:title') ?? og('twitter:title') ?? titleTag;
+    const description = og('og:description') ?? og('twitter:description') ?? descMeta;
+    const rawImage = og('og:image') ?? og('twitter:image') ?? og('twitter:image:src');
+    const siteName = og('og:site_name') ?? og('application-name');
+
+    const image = rawImage ? resolveRelative(rawImage, parsed) : undefined;
+
+    if (!title && !description && !image) return null;
+
+    const imageWidth = numericMeta(head, ['og:image:width']);
+    const imageHeight = numericMeta(head, ['og:image:height']);
+
+    return {
+      url,
+      title,
+      description,
+      image,
+      imageWidth,
+      imageHeight,
+      siteName,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function resolveRelative(href: string, base: URL): string | undefined {
+  try {
+    return new URL(href, base).toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function numericMeta(head: string, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const k = escapeRegex(key);
+    const m =
+      head.match(
+        new RegExp(
+          `<meta\\b[^>]*?(?:property|name)\\s*=\\s*["']${k}["'][^>]*?content\\s*=\\s*["']([^"']*)["']`,
+          'i',
+        ),
+      ) ??
+      head.match(
+        new RegExp(
+          `<meta\\b[^>]*?content\\s*=\\s*["']([^"']*)["'][^>]*?(?:property|name)\\s*=\\s*["']${k}["']`,
+          'i',
+        ),
+      );
+    const n = m?.[1] ? Number.parseInt(m[1], 10) : Number.NaN;
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return undefined;
+}
+
+function escapeRegex(s: string): string {
+  // Backslash-escape every regex metachar.
+  return s.replace(/[.*+?^${}()|[\]\\]/g, (m) => `\\${m}`);
+}
+
+// Minimal HTML entity decoder — covers the entities that actually
+// show up in OG/title text. A real entity table is overkill for
+// link previews and would bloat the worker bundle.
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => {
+      const n = Number.parseInt(h, 16);
+      return Number.isFinite(n) ? String.fromCodePoint(n) : '';
+    })
+    .replace(/&#(\d+);/g, (_, d) => {
+      const n = Number.parseInt(d, 10);
+      return Number.isFinite(n) ? String.fromCodePoint(n) : '';
+    });
+}
+
 export class SdkSession {
   private emit: Emit;
   private client: MatrixClient | null = null;
@@ -1028,35 +1243,17 @@ export class SdkSession {
     const ts = Math.floor(Date.now() / 60000) * 60000; // 60s bucket — match SDK behaviour
 
     const raw = await this.fetchPreviewRaw(client, url, ts);
-    if (!raw || typeof raw !== 'object') return null;
+    const fromHs = raw ? parseHsPreview(raw, url) : null;
+    if (fromHs) return fromHs;
 
-    const pick = (k: string): string | undefined => {
-      const v = raw[k];
-      return typeof v === 'string' && v.length > 0 ? v : undefined;
-    };
-    const pickNum = (k: string): number | undefined => {
-      const v = raw[k];
-      return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
-    };
-
-    const image = pick('og:image'); // may be mxc:// or http(s):// — UI handles both
-    const title = pick('og:title');
-    const description = pick('og:description');
-    const siteName = pick('og:site_name');
-
-    // If nothing useful came back, treat it as no preview rather
-    // than render an empty card with just the URL.
-    if (!title && !description && !image) return null;
-
-    return {
-      url,
-      title,
-      description,
-      image,
-      imageWidth: pickNum('og:image:width'),
-      imageHeight: pickNum('og:image:height'),
-      siteName,
-    };
+    // Fallback: many homeservers (including most self-hosted Synapse
+    // installs out of the box) don't enable `url_preview_enabled` —
+    // `/preview_url` returns 404 M_UNRECOGNIZED, leaving every chat
+    // link as a bare URL. Try fetching the page directly from this
+    // side. Works for any site that ships permissive CORS (`access-
+    // control-allow-origin: *`); fails silently for the rest, which
+    // is the same UX as "no card" anyway.
+    return await fetchPreviewClientSide(url);
   }
 
   /**
