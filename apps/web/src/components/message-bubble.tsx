@@ -155,7 +155,7 @@ export function MessageBubble(props: {
         </Show>
 
         <div
-          class={`relative rounded-2xl px-3 py-2 text-sm leading-5 ${
+          class={`mata-msg-text relative rounded-2xl px-3 py-2 ${
             isMine()
               ? 'bg-accent text-accent-ink'
               : 'bg-elev text-fg'
