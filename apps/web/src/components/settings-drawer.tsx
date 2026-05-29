@@ -3,6 +3,12 @@ import { useBridge } from '../bridge/context.js';
 import { session, setSession } from '../stores/session.js';
 import { themeMode, setThemeMode, type ThemeMode } from '../stores/theme.js';
 import {
+  textSize,
+  setTextSize,
+  TEXT_SIZE_LABEL,
+  type TextSize,
+} from '../stores/text-size.js';
+import {
   notifyEnabled,
   notifyPermission,
   setNotifyEnabled,
@@ -264,6 +270,42 @@ export function SettingsDrawer(props: {
                       </button>
                     ))}
                   </div>
+                </div>
+
+                <div class="space-y-3">
+                  <label class="block text-sm font-medium">Message text size</label>
+                  <div class="grid grid-cols-3 gap-2">
+                    {(['sm', 'md', 'lg'] as TextSize[]).map((s) => (
+                      <button
+                        type="button"
+                        onClick={() => setTextSize(s)}
+                        class={`rounded-lg border px-3 py-2 text-sm transition-colors ${
+                          textSize() === s
+                            ? 'border-mata-500 bg-mata-500/10 text-mata-600 dark:text-mata-500'
+                            : 'border-line hover:border-line'
+                        }`}
+                      >
+                        <span
+                          class={
+                            s === 'sm'
+                              ? 'text-[13px] leading-[18px]'
+                              : s === 'md'
+                                ? 'text-[14px] leading-[20px]'
+                                : 'text-[16px] leading-[24px]'
+                          }
+                        >
+                          Aa
+                        </span>
+                        <span class="ml-2 text-[11px] text-fg-3">
+                          {TEXT_SIZE_LABEL[s]}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <p class="text-[11px] text-fg-3">
+                    Affects the message bubble text only — menus and
+                    chrome stay the same so the layout doesn't shift.
+                  </p>
                 </div>
 
                 <div class="space-y-2">
