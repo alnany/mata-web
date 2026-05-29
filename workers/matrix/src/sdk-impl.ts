@@ -344,6 +344,30 @@ export class SdkSession {
   readonly secretStorageKeyCache: Map<string, Uint8Array> = new Map();
 
   /**
+   * Currently-foregrounded room (the one the user has open in the UI).
+   * Set by `subscribeRoom` from the room-view's onMount; cleared by
+   * `unsubscribeRoom` or by the next subscribeRoom. The sync-tick
+   * reconcile (see ClientEvent.Sync handler) emits the live-timeline
+   * tail for THIS room on every successful sync so the open room
+   * stays eventually-consistent with the SDK's internal state — a
+   * safety net for the rare case where RoomEvent.Timeline or
+   * MatrixEventEvent.Decrypted didn't fire for an inbound event
+   * (matrix-js-sdk drops them silently on certain reconnect / gap
+   * paths, which the user perceives as "I see the message in Element
+   * but it doesn't show here until I refresh").
+   */
+  private subscribedRoomId: RoomId | null = null;
+
+  /**
+   * Cap on how many tail events we re-emit per reconcile. Element
+   * uses a similar window; 60 covers a typical viewport on any
+   * reasonable screen size, and the UI dedupes by eventId so any
+   * extra is just a postMessage cost. Larger than the per-room
+   * PAGE_SIZE (40) so we always cover the visible window.
+   */
+  private static readonly RECONCILE_TAIL_SIZE = 60;
+
+  /**
    * SAS verification state machine. Lazy-instantiated because it
    * captures `this.emit` + a getter into the live client; the
    * VerificationService doesn't run until a client is booted, but the
@@ -460,6 +484,59 @@ export class SdkSession {
   async listRoomSummaries(): Promise<RoomSummary[]> {
     const c = this.requireClient();
     return c.getRooms().map((r) => toSummary(r, c));
+  }
+
+  subscribeRoom(roomId: RoomId): void {
+    this.subscribedRoomId = roomId;
+    // Fire one reconcile immediately so opening a room that the SDK
+    // already has timeline state for paints from the canonical SDK
+    // copy, not just whatever stale events the UI cache held. Safe
+    // when client is null (cold-start race) — emitSubscribedRoomTail
+    // bails on missing client.
+    this.emitSubscribedRoomTail();
+  }
+
+  unsubscribeRoom(): void {
+    this.subscribedRoomId = null;
+  }
+
+  /**
+   * Re-emit the subscribed room's live-timeline tail as a syncUpdate
+   * delta. The UI's room-view handler dedupes by eventId, so this is
+   * idempotent — duplicates land in the same slot they already
+   * occupy. Called on every successful sync tick to catch events
+   * that slipped through the per-event taps (RoomEvent.Timeline /
+   * MatrixEventEvent.Decrypted occasionally miss events on
+   * reconnect / gap-fill paths, leaving the UI lagging the SDK's
+   * actual state).
+   */
+  private emitSubscribedRoomTail(): void {
+    const c = this.client;
+    if (!c) return;
+    const rid = this.subscribedRoomId;
+    if (!rid) return;
+    const room = c.getRoom(rid);
+    if (!room) return;
+    const live = room.getLiveTimeline().getEvents();
+    if (live.length === 0) return;
+    const tail = live.slice(-SdkSession.RECONCILE_TAIL_SIZE);
+    const events: TimelineEvent[] = [];
+    for (const e of tail) {
+      const tev = toTimelineEvent(e);
+      if (tev) events.push(tev);
+    }
+    if (events.length === 0) return;
+    this.emit({
+      kind: 'syncUpdate',
+      deltas: [
+        {
+          roomId: rid,
+          summary: partialSummary(room, c),
+          newEvents: events,
+        },
+      ],
+      nextBatch: c.getSyncStateData()?.nextSyncToken ?? '',
+    });
   }
 
   async loadRoomHistory(
@@ -2123,6 +2200,13 @@ export class SdkSession {
               : undefined,
           });
           if (state === SyncState.Prepared) this.emitInitialRooms(client);
+          // Reconcile the open room's tail on every successful sync.
+          // Cheap (single delta with up to 60 events, deduped by the
+          // UI), and catches events that RoomEvent.Timeline /
+          // MatrixEventEvent.Decrypted missed during reconnect / gap
+          // fill — the "I see it in Element but not here until
+          // refresh" symptom.
+          this.emitSubscribedRoomTail();
           break;
         case SyncState.Reconnecting:
         case SyncState.Catchup:
