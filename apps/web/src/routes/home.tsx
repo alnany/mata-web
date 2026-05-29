@@ -73,27 +73,56 @@ export function HomePage() {
   const [syncState, setSyncState] = createSignal<string>('connecting');
   const [syncReason, setSyncReason] = createSignal<string>('');
 
+  // ── Network-aware offline banner ──────────────────────────────────
+  // Two independent signals compose the banner visibility:
+  //   isNetworkOnline — browser's navigator.onLine, updated instantly
+  //     by the window 'online'/'offline' events. This catches the pure
+  //     "no network" case before the Matrix sync even retries.
+  //   showOfflineBanner — true when the network is down OR when the
+  //     sync worker reports 'reconnecting'/'error' after having been
+  //     live (i.e. after first 'syncing' tick). We suppress during
+  //     the initial boot window so transient DNS / crypto-init errors
+  //     don't flash the strip while the app is still loading.
+  const [isNetworkOnline, setIsNetworkOnline] = createSignal(navigator.onLine);
+  const onlineHandler = () => setIsNetworkOnline(true);
+  const offlineHandler = () => setIsNetworkOnline(false);
+  window.addEventListener('online', onlineHandler);
+  window.addEventListener('offline', offlineHandler);
+  onCleanup(() => {
+    window.removeEventListener('online', onlineHandler);
+    window.removeEventListener('offline', offlineHandler);
+  });
+  // Boot-settled signal local to the banner: flips true when we've
+  // seen at least one 'syncing' tick, same gate as bootSettled toast
+  // guard. Reuses the shared markBootSettled() call below.
+  const [bannerBootSettled, setBannerBootSettled] = createSignal(false);
+  const [showOfflineBanner, setShowOfflineBanner] = createSignal(false);
+
   onCleanup(
     bridge.on('syncStatus', (e) => {
       setSyncState(e.status);
       setSyncReason(e.reason ?? '');
-      // `syncing` is the SDK's first "we're live" tick. From here on,
-      // background errors (loadRoomList rejecting, RPC racing the
-      // worker startup, etc.) are real failures worth toasting.
-      if (e.status === 'syncing') markBootSettled();
-      // Only toast sync errors AFTER we've been live at least once.
-      // The initial connecting phase emits transient errors during
-      // crypto bootstrap retries / DNS warmup that resolve on their
-      // own — flashing them in the corner felt like a "broken app"
-      // signal even though the sync indicator already shows the
-      // state inline. Persistent errors still surface because the
-      // sync indicator stays red and any subsequent error event
-      // after bootSettled passes the gate.
-      if (e.status === 'error' && e.reason) {
+      if (e.status === 'syncing') {
+        markBootSettled();
+        setBannerBootSettled(true);
+        setShowOfflineBanner(false); // auto-dismiss on reconnect
+      } else if (e.status === 'error' && e.reason) {
         showBootGuardedError(`Sync error: ${e.reason}`, 8000);
       }
     }),
   );
+  // Show the banner when network goes offline or sync enters a
+  // degraded state AFTER the app has successfully connected once.
+  createEffect(() => {
+    if (!isNetworkOnline()) {
+      setShowOfflineBanner(true);
+      return;
+    }
+    const st = syncState();
+    if (bannerBootSettled() && (st === 'reconnecting' || st === 'error')) {
+      setShowOfflineBanner(true);
+    }
+  });
 
   // Boot is split into TWO independent phases so the user sees their
   // familiar room list immediately, not after the worker finishes
@@ -459,7 +488,18 @@ export function HomePage() {
       </aside>
 
       {/* -------- Conversation column ---------------------------------- */}
-      <div class="min-h-0 bg-conv">
+      <div class="flex min-h-0 flex-col bg-conv">
+        {/* Offline / reconnecting banner — spans full conv column,
+            auto-hides when sync returns to 'syncing'. Only shown
+            after the app has successfully connected at least once so
+            the initial boot connecting state doesn't trigger it. */}
+        <Show when={showOfflineBanner()}>
+          <OfflineBanner
+            online={isNetworkOnline()}
+            syncState={syncState()}
+            onDismiss={() => setShowOfflineBanner(false)}
+          />
+        </Show>
         <Show
           when={activeRoom()}
           fallback={<EmptyConv />}
@@ -838,7 +878,7 @@ function MeBar(props: {
 
 function EmptyConv() {
   return (
-    <section class="flex h-full items-center justify-center p-12 text-center">
+    <section class="flex flex-1 items-center justify-center p-12 text-center">
       <div class="space-y-3">
         <div class="mx-auto h-10 w-10 text-fg-3">
           <Mark size="display" />
@@ -918,5 +958,65 @@ function shallowRoomEqual(a: RoomSummary, b: RoomSummary): boolean {
     a.highlightCount === b.highlightCount &&
     a.lastActivityTs === b.lastActivityTs &&
     a.lastEventPreview === b.lastEventPreview
+  );
+}
+
+// ── OfflineBanner ────────────────────────────────────────────────────────────
+/**
+ * Non-intrusive strip shown at the top of the conversation column when
+ * the network drops or the Matrix sync enters a degraded state after
+ * having been live at least once. Auto-dismisses on reconnect (when
+ * syncState returns to 'syncing' the Show gate is cleared by the parent).
+ * Manual dismiss via the × keeps it hidden for the rest of the session
+ * (the parent's showOfflineBanner signal gates the Show).
+ *
+ * Design: amber-toned so it reads as "warning but not fatal", 8px
+ * rounded corners, dismissible ×. Uses --color-warn token from the
+ * Mata design system.
+ */
+function OfflineBanner(props: {
+  online: boolean;
+  syncState: string;
+  onDismiss: () => void;
+}) {
+  const message = () => {
+    if (!props.online) return 'No internet connection — messages won\'t send or arrive.';
+    if (props.syncState === 'reconnecting') return 'Reconnecting to your server…';
+    return 'Connection lost — retrying…';
+  };
+
+  const isReconnecting = () =>
+    props.syncState === 'reconnecting' || !props.online;
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      class="flex items-center gap-2 border-b px-4 py-2 text-[12px]"
+      style={{
+        background: 'color-mix(in oklab, var(--color-warn) 12%, var(--color-conv))',
+        'border-color': 'color-mix(in oklab, var(--color-warn) 30%, transparent)',
+        color: 'var(--color-fg)',
+      }}
+    >
+      {/* Animated dot — pulsing while reconnecting, steady while offline */}
+      <span
+        class={`inline-block h-[7px] w-[7px] rounded-full flex-shrink-0 ${isReconnecting() ? 'mata-pulse' : ''}`}
+        style={{ background: 'var(--color-warn)' }}
+        aria-hidden="true"
+      />
+      <span class="flex-1">{message()}</span>
+      <button
+        type="button"
+        onClick={props.onDismiss}
+        class="ml-1 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded opacity-60 transition-opacity hover:opacity-100"
+        aria-label="Dismiss"
+        title="Dismiss"
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <path d="M1 1l8 8M9 1L1 9" />
+        </svg>
+      </button>
+    </div>
   );
 }
