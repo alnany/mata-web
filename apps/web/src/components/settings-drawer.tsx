@@ -12,6 +12,7 @@ import { useNavigate } from '@solidjs/router';
 import type { Device } from '@mata/shared/matrix';
 import { EncryptionPanel } from './encryption-panel.js';
 import { startVerification } from '../stores/verification.js';
+import { clearRoomList, clearAllTimelines } from '../lib/persistent-cache.js';
 
 /**
  * Settings drawer — slides in from the left over the app shell.
@@ -76,6 +77,12 @@ export function SettingsDrawer(props: {
     } catch {
       // ignore
     }
+    // Drop persisted UI caches so the next account signing in here
+    // can't see this user's room names / timeline tails / unread
+    // counts on first paint. Worker-side media cache + matrix-sdk
+    // stores are cleared by the `logout` RPC above; these two are
+    // main-thread state.
+    await Promise.all([clearRoomList(), clearAllTimelines()]).catch(() => {});
     setSession({ phase: 'anonymous' });
     props.onClose();
     navigate('/login', { replace: true });
