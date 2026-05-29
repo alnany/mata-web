@@ -14,6 +14,7 @@ import { CallOverlay } from './components/call-overlay.js';
 import { Mark } from './components/logo.js';
 // Side-effect: bootstrap the theme classes on <html> at app load.
 import './stores/theme.js';
+import './stores/text-size.js';
 import type { MatrixBridge } from '@mata/shared/rpc';
 
 export function App(props: ParentProps) {
