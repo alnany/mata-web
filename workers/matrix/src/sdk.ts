@@ -180,9 +180,13 @@ export class MatrixCore {
     return this.requireSession().setIgnored(userId, ignored);
   }
 
-  async fetchRoomSettings(
-    roomId: RoomId,
-  ): Promise<{ name: string; topic: string; canSetName: boolean; canSetTopic: boolean }> {
+  async fetchRoomSettings(roomId: RoomId): Promise<{
+    name: string;
+    topic: string;
+    canSetName: boolean;
+    canSetTopic: boolean;
+    canSetAvatar: boolean;
+  }> {
     return this.requireSession().fetchRoomSettings(roomId);
   }
 
@@ -192,6 +196,10 @@ export class MatrixCore {
 
   async setRoomTopic(roomId: RoomId, topic: string): Promise<void> {
     return this.requireSession().setRoomTopic(roomId, topic);
+  }
+
+  async setRoomAvatar(roomId: RoomId, mxc: MxcUri): Promise<void> {
+    return this.requireSession().setRoomAvatar(roomId, mxc);
   }
 
   async setWebPusher(

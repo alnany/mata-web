@@ -1,6 +1,6 @@
 import { createResource, createSignal, onMount, Show } from 'solid-js';
 import type { RoomSummary, UserId } from '@mata/shared/matrix';
-import { prettyName } from './message-bubble.js';
+import { prettyName, initials, gradientForUser } from './message-bubble.js';
 import { PresenceDot } from './presence-dot.js';
 import { useBridge } from '../bridge/context.js';
 import { activeCall, placeCall } from '../stores/call.js';
@@ -251,6 +251,8 @@ function RoomSettingsModal(props: { room: RoomSummary; onClose: () => void }) {
   const [name, setName] = createSignal('');
   const [topic, setTopic] = createSignal('');
   const [saving, setSaving] = createSignal(false);
+  const [uploadingAvatar, setUploadingAvatar] = createSignal(false);
+  let fileInput: HTMLInputElement | undefined;
 
   const [settings] = createResource(
     () => r.roomId,
@@ -267,6 +269,35 @@ function RoomSettingsModal(props: { room: RoomSummary; onClose: () => void }) {
 
   const canSetName = () => settings()?.canSetName ?? false;
   const canSetTopic = () => settings()?.canSetTopic ?? false;
+  const canSetAvatar = () => settings()?.canSetAvatar ?? false;
+
+  const onPickAvatar = async (e: Event) => {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file || uploadingAvatar()) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('error', 'Pick an image file');
+      return;
+    }
+    setUploadingAvatar(true);
+    try {
+      const data = await file.arrayBuffer();
+      const up = await bridge.request({
+        kind: 'uploadMedia',
+        data,
+        mime: file.type,
+        filename: file.name,
+      });
+      if (up.kind !== 'uploadMedia') throw new Error('upload failed');
+      await bridge.request({ kind: 'setRoomAvatar', roomId: r.roomId, mxc: up.mxc });
+      showToast('success', 'Room photo updated');
+    } catch (err) {
+      showToast('error', `Could not update photo: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
   const loaded = () => settings() !== undefined;
   const readOnly = () => loaded() && !canSetName() && !canSetTopic();
   const dirty = () =>
@@ -315,6 +346,56 @@ function RoomSettingsModal(props: { room: RoomSummary; onClose: () => void }) {
           >
             ✕
           </button>
+        </div>
+
+        <div class="mt-4 flex items-center gap-3">
+          <div class="relative h-16 w-16 shrink-0">
+            <Show
+              when={r.avatarUrl}
+              fallback={
+                <div
+                  class="flex h-16 w-16 items-center justify-center rounded-full text-[20px]"
+                  style={{
+                    background: gradientForUser(r.roomId).background,
+                    color: gradientForUser(r.roomId).color,
+                    'font-weight': 600,
+                  }}
+                >
+                  {initials(r.name || r.roomId)}
+                </div>
+              }
+            >
+              <img
+                src={r.avatarUrl}
+                alt=""
+                class="h-16 w-16 rounded-full object-cover"
+              />
+            </Show>
+            <Show when={uploadingAvatar()}>
+              <div class="absolute inset-0 flex items-center justify-center rounded-full bg-black/50 text-[10px] text-white">
+                …
+              </div>
+            </Show>
+          </div>
+          <Show when={canSetAvatar()}>
+            <div>
+              <input
+                ref={(el) => (fileInput = el)}
+                type="file"
+                accept="image/*"
+                class="hidden"
+                onChange={(e) => void onPickAvatar(e)}
+              />
+              <button
+                type="button"
+                onClick={() => fileInput?.click()}
+                disabled={uploadingAvatar()}
+                class="rounded-lg border border-line px-3 py-1.5 text-[13px] text-fg-2 hover:bg-input disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {uploadingAvatar() ? 'Uploading…' : 'Change photo'}
+              </button>
+            </div>
+          </Show>
         </div>
 
         <div class="mt-4 space-y-3">

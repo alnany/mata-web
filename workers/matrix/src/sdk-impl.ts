@@ -742,9 +742,13 @@ export class SdkSession {
    * — so the UI can render read-only fields for under-privileged members
    * instead of letting them submit a doomed state event.
    */
-  async fetchRoomSettings(
-    roomId: RoomId,
-  ): Promise<{ name: string; topic: string; canSetName: boolean; canSetTopic: boolean }> {
+  async fetchRoomSettings(roomId: RoomId): Promise<{
+    name: string;
+    topic: string;
+    canSetName: boolean;
+    canSetTopic: boolean;
+    canSetAvatar: boolean;
+  }> {
     const c = this.requireClient();
     const room = c.getRoom(roomId);
     if (!room) throw new Error('room not found');
@@ -757,9 +761,11 @@ export class SdkSession {
       ?.getContent()?.topic;
     let canSetName = false;
     let canSetTopic = false;
+    let canSetAvatar = false;
     try {
       canSetName = room.currentState.maySendStateEvent('m.room.name', me);
       canSetTopic = room.currentState.maySendStateEvent('m.room.topic', me);
+      canSetAvatar = room.currentState.maySendStateEvent('m.room.avatar', me);
     } catch {
       /* power levels unavailable — leave fields read-only */
     }
@@ -768,6 +774,7 @@ export class SdkSession {
       topic: typeof topicRaw === 'string' ? topicRaw : '',
       canSetName,
       canSetTopic,
+      canSetAvatar,
     };
   }
 
@@ -781,6 +788,15 @@ export class SdkSession {
   async setRoomTopic(roomId: RoomId, topic: string): Promise<void> {
     const c = this.requireClient();
     await c.sendStateEvent(roomId, 'm.room.topic' as never, { topic } as never, '');
+  }
+
+  /**
+   * Set the room avatar (`m.room.avatar` state event). Caller uploads the
+   * image via `uploadMedia` first and passes the resulting `mxc://` URI.
+   */
+  async setRoomAvatar(roomId: RoomId, mxc: MxcUri): Promise<void> {
+    const c = this.requireClient();
+    await c.sendStateEvent(roomId, 'm.room.avatar' as never, { url: mxc } as never, '');
   }
 
   /**

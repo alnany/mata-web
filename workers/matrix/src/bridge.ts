@@ -139,6 +139,7 @@ const handlers: Handlers = {
       topic: s.topic,
       canSetName: s.canSetName,
       canSetTopic: s.canSetTopic,
+      canSetAvatar: s.canSetAvatar,
     };
   },
   setRoomName: async (req, core) => {
@@ -148,6 +149,10 @@ const handlers: Handlers = {
   setRoomTopic: async (req, core) => {
     await core.setRoomTopic(req.roomId, req.topic);
     return { kind: 'setRoomTopic' };
+  },
+  setRoomAvatar: async (req, core) => {
+    await core.setRoomAvatar(req.roomId, req.mxc);
+    return { kind: 'setRoomAvatar' };
   },
   fetchEvent: async (req, core) => {
     const event = await core.fetchEvent(req.roomId, req.eventId);
