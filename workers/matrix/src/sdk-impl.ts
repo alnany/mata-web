@@ -25,6 +25,7 @@ import {
   MatrixEventEvent,
   EventType,
   MsgType,
+  RelationType,
   PendingEventOrdering,
   type MatrixClient,
   type Room,
@@ -532,11 +533,49 @@ export class SdkSession {
     await c.redactEvent(roomId, eventId, undefined, reason ? { reason } : undefined);
   }
 
+  /**
+   * Toggle a reaction. A reaction is a one-per-(user,key,target) fact in
+   * Matrix — the server rejects a second `m.annotation` with the same key
+   * ("Can't send same reaction twice", M_DUPLICATE_ANNOTATION). The UI
+   * treats tapping an emoji as a toggle (tap to add, tap again to remove),
+   * so the add/remove decision has to live here: if the current user
+   * already has a live reaction with this key on the target event, redact
+   * it; otherwise send a fresh one.
+   *
+   * We resolve "my existing reaction" from the relations container rather
+   * than trusting the caller, so a stale UI tap can't desync into a
+   * duplicate send. Local echoes (txn-id `~...`) are ignored — there's no
+   * server event to redact yet, and the original send is still in flight.
+   */
   async sendReaction(roomId: RoomId, eventId: EventId, key: string): Promise<void> {
     const c = this.requireClient();
+    const room = c.getRoom(roomId);
+    const myId = c.getUserId();
+
+    const existing = room
+      ?.getUnfilteredTimelineSet()
+      .relations?.getChildEventsForEvent(eventId, RelationType.Annotation, EventType.Reaction)
+      ?.getRelations()
+      ?.find(
+        (e) =>
+          e.getSender() === myId &&
+          e.getRelation()?.key === key &&
+          !e.isRedacted() &&
+          !e.status, // status set => still a local echo, not yet on the server
+      );
+
+    if (existing) {
+      const id = existing.getId();
+      // Defensive: only redact a real server event id.
+      if (id && !id.startsWith('~') && !id.startsWith('$local')) {
+        await c.redactEvent(roomId, id);
+      }
+      return;
+    }
+
     await c.sendEvent(roomId, EventType.Reaction, {
       'm.relates_to': {
-        rel_type: 'm.annotation',
+        rel_type: RelationType.Annotation,
         event_id: eventId,
         key,
       },
