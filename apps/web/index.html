@@ -8,6 +8,25 @@
     <meta name="description" content="The eye of the day. Encrypted, end to end." />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 
+    <!-- OpenGraph + Twitter card. The Matrix `preview_url` endpoint
+         (and every other unfurler — Slack, iMessage, Telegram,
+         Discord) reads these to render a link card. Without them
+         our own Mata client returns a null preview and never shows
+         the card, since the SPA's index.html is mostly empty. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Mata" />
+    <meta property="og:title" content="Mata" />
+    <meta property="og:description" content="The eye of the day. Encrypted, end to end." />
+    <meta property="og:url" content="https://immata.app/" />
+    <meta property="og:image" content="https://immata.app/og-cover.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Mata — encrypted Matrix client" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Mata" />
+    <meta name="twitter:description" content="The eye of the day. Encrypted, end to end." />
+    <meta name="twitter:image" content="https://immata.app/og-cover.jpg" />
+
     <!-- Theme bootstrap: applies persisted choice before the JS bundle
          loads so we never paint the wrong palette and then flip. -->
     <script>
