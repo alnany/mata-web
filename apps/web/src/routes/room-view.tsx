@@ -1038,12 +1038,51 @@ export function RoomView(props: {
   // change. `<For>` then sees referential equality for unchanged
   // rows and keeps the DOM (and the animation) untouched.
   const rowCache = new Map<string, Row>();
+  // Cutoff for "ancient" undecryptable events. matrix-js-sdk's live
+  // timeline can have very old encrypted events appended at any time
+  // (late backfill, federation catch-up, server replay). For events
+  // older than this many days that we can't decrypt, we'll never get
+  // a session — they're permanently unviewable, and they pollute the
+  // active conversation view with floating "🔒 sent before you signed
+  // in" markers inserted between today's messages. Drop them from the
+  // render entirely; if backup-restore later decrypts them, they
+  // reappear as normal messages.
+  const UTD_STALE_DAYS = 30;
+  const UTD_STALE_MS = UTD_STALE_DAYS * 24 * 60 * 60 * 1000;
   const rows = createMemo<Row[]>(() => {
     const out: Row[] = [];
-    const evs = props.cache.events;
+    const evsRaw = props.cache.events;
     const seen = new Set<string>();
     let lastSender: UserId | null = null;
     let lastTs = 0;
+
+    // ── Filter ancient UTDs + normalize chronological order ──────────
+    // Two related pre-passes, both targeted at "old encrypted events
+    // appearing inline with today's conversation":
+    //   1. Drop UTDs older than UTD_STALE_DAYS — they have no recovery
+    //      path beyond key backup, which is gated by a separate CTA.
+    //   2. Sort by originServerTs. matrix-js-sdk preserves wire arrival
+    //      order, which is mostly chronological but not strictly so —
+    //      late-arriving backfill events get appended at the tail with
+    //      a months-old ts, which is exactly what triggers the double
+    //      day-divider symptom (today → Oct 2 → today → Jun 25 …).
+    //      Sorting once here is O(n log n) on a 50–60-event tail and
+    //      runs only when the array reference changes (memo); cheap.
+    const nowTs = Date.now();
+    const evs = evsRaw
+      .filter((e) => {
+        if (
+          e.type === 'm.room.encrypted' &&
+          (e as Extract<TimelineEvent, { type: 'm.room.encrypted' }>)
+            .decryptionStatus === 'failed' &&
+          nowTs - e.originServerTs > UTD_STALE_MS
+        ) {
+          return false;
+        }
+        return true;
+      })
+      .slice()
+      .sort((a, b) => a.originServerTs - b.originServerTs);
     for (let i = 0; i < evs.length; i++) {
       const ev = evs[i];
       // ---- collapse runs of undecryptable events ------------------------
@@ -1065,18 +1104,22 @@ export function RoomView(props: {
           j++;
         }
         const runLen = j - i;
-        // Day boundary for the start of the run.
-        if (out.length === 0 || !isSameDay(lastTs, ev.originServerTs)) {
-          const dayKey = `d-${ev.eventId}`;
-          let dayRow = rowCache.get(dayKey);
-          if (!dayRow || dayRow.kind !== 'day' || dayRow.ts !== ev.originServerTs) {
-            dayRow = { kind: 'day', ts: ev.originServerTs, key: dayKey };
-            rowCache.set(dayKey, dayRow);
-          }
-          seen.add(dayKey);
-          out.push(dayRow);
-        }
+        // Only the multi-event collapse path emits a day divider here.
+        // Singletons fall through to the shared normal-row branch
+        // below, which has its own divider logic; emitting one in
+        // both places was the source of the duplicate "Thu, Oct 2 /
+        // Thu, Oct 2" pair the user reported.
         if (runLen >= 2) {
+          if (out.length === 0 || !isSameDay(lastTs, ev.originServerTs)) {
+            const dayKey = `d-${ev.eventId}`;
+            let dayRow = rowCache.get(dayKey);
+            if (!dayRow || dayRow.kind !== 'day' || dayRow.ts !== ev.originServerTs) {
+              dayRow = { kind: 'day', ts: ev.originServerTs, key: dayKey };
+              rowCache.set(dayKey, dayRow);
+            }
+            seen.add(dayKey);
+            out.push(dayRow);
+          }
           // Pick the most common failure reason in the run for copy.
           const tally = new Map<string, number>();
           for (let k = i; k < j; k++) {
