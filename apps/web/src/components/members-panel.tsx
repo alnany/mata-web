@@ -40,6 +40,8 @@ export function MembersPanel(props: {
   /** All joined rooms — used to surface recent chats in the invite modal. */
   rooms?: RoomSummary[] | null;
   onClose: () => void;
+  /** Open a member's profile drawer (handled by the parent room view). */
+  onOpenProfile?: (userId: UserId, member: RoomMember) => void;
 }) {
   const bridge = useBridge();
   const [search, setSearch] = createSignal('');
@@ -179,6 +181,7 @@ export function MembersPanel(props: {
                       isEncrypted={props.room.isEncrypted}
                       acting={!!acting()[m.userId]}
                       onKick={() => kick(m)}
+                      onOpenProfile={props.onOpenProfile}
                     />
                   )}
                 </For>
@@ -193,6 +196,7 @@ export function MembersPanel(props: {
                     isEncrypted={props.room.isEncrypted}
                     acting={!!acting()[m.userId]}
                     onKick={() => kick(m)}
+                    onOpenProfile={props.onOpenProfile}
                   />
                 )}
               </For>
@@ -239,6 +243,7 @@ function MemberRow(props: {
   isEncrypted: boolean;
   acting: boolean;
   onKick: () => void;
+  onOpenProfile?: (userId: UserId, member: RoomMember) => void;
 }) {
   const m = props.member;
   const name = m.displayname || prettyName(m.userId);
@@ -258,6 +263,12 @@ function MemberRow(props: {
   };
   return (
     <div class="group flex items-center gap-2.5 border-b border-neutral-100 px-3 py-2 last:border-b-0/60">
+      <button
+        type="button"
+        onClick={() => props.onOpenProfile?.(m.userId, m)}
+        class="flex min-w-0 flex-1 items-center gap-2.5 text-left transition-[filter] hover:brightness-110"
+        title={`View ${name}'s profile`}
+      >
       <div class="relative shrink-0">
         <div class="flex h-9 w-9 items-center justify-center rounded-full bg-input text-[11px] font-semibold text-fg-2">
           {initials(name)}
@@ -308,6 +319,7 @@ function MemberRow(props: {
         </div>
         <div class="truncate text-[10px] text-fg-3">{secondaryLine()}</div>
       </div>
+      </button>
       <Show when={props.canKick}>
         <button
           type="button"

@@ -692,6 +692,50 @@ export class SdkSession {
   }
 
   /**
+   * One-shot profile fetch for the profile drawer: canonical display
+   * name + avatar (mxc) via `/profile/{userId}`, plus whether we
+   * currently ignore this user (read from local `m.ignored_user_list`
+   * account data — synchronous, no round-trip). All best-effort: a
+   * federated profile fetch can fail for offline/remote users, in which
+   * case the UI falls back to the localpart.
+   */
+  async fetchProfile(
+    userId: UserId,
+  ): Promise<{ displayName: string | null; avatarUrl: string | null; ignored: boolean }> {
+    const c = this.requireClient();
+    let displayName: string | null = null;
+    let avatarUrl: string | null = null;
+    try {
+      const res = await c.getProfileInfo(userId);
+      displayName = typeof res.displayname === 'string' ? res.displayname : null;
+      avatarUrl = typeof res.avatar_url === 'string' ? res.avatar_url : null;
+    } catch {
+      /* remote/offline profile — fall back to localpart client-side */
+    }
+    let ignored = false;
+    try {
+      ignored = c.isUserIgnored(userId);
+    } catch {
+      /* ignore list unavailable — treat as not ignored */
+    }
+    return { displayName, avatarUrl, ignored };
+  }
+
+  /**
+   * Add or remove a user from `m.ignored_user_list` account data. The
+   * homeserver hides their events from sync once ignored; matrix-js-sdk
+   * applies the same filter locally. Idempotent — we recompute the full
+   * list each call (setIgnoredUsers replaces wholesale).
+   */
+  async setIgnored(userId: UserId, ignored: boolean): Promise<void> {
+    const c = this.requireClient();
+    const current = new Set<string>(c.getIgnoredUsers());
+    if (ignored) current.add(userId);
+    else current.delete(userId);
+    await c.setIgnoredUsers([...current]);
+  }
+
+  /**
    * Register a Web Push pusher. The homeserver will POST a Matrix Push
    * Gateway notification to `gatewayUrl` whenever a push rule matches —
    * including when this client is offline / the tab is closed. We carry

@@ -95,6 +95,8 @@ export function MessageBubble(props: {
     lastSender: UserId | null;
   };
   actions: MessageActions;
+  /** Click the sender's gutter avatar → open their profile drawer. */
+  onOpenProfile?: (userId: UserId) => void;
 }) {
   const isMine = () => props.ev.sender === props.me;
   const [showMenu, setShowMenu] = createSignal(false);
@@ -276,13 +278,15 @@ export function MessageBubble(props: {
       <Show when={!isMine()}>
         <div class="mr-2 w-8 shrink-0">
           <Show when={props.showHeader}>
-            <div
-              class="relative flex h-8 w-8 items-center justify-center rounded-full bg-input text-xs font-semibold text-fg-2"
-              title={msg.sender}
+            <button
+              type="button"
+              onClick={() => props.onOpenProfile?.(msg.sender)}
+              class="relative flex h-8 w-8 items-center justify-center rounded-full bg-input text-xs font-semibold text-fg-2 transition-[filter] hover:brightness-110"
+              title={`View ${prettyName(msg.sender)}'s profile`}
             >
               {initials(msg.sender)}
               <PresenceDot userId={msg.sender} overlay />
-            </div>
+            </button>
           </Show>
         </div>
       </Show>

@@ -27,6 +27,7 @@ import { ThreadPanel } from '../components/thread-panel.js';
 import { Composer } from '../components/composer.js';
 import { RoomHeader } from '../components/room-header.js';
 import { MembersPanel } from '../components/members-panel.js';
+import { ProfileDrawer } from '../components/profile-drawer.js';
 import { SearchPanel } from '../components/search-panel.js';
 import { ImageGallery, type GalleryImage } from '../components/image-gallery.js';
 import { ForwardModal } from '../components/forward-modal.js';
@@ -226,6 +227,42 @@ export function RoomView(props: {
   const [openThread, setOpenThread] = createSignal<EventId | null>(null);
   const [focusToken, setFocusToken] = createSignal(0);
   const [membersOpen, setMembersOpen] = createSignal(false);
+  // Profile drawer — which user is being inspected (null = closed).
+  // `profileMember` carries the room-state record (trust/power/name)
+  // when we open from a member row; opening from a message avatar leaves
+  // it null and the drawer falls back to a /profile fetch + localpart.
+  const [profileUserId, setProfileUserId] = createSignal<UserId | null>(null);
+  const [profileMember, setProfileMember] = createSignal<RoomMember | null>(null);
+  const openProfile = (userId: UserId, member?: RoomMember | null) => {
+    setProfileMember(member ?? null);
+    setProfileUserId(userId);
+    setMembersOpen(false);
+  };
+  // "Message" from a profile: reuse an existing DM with this user if one
+  // exists, else create an encrypted direct room, then switch to it.
+  const openDmWith = async (userId: UserId) => {
+    setProfileUserId(null);
+    const existing = props.rooms.find(
+      (r) => r.type === 'dm' && r.dmTargetUserId === userId,
+    );
+    if (existing) {
+      props.onJumpToRoom?.(existing.roomId, '' as EventId);
+      return;
+    }
+    try {
+      const res = await bridge.request({
+        kind: 'createRoom',
+        name: '',
+        topic: null,
+        isDirect: true,
+        encrypted: props.room.isEncrypted,
+        invite: [userId],
+      });
+      if (res.kind === 'createRoom') props.onJumpToRoom?.(res.roomId, '' as EventId);
+    } catch (err) {
+      showToast('error', `Could not start chat: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  };
   // Staged attachments — the user has pasted / dropped a file but
   // hasn't pressed Send yet. Pre-staging fixes the worst paste-image
   // friction: previously the file uploaded and sent immediately, so
@@ -1887,6 +1924,7 @@ export function RoomView(props: {
                       }
                       threadSummary={threadSummaries().get(row.ev.eventId)}
                       actions={actions}
+                      onOpenProfile={openProfile}
                     />
                   )
                 }
@@ -1996,6 +2034,15 @@ export function RoomView(props: {
         myUserId={me()}
         rooms={props.rooms}
         onClose={() => setMembersOpen(false)}
+        onOpenProfile={openProfile}
+      />
+      <ProfileDrawer
+        userId={profileUserId()}
+        member={profileMember()}
+        isEncrypted={props.room.isEncrypted}
+        myUserId={me()}
+        onClose={() => setProfileUserId(null)}
+        onMessage={(uid) => void openDmWith(uid)}
       />
       <SearchPanel
         room={props.room}

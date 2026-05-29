@@ -160,6 +160,8 @@ export type MainToWorkerRequest =
    */
   | { kind: 'fetchEvent'; roomId: RoomId; eventId: EventId }
   | { kind: 'fetchPresence'; userId: UserId }
+  | { kind: 'fetchProfile'; userId: UserId }
+  | { kind: 'setIgnored'; userId: UserId; ignored: boolean }
   | { kind: 'sendReaction'; roomId: RoomId; eventId: EventId; key: string }
   | { kind: 'sendTyping'; roomId: RoomId; timeoutMs: number }
   | { kind: 'sendReadReceipt'; roomId: RoomId; eventId: EventId }
@@ -406,6 +408,8 @@ export type MainToWorkerResponse =
       lastActiveAgoMs: number | null;
       currentlyActive: boolean | null;
     }
+  | { kind: 'fetchProfile'; displayName: string | null; avatarUrl: string | null; ignored: boolean }
+  | { kind: 'setIgnored' }
   | { kind: 'sendReaction' }
   | { kind: 'sendTyping' }
   | { kind: 'sendReadReceipt' }

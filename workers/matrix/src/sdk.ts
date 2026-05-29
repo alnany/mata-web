@@ -170,6 +170,16 @@ export class MatrixCore {
     return this.requireSession().fetchPresence(userId);
   }
 
+  async fetchProfile(
+    userId: UserId,
+  ): Promise<{ displayName: string | null; avatarUrl: string | null; ignored: boolean }> {
+    return this.requireSession().fetchProfile(userId);
+  }
+
+  async setIgnored(userId: UserId, ignored: boolean): Promise<void> {
+    return this.requireSession().setIgnored(userId, ignored);
+  }
+
   async setWebPusher(
     subscription: WebPushSubscriptionJson,
     gatewayUrl: string,

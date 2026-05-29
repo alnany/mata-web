@@ -123,6 +123,14 @@ const handlers: Handlers = {
       currentlyActive: p?.currentlyActive ?? null,
     };
   },
+  fetchProfile: async (req, core) => {
+    const p = await core.fetchProfile(req.userId);
+    return { kind: 'fetchProfile', displayName: p.displayName, avatarUrl: p.avatarUrl, ignored: p.ignored };
+  },
+  setIgnored: async (req, core) => {
+    await core.setIgnored(req.userId, req.ignored);
+    return { kind: 'setIgnored' };
+  },
   fetchEvent: async (req, core) => {
     const event = await core.fetchEvent(req.roomId, req.eventId);
     return { kind: 'fetchEvent', event };
