@@ -132,6 +132,39 @@ body {
 }
 
 /* =========================================================================
+   Message text size (user-adjustable, 3 steps).
+
+   Driven by the `text-size` store: it toggles `.text-size-sm |
+   .text-size-md | .text-size-lg` on <html> and persists the choice
+   to localStorage. The `.mata-msg-text` utility is what bubbles
+   actually wear — only the body type scales, not UI chrome.
+
+   Defaults match Tailwind's `text-sm leading-5` (medium), so
+   existing layout/spacing stays pixel-identical until a user opts
+   into a different size.
+   ========================================================================= */
+:root {
+  --mata-msg-size: 0.875rem;
+  --mata-msg-lh: 1.25rem;
+}
+:root.text-size-sm {
+  --mata-msg-size: 0.8125rem;
+  --mata-msg-lh: 1.125rem;
+}
+:root.text-size-md {
+  --mata-msg-size: 0.875rem;
+  --mata-msg-lh: 1.25rem;
+}
+:root.text-size-lg {
+  --mata-msg-size: 1rem;
+  --mata-msg-lh: 1.5rem;
+}
+.mata-msg-text {
+  font-size: var(--mata-msg-size);
+  line-height: var(--mata-msg-lh);
+}
+
+/* =========================================================================
    Browser autofill override.
 
    Chrome / Safari paint inputs that the password manager has filled in
