@@ -328,6 +328,21 @@ export function toTimelineEvent(ev: MatrixEvent): TimelineEvent | null {
     };
   }
 
+  // A redacted (deleted) message keeps its original type but has its
+  // content stripped. Render it as an in-place "removed" tombstone that
+  // carries the ORIGINAL event id, so a delete REPLACES the bubble in
+  // place instead of leaving the old content up and appending a
+  // separate row. The standalone m.room.redaction event itself is
+  // dropped (returns null below) — it is never its own row.
+  if (ev.isRedacted() && (type === EventType.RoomMessage || type === EventType.RoomEncrypted)) {
+    return {
+      type: 'm.room.redaction',
+      ...base,
+      redacts: base.eventId,
+      reason: null,
+    };
+  }
+
   if (type === EventType.RoomMessage) {
     const c = ev.getContent();
     const body = decodeMessageBody(c);
@@ -371,13 +386,11 @@ export function toTimelineEvent(ev: MatrixEvent): TimelineEvent | null {
       avatarUrl: typeof c.avatar_url === 'string' ? (c.avatar_url as MxcUri) : null,
     };
   }
+  // Standalone redaction events are never rendered as their own row —
+  // a deletion is shown by re-rendering its TARGET message in place as
+  // a tombstone (see the isRedacted() branch above). Drop it.
   if (type === EventType.RoomRedaction) {
-    return {
-      type: 'm.room.redaction',
-      ...base,
-      redacts: (ev.event.redacts ?? '') as EventId,
-      reason: typeof ev.getContent()?.reason === 'string' ? (ev.getContent().reason as string) : null,
-    };
+    return null;
   }
   return null;
 }

@@ -88,6 +88,14 @@ export function MessageBubble(props: {
   const isMine = () => props.ev.sender === props.me;
   const [showMenu, setShowMenu] = createSignal(false);
   const [showEmoji, setShowEmoji] = createSignal(false);
+  // Inline translation state (Telegram-style "Translate" action). Holds
+  // the translated text + detected source lang once fetched; `showOriginal`
+  // toggles between the original body and the translation in place.
+  const [translation, setTranslation] = createSignal<{ text: string; source: string | null } | null>(
+    null,
+  );
+  const [translating, setTranslating] = createSignal(false);
+  const [showOriginal, setShowOriginal] = createSignal(false);
   // We pin the bubble container so click-outside / Escape can dismiss
   // the popovers without piggybacking on `onMouseLeave` (which used
   // to close the menu the instant the cursor crossed a 1-px gap on
@@ -168,6 +176,40 @@ export function MessageBubble(props: {
       // ignore
     }
     setShowMenu(false);
+  };
+
+  const translatableText = (): string | null =>
+    msg.content.msgtype === 'm.text' && msg.content.body.trim() ? msg.content.body : null;
+
+  // Translate to the user's UI language via the same-origin /api/translate
+  // edge proxy (keyless, server-side fetch → no CORS). Re-invoking once a
+  // translation exists just toggles original/translation rather than refetching.
+  const translate = async () => {
+    setShowMenu(false);
+    const src = translatableText();
+    if (!src) return;
+    if (translation()) {
+      setShowOriginal((v) => !v);
+      return;
+    }
+    setTranslating(true);
+    try {
+      const target = (navigator.language || 'en').split('-')[0];
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: src, target }),
+      });
+      const data = (await res.json()) as { text: string | null; source: string | null };
+      if (data.text) {
+        setTranslation({ text: data.text, source: data.source });
+        setShowOriginal(false);
+      }
+    } catch {
+      // network/parse failure → silently leave original; user can retry
+    } finally {
+      setTranslating(false);
+    }
   };
 
   return (
@@ -271,17 +313,40 @@ export function MessageBubble(props: {
             </button>
           </Show>
 
-          <span class="whitespace-pre-wrap break-words">
-            <Body
-              msg={msg}
-              me={props.me}
-              onOpenImage={
-                props.actions.onOpenImage
-                  ? () => props.actions.onOpenImage?.(msg.eventId)
-                  : undefined
-              }
-            />
-          </span>
+          <Show
+            when={translation() && !showOriginal()}
+            fallback={
+              <span class="whitespace-pre-wrap break-words">
+                <Body
+                  msg={msg}
+                  me={props.me}
+                  onOpenImage={
+                    props.actions.onOpenImage
+                      ? () => props.actions.onOpenImage?.(msg.eventId)
+                      : undefined
+                  }
+                />
+              </span>
+            }
+          >
+            <span class="whitespace-pre-wrap break-words">{translation()?.text}</span>
+          </Show>
+
+          {/* Translation status / attribution row */}
+          <Show when={translating()}>
+            <span class="mt-1 block text-[11px] opacity-60">Translating…</span>
+          </Show>
+          <Show when={translation()}>
+            <button
+              type="button"
+              onClick={() => setShowOriginal((v) => !v)}
+              class="mt-0.5 block text-[11px] opacity-60 transition-opacity hover:opacity-100"
+            >
+              <Show when={!showOriginal()} fallback="Show translation">
+                Translated{translation()?.source ? ` from ${translation()!.source!.toUpperCase()}` : ''} · Show original
+              </Show>
+            </button>
+          </Show>
 
           {/*
            * Link preview card. Only rendered for text-class
@@ -331,9 +396,14 @@ export function MessageBubble(props: {
            * stays active and the toolbar doesn't flicker out from
            * under the user.
            *
-           * Horizontal anchor: floats toward the bubble's "outside"
-           * shoulder (left edge for own messages, right edge for
-           * others) so it never covers the timestamp / reply preview.
+           * Horizontal anchor: pinned to the bubble's INNER shoulder
+           * (right edge for own messages, left edge for others) so the
+           * pill always grows toward the open center of the timeline.
+           * Anchoring to the outer shoulder looked tidier on wide
+           * bubbles but broke on short ones — a pill wider than its
+           * bubble spilled past the frame edge, and the overflowed
+           * react buttons got clipped by the scroller and became
+           * unclickable. Inner-shoulder anchoring can't overflow.
            * Uses `opacity` + `pointer-events` rather than `hidden` —
            * `hidden` causes the menu/emoji popovers to re-mount when
            * the user moves the cursor away momentarily, losing their
@@ -345,7 +415,7 @@ export function MessageBubble(props: {
               showMenu() || showEmoji()
                 ? 'pointer-events-auto opacity-100'
                 : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100'
-            } ${isMine() ? 'left-2' : 'right-2'}`}
+            } ${isMine() ? 'right-2' : 'left-2'}`}
           >
             <div
               class="flex items-center gap-0.5 rounded-full border bg-elev px-1 py-0.5 shadow-md"
@@ -451,6 +521,11 @@ export function MessageBubble(props: {
                 <MenuDivider />
                 <MenuItem onClick={copyText}>Copy text</MenuItem>
                 <MenuItem onClick={copyPermalink}>Copy link</MenuItem>
+                <Show when={translatableText()}>
+                  <MenuItem onClick={translate}>
+                    {translation() ? (showOriginal() ? 'Show translation' : 'Show original') : 'Translate'}
+                  </MenuItem>
+                </Show>
                 <Show when={isMine() && msg.content.msgtype === 'm.text'}>
                   <MenuDivider />
                   <MenuItem
@@ -484,7 +559,7 @@ export function MessageBubble(props: {
           <Show when={showEmoji()}>
             <div
               class={`absolute bottom-full z-30 mb-2 ${
-                isMine() ? 'left-0' : 'right-0'
+                isMine() ? 'right-0' : 'left-0'
               }`}
             >
               <EmojiPicker

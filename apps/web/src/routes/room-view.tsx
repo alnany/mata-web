@@ -1824,7 +1824,7 @@ export function RoomView(props: {
       <div
         ref={scrollerRef}
         onScroll={onScroll}
-        class="h-full min-h-0 overflow-y-auto px-4 py-4"
+        class="h-full min-h-0 overflow-y-auto overflow-x-hidden px-4 py-4"
         data-mata-timeline
       >
         <Show when={props.cache.loaded} fallback={<LoadingStub />}>

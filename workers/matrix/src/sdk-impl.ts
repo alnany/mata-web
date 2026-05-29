@@ -53,6 +53,7 @@ import type {
   MediaInfo,
   RoomDelta,
   SearchHit,
+  ReactionAggregate,
 } from '@mata/shared/matrix';
 import { authError, networkError, syncError } from '@mata/shared/errors';
 import type { WorkerEvent } from '@mata/shared/rpc';
@@ -270,6 +271,80 @@ export class SdkSession {
    * slipped through RoomEvent.Timeline / MatrixEventEvent.Decrypted on
    * reconnect / gap-fill paths, where the UI lags the SDK's state.
    */
+  /**
+   * Aggregate the annotation (reaction) relations for a target event
+   * into the per-key {count, selfReacted} rows the UI renders. Reads
+   * the same relations container `sendReaction` writes to, so an
+   * optimistic local-echo reaction shows up immediately. Redacted
+   * (un-reacted) annotations are excluded.
+   */
+  private reactionsFor(room: Room, eventId: string): ReactionAggregate[] {
+    const rels = room
+      .getUnfilteredTimelineSet()
+      .relations?.getChildEventsForEvent(eventId, RelationType.Annotation, EventType.Reaction)
+      ?.getRelations();
+    if (!rels || rels.length === 0) return [];
+    const myId = this.client?.getUserId() ?? null;
+    const agg = new Map<string, { count: number; self: boolean }>();
+    for (const e of rels) {
+      if (e.isRedacted()) continue;
+      const key = e.getRelation()?.key;
+      if (typeof key !== 'string' || key.length === 0) continue;
+      const cur = agg.get(key) ?? { count: 0, self: false };
+      cur.count += 1;
+      if (e.getSender() === myId) cur.self = true;
+      agg.set(key, cur);
+    }
+    return [...agg.entries()].map(([key, v]) => ({
+      key,
+      count: v.count,
+      selfReacted: v.self,
+    }));
+  }
+
+  /**
+   * Map a raw SDK event to our timeline shape AND attach its current
+   * reaction aggregate. `toTimelineEvent` alone can't do this — it has
+   * no room context to read the relations container — so every
+   * room-scoped emit path funnels through here instead.
+   */
+  private toTev(ev: MatrixEvent, room: Room): TimelineEvent | null {
+    const tev = toTimelineEvent(ev);
+    if (tev && tev.type === 'm.room.message') {
+      (tev as { reactions: ReactionAggregate[] }).reactions = this.reactionsFor(
+        room,
+        tev.eventId,
+      );
+    }
+    return tev;
+  }
+
+  /**
+   * Re-emit a single message with freshly recomputed reactions. Called
+   * when a reaction (or a reaction's redaction) lands on the live
+   * timeline — the reaction event itself isn't rendered, but its target
+   * message needs to repaint its pill row. The UI's identity-preserving
+   * merge diffs by JSON, so an unchanged target is a no-op and only a
+   * real count change repaints.
+   */
+  private emitReactionUpdate(room: Room, client: MatrixClient, targetId: string): void {
+    const target = room.findEventById(targetId as EventId);
+    if (!target) return;
+    const tev = this.toTev(target, room);
+    if (!tev) return;
+    this.emit({
+      kind: 'syncUpdate',
+      deltas: [
+        {
+          roomId: room.roomId as RoomId,
+          summary: partialSummary(room, client),
+          newEvents: [tev],
+        },
+      ],
+      nextBatch: client.getSyncStateData()?.nextSyncToken ?? '',
+    });
+  }
+
   private emitSubscribedRoomTail(): void {
     const c = this.client;
     if (!c) return;
@@ -282,7 +357,7 @@ export class SdkSession {
     const tail = live.slice(-SdkSession.RECONCILE_TAIL_SIZE);
     const events: TimelineEvent[] = [];
     for (const e of tail) {
-      const tev = toTimelineEvent(e);
+      const tev = this.toTev(e, room);
       if (tev) events.push(tev);
     }
     if (events.length === 0) return;
@@ -343,7 +418,7 @@ export class SdkSession {
       }
     }
     return {
-      events: events.map((e) => toTimelineEvent(e)).filter((e): e is TimelineEvent => e !== null),
+      events: events.map((e) => this.toTev(e, room)).filter((e): e is TimelineEvent => e !== null),
       prevToken: liveTimeline.getPaginationToken('b' as unknown as Parameters<typeof liveTimeline.getPaginationToken>[0]),
       readUpToEventId,
     };
@@ -2243,7 +2318,38 @@ export class SdkSession {
         return;
       }
 
-      const tev = toTimelineEvent(event);
+      // Reactions aren't rendered as their own row — they mutate the
+      // pill on their TARGET message. The reaction event (incoming or
+      // our own local echo) won't survive `toTev` (it maps to null), so
+      // catch it here and re-emit the target with a fresh aggregate.
+      if (type === EventType.Reaction) {
+        const targetId = event.getRelation()?.event_id;
+        if (targetId) this.emitReactionUpdate(room, client, targetId);
+        return;
+      }
+      // A redaction whose target is a reaction == an un-react. Re-emit
+      // the reaction's parent message so the pill count drops live.
+      // (Message redactions fall through to the normal mapping path.)
+      if (type === EventType.RoomRedaction) {
+        const redactedId =
+          (event.getContent() as { redacts?: string }).redacts ?? event.getAssociatedId();
+        if (redactedId) {
+          const redacted = room.findEventById(redactedId);
+          if (redacted?.getType() === EventType.Reaction) {
+            // un-react → repaint the reaction's PARENT message
+            const parentId = redacted.getRelation()?.event_id;
+            if (parentId) this.emitReactionUpdate(room, client, parentId);
+          } else {
+            // message deletion → repaint the TARGET in place as a
+            // "removed" tombstone (toTimelineEvent maps a redacted
+            // message to m.room.redaction with its own id).
+            this.emitReactionUpdate(room, client, redactedId);
+          }
+          return;
+        }
+      }
+
+      const tev = this.toTev(event, room);
       if (!tev) return;
       // Drop local echoes for ordinary message events — same reason as
       // the call-events branch above. matrix-js-sdk surfaces every send
@@ -2320,7 +2426,7 @@ export class SdkSession {
         return;
       }
 
-      const tev = toTimelineEvent(event);
+      const tev = this.toTev(event, room);
       if (!tev) return;
       this.emit({
         kind: 'syncUpdate',
