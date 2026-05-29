@@ -21,6 +21,11 @@ import { EmojiPicker } from './emoji-picker.js';
  * - Grouping: when `showHeader` is false (consecutive same-sender), name + avatar collapse
  */
 
+// Top-3 one-tap reactions shown inline in the hover toolbar. Kept
+// short so the toolbar stays compact; the 😊 picker covers everything
+// else.
+const QUICK_REACTIONS = ['👍', '❤️', '😂'] as const;
+
 export type MessageActions = {
   onReply: (ev: RoomMessageEvent) => void;
   onReact: (eventId: EventId, key: string) => void;
@@ -252,6 +257,28 @@ export function MessageBubble(props: {
               class="flex items-center gap-0.5 rounded-full border bg-elev px-1 py-0.5 shadow-md"
               style={{ 'border-color': 'var(--color-line)' }}
             >
+              {/*
+               * Quick-react cluster — one tap fires the reaction without
+               * opening the full picker (Telegram's hover-react row). The
+               * 😊 button beside it still opens the complete picker for
+               * anything outside this top-3 set. Toggles like any other
+               * reaction, so a second tap on the same key removes it.
+               */}
+              <For each={QUICK_REACTIONS}>
+                {(emoji) => (
+                  <ActionBtn
+                    title={`React ${emoji}`}
+                    onClick={() => props.actions.onReact(msg.eventId, emoji)}
+                  >
+                    <span class="text-base leading-none">{emoji}</span>
+                  </ActionBtn>
+                )}
+              </For>
+              <span
+                class="mx-0.5 h-4 w-px shrink-0"
+                style={{ background: 'var(--color-line)' }}
+                aria-hidden="true"
+              />
               <ActionBtn
                 title="React"
                 onClick={() => {
