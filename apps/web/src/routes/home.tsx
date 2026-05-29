@@ -162,7 +162,22 @@ export function HomePage() {
   );
 
   // -------- Active room + per-room cache --------------------------------
-  const [activeId, setActiveId] = createSignal<RoomId | null>(null);
+  // The activeId is persisted to localStorage so a hard refresh restores
+  // the room the user was last looking at — the alternative (empty pane
+  // after every refresh, "click your room again") is a friction point
+  // even on a 60-room account. We also auto-select the top room on
+  // first paint when nothing is persisted (matches Telegram Web /
+  // Element web: app boots straight into a conversation).
+  const LAST_ROOM_KEY = 'mata:lastRoomId';
+  const [activeId, setActiveId] = createSignal<RoomId | null>(
+    (() => {
+      try {
+        return (localStorage.getItem(LAST_ROOM_KEY) || null) as RoomId | null;
+      } catch {
+        return null;
+      }
+    })(),
+  );
   const [caches, setCaches] = createStore<Record<string, RoomCache>>({});
   const updateCache = (roomId: RoomId, updater: (c: RoomCache) => void) => {
     setCaches(
@@ -176,7 +191,37 @@ export function HomePage() {
   const openRoom = (room: RoomSummary) => {
     if (!caches[room.roomId]) setCaches(room.roomId, createRoomCache(room.roomId));
     setActiveId(room.roomId);
+    try {
+      localStorage.setItem(LAST_ROOM_KEY, room.roomId);
+    } catch {
+      /* private mode; non-fatal */
+    }
   };
+
+  // Auto-select the top room on first paint. Two scenarios:
+  //   (a) persisted activeId points at a room that's still in the list →
+  //       just make sure it has a cache entry (already handled below
+  //       via the activeRoom memo).
+  //   (b) no activeId, or persisted id no longer exists (left room,
+  //       account switch) → fall back to the top room by lastActivityTs
+  //       so the app opens straight into the latest conversation, like
+  //       Telegram Web does.
+  let autoSelected = false;
+  createEffect(() => {
+    const list = rooms();
+    if (!list || list.length === 0 || autoSelected) return;
+    const joined = list.filter((r) => r.membership === 'join');
+    if (joined.length === 0) return;
+    const current = activeId();
+    const stillThere = current && joined.some((r) => r.roomId === current);
+    if (!stillThere) {
+      // `joined` is pre-sorted by lastActivityTs desc via sortRooms.
+      openRoom(joined[0]);
+    } else if (current && !caches[current]) {
+      setCaches(current, createRoomCache(current));
+    }
+    autoSelected = true;
+  });
 
   const activeRoom = createMemo<RoomSummary | null>(() => {
     const id = activeId();
@@ -436,6 +481,7 @@ export function HomePage() {
       <NewRoomModal
         open={newRoomOpen()}
         onClose={() => setNewRoomOpen(false)}
+        rooms={rooms()}
         onCreated={(roomId) => {
           navigate(`/rooms/${encodeURIComponent(roomId)}`);
           setActiveId(roomId);
