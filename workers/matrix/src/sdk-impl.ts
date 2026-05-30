@@ -75,6 +75,7 @@ import {
   saveSession,
   clearSession,
   touchSession,
+  loadActiveSession,
 } from './session-store.js';
 import { clearMediaCache } from './media-cache.js';
 
@@ -398,7 +399,7 @@ export class SdkSession {
     fromToken: string | null,
     limit: number,
   ): Promise<{ events: TimelineEvent[]; prevToken: string | null; readUpToEventId: string | null }> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     // Cold-start race: the IndexedDB room-list cache paints rooms
     // before the SDK's first /sync populates client state. If the user
     // clicks one of those cached rows during the gap, c.getRoom is
@@ -2174,9 +2175,33 @@ export class SdkSession {
     while (!this.client && Date.now() - start < timeoutMs) {
       await new Promise((r) => setTimeout(r, 100));
     }
+    if (this.client) return this.client;
+    // Self-heal: the in-memory client is gone but the session may still be
+    // persisted. Safari/WebKit suspends or tears down idle Web Workers far
+    // more aggressively than Chrome — when the worker is resumed (or a fresh
+    // one is spun up) `this.client` is null even though the user is still
+    // logged in. Rather than surfacing a spurious "Not logged in" on the next
+    // network RPC (e.g. scroll-up pagination), rehydrate from the stored
+    // SessionRecord once. A single in-flight guard prevents concurrent RPCs
+    // from each kicking off their own boot.
+    if (!this.rebootInFlight) {
+      this.rebootInFlight = (async () => {
+        const record = await loadActiveSession();
+        if (record) await this.bootClient(record);
+      })().finally(() => {
+        this.rebootInFlight = null;
+      });
+    }
+    try {
+      await this.rebootInFlight;
+    } catch {
+      /* fall through to the throw below */
+    }
     if (!this.client) throw authError('Not logged in');
     return this.client;
   }
+
+  private rebootInFlight: Promise<void> | null = null;
 
   private async probeSyncStartup(client: MatrixClient): Promise<void> {
     // Reproduce the SDK's startup prerequisites with explicit timeouts +
