@@ -361,6 +361,13 @@ export function toTimelineEvent(ev: MatrixEvent): TimelineEvent | null {
   }
 
   if (type === EventType.RoomMessage) {
+    // An m.replace edit event is NEVER its own row. The SDK applies the
+    // edit to its target in-place (the target's getContent() then
+    // returns m.new_content and replacingEventId() drives the "edited"
+    // pill), so rendering the edit event itself would add a phantom
+    // duplicate row showing the "* newtext" fallback body. Drop it; the
+    // target message carries the edited content.
+    if (ev.getRelation()?.rel_type === 'm.replace') return null;
     const c = ev.getContent();
     const body = decodeMessageBody(c);
     return {

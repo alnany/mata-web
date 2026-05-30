@@ -2837,6 +2837,35 @@ export class SdkSession {
         }
       }
 
+      // Live edit repaint: an m.replace edit is never its own row (toTev
+      // maps it to null); re-emit the TARGET so the original repaints
+      // with the new body + edited pill. No-op if the replacement hasn't
+      // applied yet — the reconcile tail re-emits the target next tick.
+      {
+        const rel = event.getRelation();
+        if (rel?.rel_type === 'm.replace') {
+          const targetId = rel.event_id;
+          if (targetId) {
+            const target = room.findEventById(targetId as EventId);
+            const targetTev = target ? this.toTev(target, room) : null;
+            if (targetTev) {
+              this.emit({
+                kind: 'syncUpdate',
+                deltas: [
+                  {
+                    roomId: room.roomId as RoomId,
+                    summary: partialSummary(room, client),
+                    newEvents: [targetTev],
+                  },
+                ],
+                nextBatch: client.getSyncStateData()?.nextSyncToken ?? '',
+              });
+            }
+          }
+          return;
+        }
+      }
+
       const tev = this.toTev(event, room);
       if (!tev) return;
       // Drop local echoes for ordinary message events — same reason as
@@ -2912,6 +2941,34 @@ export class SdkSession {
           content,
         });
         return;
+      }
+
+      // Live edit repaint, E2EE path: edit rides inside m.room.encrypted
+      // and surfaces here post-decrypt. Mirror the cleartext Timeline tap
+      // — re-emit the TARGET so the original repaints with the new body.
+      {
+        const rel = event.getRelation();
+        if (rel?.rel_type === 'm.replace') {
+          const targetId = rel.event_id;
+          if (targetId) {
+            const target = room.findEventById(targetId as EventId);
+            const targetTev = target ? this.toTev(target, room) : null;
+            if (targetTev) {
+              this.emit({
+                kind: 'syncUpdate',
+                deltas: [
+                  {
+                    roomId: roomId as RoomId,
+                    summary: partialSummary(room, client),
+                    newEvents: [targetTev],
+                  },
+                ],
+                nextBatch: client.getSyncStateData()?.nextSyncToken ?? '',
+              });
+            }
+          }
+          return;
+        }
       }
 
       const tev = this.toTev(event, room);
