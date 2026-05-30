@@ -180,6 +180,14 @@ export function RoomView(props: {
 
   let scrollerRef: HTMLDivElement | undefined;
   const [stickToBottom, setStickToBottom] = createSignal(true);
+  // Count of messages from others that arrived while the user was
+  // scrolled up — rendered as a badge on the jump-to-bottom pill
+  // (Telegram-style). Reset to 0 the moment we re-stick to the bottom.
+  const [newMsgCount, setNewMsgCount] = createSignal(0);
+  // Any path that re-sticks us to the bottom clears the new-message tally.
+  createEffect(() => {
+    if (stickToBottom()) setNewMsgCount(0);
+  });
   const [typingUsers, setTypingUsers] = createSignal<UserId[]>([]);
   // Other members' read positions → read-by avatar clusters. Keyed by
   // the event each member has read up to.
@@ -698,6 +706,15 @@ export function RoomView(props: {
     });
     if (stickToBottom()) {
       requestAnimationFrame(() => scrollToBottom('smooth'));
+    } else {
+      // Scrolled up: tally genuinely-new messages from others so the
+      // jump-to-bottom pill can surface a Telegram-style unread badge.
+      const meId = me();
+      let added = 0;
+      for (const ev of delta.newEvents) {
+        if (ev.type === 'm.room.message' && ev.sender !== meId) added += 1;
+      }
+      if (added > 0) setNewMsgCount((n) => n + added);
     }
     // Read receipt at the bottom of the cache.
     const last = props.cache.events[props.cache.events.length - 1];
@@ -2004,15 +2021,25 @@ export function RoomView(props: {
             onClick={() => {
               scrollToBottom('smooth');
               setStickToBottom(true);
+              setNewMsgCount(0);
             }}
             class="absolute bottom-3 right-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border bg-elev text-fg shadow-lg transition-transform hover:scale-110"
             style={{ 'border-color': 'var(--color-line)' }}
-            aria-label="Jump to latest"
-            title="Jump to latest"
+            aria-label={newMsgCount() > 0 ? `${newMsgCount()} new messages — jump to latest` : 'Jump to latest'}
+            title={newMsgCount() > 0 ? `${newMsgCount()} new` : 'Jump to latest'}
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M4 7l4 4 4-4" />
             </svg>
+            {/* Unread-count badge (Telegram-style) — caps at 99+ */}
+            <Show when={newMsgCount() > 0}>
+              <span
+                class="absolute -top-1.5 left-1/2 -translate-x-1/2 rounded-full bg-mata-500 px-1.5 text-[10px] font-semibold leading-[15px] text-white shadow"
+                style={{ 'min-width': '16px' }}
+              >
+                {newMsgCount() > 99 ? '99+' : newMsgCount()}
+              </span>
+            </Show>
           </button>
         </Show>
       </div>
