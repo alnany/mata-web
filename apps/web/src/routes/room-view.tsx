@@ -1804,6 +1804,7 @@ export function RoomView(props: {
             onShowMembers={() => setMembersOpen((v) => !v)}
             searchOpen={searchOpen()}
             onShowSearch={() => setSearchOpen((v) => !v)}
+            onLeft={() => props.onRoomUnavailable?.(props.room.roomId)}
           />
         }
       >

@@ -166,6 +166,8 @@ export type MainToWorkerRequest =
   | { kind: 'setRoomName'; roomId: RoomId; name: string }
   | { kind: 'setRoomTopic'; roomId: RoomId; topic: string }
   | { kind: 'setRoomAvatar'; roomId: RoomId; mxc: MxcUri }
+  | { kind: 'setMemberPowerLevel'; roomId: RoomId; userId: UserId; powerLevel: number }
+  | { kind: 'forgetRoom'; roomId: RoomId }
   | { kind: 'sendReaction'; roomId: RoomId; eventId: EventId; key: string }
   | { kind: 'sendTyping'; roomId: RoomId; timeoutMs: number }
   | { kind: 'sendReadReceipt'; roomId: RoomId; eventId: EventId }
@@ -422,10 +424,14 @@ export type MainToWorkerResponse =
       canSetName: boolean;
       canSetTopic: boolean;
       canSetAvatar: boolean;
+      canSetPowerLevel: boolean;
+      myPowerLevel: number;
     }
   | { kind: 'setRoomName' }
   | { kind: 'setRoomTopic' }
   | { kind: 'setRoomAvatar' }
+  | { kind: 'setMemberPowerLevel' }
+  | { kind: 'forgetRoom' }
   | { kind: 'sendReaction' }
   | { kind: 'sendTyping' }
   | { kind: 'sendReadReceipt' }

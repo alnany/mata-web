@@ -1,11 +1,12 @@
-import { createResource, createSignal, onMount, Show } from 'solid-js';
-import type { RoomSummary, UserId } from '@mata/shared/matrix';
+import { createResource, createSignal, onMount, For, Show } from 'solid-js';
+import type { RoomMember, RoomSummary, UserId } from '@mata/shared/matrix';
 import { prettyName, initials, gradientForUser } from './message-bubble.js';
 import { PresenceDot } from './presence-dot.js';
 import { useBridge } from '../bridge/context.js';
 import { activeCall, placeCall } from '../stores/call.js';
 import { showToast } from '../stores/toast.js';
 import { presenceOf, lastSeenLabel, ensurePresence } from '../stores/presence.js';
+import { session } from '../stores/session.js';
 
 /**
  * Conversation header — design layout (HANDOFF.md §"Conversation header"):
@@ -24,6 +25,8 @@ export function RoomHeader(props: {
   membersOpen?: boolean;
   onShowSearch?: () => void;
   searchOpen?: boolean;
+  /** Called after the user leaves/forgets this room from settings. */
+  onLeft?: () => void;
 }) {
   const [menuOpen, setMenuOpen] = createSignal(false);
   const [infoOpen, setInfoOpen] = createSignal(false);
@@ -177,7 +180,11 @@ export function RoomHeader(props: {
       </Show>
 
       <Show when={infoOpen()}>
-        <RoomSettingsModal room={props.room} onClose={() => setInfoOpen(false)} />
+        <RoomSettingsModal
+          room={props.room}
+          onClose={() => setInfoOpen(false)}
+          onLeft={props.onLeft}
+        />
       </Show>
     </header>
   );
@@ -245,13 +252,22 @@ function MenuItem(props: { onClick: () => void; disabled?: boolean; children: an
  * footer. DMs have no display name to edit, so the name field falls
  * back to read-only there too via the same power gate.
  */
-function RoomSettingsModal(props: { room: RoomSummary; onClose: () => void }) {
+function RoomSettingsModal(props: {
+  room: RoomSummary;
+  onClose: () => void;
+  onLeft?: () => void;
+}) {
   const r = props.room;
   const bridge = useBridge();
+  const s = session();
+  const me: UserId | null = s.phase === 'authenticated' ? s.userId : null;
   const [name, setName] = createSignal('');
   const [topic, setTopic] = createSignal('');
   const [saving, setSaving] = createSignal(false);
   const [uploadingAvatar, setUploadingAvatar] = createSignal(false);
+  const [leaving, setLeaving] = createSignal(false);
+  const [confirmLeave, setConfirmLeave] = createSignal(false);
+  const [savingRole, setSavingRole] = createSignal<string | null>(null);
   let fileInput: HTMLInputElement | undefined;
 
   const [settings] = createResource(
@@ -267,9 +283,69 @@ function RoomSettingsModal(props: { room: RoomSummary; onClose: () => void }) {
     },
   );
 
+  // Member roster for the roles section. Joined members only — pending
+  // invites / left users aren't role-editable here.
+  const [members, { refetch: refetchMembers }] = createResource(
+    () => r.roomId,
+    async (roomId) => {
+      const res = await bridge.request({ kind: 'loadRoomMembers', roomId });
+      if (res.kind !== 'loadRoomMembers') return [] as RoomMember[];
+      return res.members.filter((m) => m.membership === 'join');
+    },
+  );
+
   const canSetName = () => settings()?.canSetName ?? false;
   const canSetTopic = () => settings()?.canSetTopic ?? false;
   const canSetAvatar = () => settings()?.canSetAvatar ?? false;
+  const canSetPowerLevel = () => settings()?.canSetPowerLevel ?? false;
+  const myPower = () => settings()?.myPowerLevel ?? 0;
+
+  const ROLES: { label: string; value: number }[] = [
+    { label: 'Admin', value: 100 },
+    { label: 'Moderator', value: 50 },
+    { label: 'Member', value: 0 },
+  ];
+  const roleLabel = (pl: number) =>
+    pl >= 100 ? 'Admin' : pl >= 50 ? 'Moderator' : 'Member';
+
+  // We may only change a member's role when: the power-levels event is
+  // editable by us, the target isn't ourselves, and the target's current
+  // level is strictly below ours (can't touch peers or superiors).
+  const canEditMember = (m: RoomMember) =>
+    canSetPowerLevel() && m.userId !== me && m.powerLevel < myPower();
+
+  const changeRole = async (m: RoomMember, value: number) => {
+    if (value === m.powerLevel || value >= myPower()) return;
+    setSavingRole(m.userId);
+    try {
+      await bridge.request({
+        kind: 'setMemberPowerLevel',
+        roomId: r.roomId,
+        userId: m.userId,
+        powerLevel: value,
+      });
+      showToast('success', `${prettyName(m.displayname, m.userId)} is now ${roleLabel(value)}`);
+      await refetchMembers();
+    } catch (err) {
+      showToast('error', `Could not change role: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setSavingRole(null);
+    }
+  };
+
+  const leaveRoom = async () => {
+    if (leaving()) return;
+    setLeaving(true);
+    try {
+      await bridge.request({ kind: 'forgetRoom', roomId: r.roomId });
+      showToast('success', 'You left the room');
+      props.onClose();
+      props.onLeft?.();
+    } catch (err) {
+      showToast('error', `Could not leave: ${err instanceof Error ? err.message : 'unknown error'}`);
+      setLeaving(false);
+    }
+  };
 
   const onPickAvatar = async (e: Event) => {
     const input = e.currentTarget as HTMLInputElement;
@@ -452,6 +528,90 @@ function RoomSettingsModal(props: { room: RoomSummary; onClose: () => void }) {
             </button>
           </div>
         </Show>
+
+        <Show when={(members() ?? []).length > 0}>
+          <div class="mt-5 border-t pt-4" style={{ 'border-color': 'var(--color-line)' }}>
+            <div class="mono mb-2 text-[10.5px] uppercase tracking-[0.08em] text-fg-4">
+              Members &amp; roles
+            </div>
+            <ul class="max-h-56 space-y-1 overflow-y-auto">
+              <For each={members()}>
+                {(m) => (
+                  <li class="flex items-center gap-2 rounded-lg px-1 py-1">
+                    <div class="min-w-0 flex-1">
+                      <div class="truncate text-[13px] text-fg">
+                        {prettyName(m.displayname, m.userId)}
+                        <Show when={m.userId === me}>
+                          <span class="ml-1 text-[10px] text-fg-3">(you)</span>
+                        </Show>
+                      </div>
+                      <div class="mono truncate text-[10px] text-fg-4">{m.userId}</div>
+                    </div>
+                    <Show
+                      when={canEditMember(m)}
+                      fallback={
+                        <span class="shrink-0 text-[11px] text-fg-3">{roleLabel(m.powerLevel)}</span>
+                      }
+                    >
+                      <select
+                        value={ROLES.find((x) => x.value === m.powerLevel)?.value ?? m.powerLevel}
+                        disabled={savingRole() === m.userId}
+                        onChange={(e) => void changeRole(m, Number(e.currentTarget.value))}
+                        class="shrink-0 rounded-md border border-line bg-elev px-2 py-1 text-[12px] text-fg-2 focus:border-mata-500 focus:outline-none disabled:opacity-50"
+                      >
+                        <For each={ROLES.filter((x) => x.value < myPower() || x.value === m.powerLevel)}>
+                          {(role) => <option value={role.value}>{role.label}</option>}
+                        </For>
+                      </select>
+                    </Show>
+                  </li>
+                )}
+              </For>
+            </ul>
+            <Show when={!canSetPowerLevel()}>
+              <p class="mt-2 text-[11px] text-fg-3">
+                You don't have permission to change member roles.
+              </p>
+            </Show>
+          </div>
+        </Show>
+
+        <div class="mt-4 border-t pt-4" style={{ 'border-color': 'var(--color-line)' }}>
+          <Show
+            when={confirmLeave()}
+            fallback={
+              <button
+                type="button"
+                onClick={() => setConfirmLeave(true)}
+                class="w-full rounded-lg border border-red-500/40 px-3 py-2 text-[13px] font-medium text-red-500 transition-colors hover:bg-red-500/10"
+              >
+                Leave room
+              </button>
+            }
+          >
+            <p class="mb-2 text-[12px] text-fg-2">
+              Leave this room? It'll be removed from your list. You'll need a new invite to rejoin.
+            </p>
+            <div class="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmLeave(false)}
+                disabled={leaving()}
+                class="flex-1 rounded-lg border border-line px-3 py-1.5 text-[13px] text-fg-2 hover:bg-input disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void leaveRoom()}
+                disabled={leaving()}
+                class="flex-1 rounded-lg bg-red-500 px-3 py-1.5 text-[13px] font-semibold text-white transition-[filter] hover:brightness-95 disabled:opacity-50"
+              >
+                {leaving() ? 'Leaving…' : 'Leave room'}
+              </button>
+            </div>
+          </Show>
+        </div>
 
         <dl
           class="mt-5 space-y-2 border-t pt-4 text-[13px]"

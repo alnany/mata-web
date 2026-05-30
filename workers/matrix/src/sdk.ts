@@ -202,6 +202,18 @@ export class MatrixCore {
     return this.requireSession().setRoomAvatar(roomId, mxc);
   }
 
+  async setMemberPowerLevel(
+    roomId: RoomId,
+    userId: UserId,
+    powerLevel: number,
+  ): Promise<void> {
+    return this.requireSession().setMemberPowerLevel(roomId, userId, powerLevel);
+  }
+
+  async forgetRoom(roomId: RoomId): Promise<void> {
+    return this.requireSession().forgetRoom(roomId);
+  }
+
   async setWebPusher(
     subscription: WebPushSubscriptionJson,
     gatewayUrl: string,

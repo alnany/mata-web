@@ -748,6 +748,8 @@ export class SdkSession {
     canSetName: boolean;
     canSetTopic: boolean;
     canSetAvatar: boolean;
+    canSetPowerLevel: boolean;
+    myPowerLevel: number;
   }> {
     const c = this.requireClient();
     const room = c.getRoom(roomId);
@@ -762,12 +764,27 @@ export class SdkSession {
     let canSetName = false;
     let canSetTopic = false;
     let canSetAvatar = false;
+    let canSetPowerLevel = false;
     try {
       canSetName = room.currentState.maySendStateEvent('m.room.name', me);
       canSetTopic = room.currentState.maySendStateEvent('m.room.topic', me);
       canSetAvatar = room.currentState.maySendStateEvent('m.room.avatar', me);
+      // Editing roles is itself gated by the power-levels state event.
+      canSetPowerLevel = room.currentState.maySendStateEvent('m.room.power_levels', me);
     } catch {
       /* power levels unavailable — leave fields read-only */
+    }
+    // Our own effective power level — the UI uses this to forbid
+    // promoting anyone above ourselves or demoting peers/superiors.
+    let myPowerLevel = 0;
+    try {
+      const plEvent = room.currentState.getStateEvents('m.room.power_levels', '');
+      const pl = (plEvent?.getContent() as
+        | { users?: Record<string, number>; users_default?: number }
+        | undefined) ?? {};
+      myPowerLevel = pl.users?.[me] ?? pl.users_default ?? 0;
+    } catch {
+      /* default 0 */
     }
     return {
       name: typeof nameRaw === 'string' ? nameRaw : (room.name ?? ''),
@@ -775,7 +792,40 @@ export class SdkSession {
       canSetName,
       canSetTopic,
       canSetAvatar,
+      canSetPowerLevel,
+      myPowerLevel,
     };
+  }
+
+  /**
+   * Promote / demote a member by writing their entry into the room's
+   * `m.room.power_levels` users map. matrix-js-sdk's `setPowerLevel`
+   * merges into the existing content, so unrelated members keep their
+   * levels. The homeserver itself enforces that we can't grant a level
+   * above our own; the UI gates this too for a clean error-free path.
+   */
+  async setMemberPowerLevel(
+    roomId: RoomId,
+    userId: UserId,
+    powerLevel: number,
+  ): Promise<void> {
+    const c = this.requireClient();
+    await c.setPowerLevel(roomId, userId, powerLevel);
+  }
+
+  /**
+   * Forget a room — drops it from our account's room list server-side
+   * after a leave, so it stops reappearing on next sync. We leave first
+   * (idempotent: a 403 "already left" is swallowed) then forget.
+   */
+  async forgetRoom(roomId: RoomId): Promise<void> {
+    const c = this.requireClient();
+    try {
+      await c.leave(roomId);
+    } catch {
+      /* already left / not joined — forget anyway */
+    }
+    await c.forget(roomId);
   }
 
   /** Set the room display name (`m.room.name` state event). */

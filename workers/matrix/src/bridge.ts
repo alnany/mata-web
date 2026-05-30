@@ -154,6 +154,14 @@ const handlers: Handlers = {
     await core.setRoomAvatar(req.roomId, req.mxc);
     return { kind: 'setRoomAvatar' };
   },
+  setMemberPowerLevel: async (req, core) => {
+    await core.setMemberPowerLevel(req.roomId, req.userId, req.powerLevel);
+    return { kind: 'setMemberPowerLevel' };
+  },
+  forgetRoom: async (req, core) => {
+    await core.forgetRoom(req.roomId);
+    return { kind: 'forgetRoom' };
+  },
   fetchEvent: async (req, core) => {
     const event = await core.fetchEvent(req.roomId, req.eventId);
     return { kind: 'fetchEvent', event };
