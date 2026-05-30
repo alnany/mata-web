@@ -13,7 +13,7 @@ import { activeCall } from '../stores/call.js';
 import { mountPresence } from '../stores/presence.js';
 import type { EventId, RoomId, RoomSummary, SearchHit, UserId } from '@mata/shared/matrix';
 import { RoomView, createRoomCache, type RoomCache } from './room-view.js';
-import { mergeEvents, reconcilePending } from '../lib/timeline-merge.js';
+import { applySendStatus, mergeEvents, reconcilePending } from '../lib/timeline-merge.js';
 import { SettingsDrawer } from '../components/settings-drawer.js';
 import { dispatchSyncDeltas, setRoomCounts } from '../stores/notifications.js';
 import { NewRoomModal } from '../components/new-room-modal.js';
@@ -375,22 +375,9 @@ export function HomePage() {
     bridge.on('sendStatus', (e) => {
       if (!caches[e.roomId]) return;
       updateCache(e.roomId, (c) => {
-        const idx = c.pending.findIndex((p) => p.txnId === e.txnId);
-        if (idx < 0) return;
-        if (e.status === 'sent') {
-          const next = c.pending.slice();
-          next[idx] = { ...next[idx], expectedEventId: e.eventId };
-          c.pending = next;
-        } else if (e.status === 'failed') {
-          const next = c.pending.slice();
-          next[idx] = {
-            ...next[idx],
-            status: 'failed',
-            errorReason: e.error?.message ?? 'send failed',
-          };
-          c.pending = next;
-          showToast('error', `Send failed: ${next[idx].errorReason}`);
-        }
+        const { pending, failedReason } = applySendStatus(c.pending, e);
+        if (pending !== c.pending) c.pending = pending;
+        if (failedReason) showToast('error', `Send failed: ${failedReason}`);
       });
     }),
   );

@@ -132,3 +132,53 @@ export function reconcilePending<
 
   return kept.length === pending.length ? (pending as P[]) : kept;
 }
+
+/**
+ * A send-confirmation event from the worker (`sendStatus`).
+ */
+export interface SendStatusEvent {
+  txnId: string;
+  status: 'sent' | 'failed';
+  /** Canonical server event id, present on `sent`. */
+  eventId?: string;
+  error?: { message?: string } | null;
+}
+
+/**
+ * Apply a `sendStatus` confirmation to the optimistic pending list.
+ *
+ * - `sent` → record `expectedEventId` so `reconcilePending` can splice
+ *   the bubble the instant the real event lands (single-frame swap, no
+ *   flash). We deliberately do NOT remove the pending entry here: the
+ *   /sync delivery of the confirmed event may not have merged yet, and
+ *   removing early leaves a gap where the bubble vanishes.
+ * - `failed` → flip the entry to a retryable error state and surface
+ *   the reason via the returned `failedReason` (the caller owns the
+ *   toast — this function stays pure / side-effect free).
+ *
+ * Returns the ORIGINAL array reference when the txnId isn't pending, so
+ * the caller can skip a needless reactive write.
+ */
+export function applySendStatus<
+  P extends {
+    txnId: string;
+    expectedEventId?: string;
+    status?: string;
+    errorReason?: string;
+  },
+>(
+  pending: readonly P[],
+  status: SendStatusEvent,
+): { pending: P[]; failedReason: string | null } {
+  const idx = pending.findIndex((p) => p.txnId === status.txnId);
+  if (idx < 0) return { pending: pending as P[], failedReason: null };
+
+  const next = pending.slice();
+  if (status.status === 'sent') {
+    next[idx] = { ...next[idx], expectedEventId: status.eventId };
+    return { pending: next, failedReason: null };
+  }
+  const reason = status.error?.message ?? 'send failed';
+  next[idx] = { ...next[idx], status: 'failed', errorReason: reason };
+  return { pending: next, failedReason: reason };
+}

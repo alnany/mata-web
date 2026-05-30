@@ -650,107 +650,24 @@ export function RoomView(props: {
     ),
   );
 
-  // ---- Live sync deltas ---------------------------------------------------
+  // ---- Live sync deltas: VIEW-SIDE ONLY -----------------------------------
+  // The data layer (home.tsx) is the SINGLE owner of the cache: it is the
+  // only subscriber that merges events and reconciles pending sends, via
+  // the one pure tested reducer (lib/timeline-merge.ts). This view used to
+  // ALSO subscribe and merge with a second, hand-rolled implementation
+  // into the same store — two writers racing over one cache, with two
+  // divergent merge code paths. That dual-write was the root cause of the
+  // "messages double / land in the wrong chat / don't show until refresh"
+  // class (and a double "send failed" toast). The view now NEVER mutates
+  // the cache; home merges first (it subscribes at mount, before this
+  // view), so by the time this runs the store already reflects the delta
+  // and the rows() memo has the new events. We only react to the delta for
+  // VIEW concerns: autoscroll, the jump-to-bottom unread badge, and the
+  // read receipt. No setCache here, ever.
   const unsubSync = bridge.on('syncUpdate', (e) => {
     const delta = e.deltas.find((d) => d.roomId === props.room.roomId);
     if (!delta || delta.newEvents.length === 0) return;
-    // Collect the set of eventIds about to land so we can spot pending
-    // entries the user has already optimistically rendered and splice
-    // them in the SAME setCache transaction the events grow in. Doing
-    // both halves of the swap in one Solid update is what removes the
-    // flash: Solid commits "pending shrinks by 1, events grows by 1"
-    // as a single render — no frame where both bubbles coexist and no
-    // frame where neither exists.
-    const incomingIds = new Set<string>();
-    for (const ev of delta.newEvents) incomingIds.add(ev.eventId);
 
-    props.setCache(props.room.roomId, (c: RoomCache) => {
-      // Replace-or-push by eventId on the events array, assigning a
-      // FRESH array reference. Worker emits the same eventId twice for
-      // E2EE messages: once with type 'm.room.encrypted'
-      // decryptionStatus:'pending' from RoomEvent.Timeline (live insert
-      // placeholder), then again as 'm.room.message' from
-      // MatrixEventEvent.Decrypted once the wasm decrypt finishes.
-      // Skipping on known-id (the old behavior) left the placeholder
-      // pinned and made live replies invisible until a page refresh.
-      //
-      // We assign `c.events = next` instead of mutating in place with
-      // .push() / index assignment because Solid stores nested inside
-      // a parent produce() don't always wake the downstream
-      // createMemo(rows) on bare-array mutations — the symptom is
-      // "inbound message never shows until reload". Full-array
-      // assignment is the same path loadInitial uses and that one
-      // demonstrably propagates.
-      const indexById = new Map<string, number>();
-      const next = c.events.slice();
-      for (let i = 0; i < next.length; i++) {
-        indexById.set(next[i].eventId, i);
-      }
-      // Track whether anything actually changed. The reconcile tail
-      // (subscribeRoom re-emits the last 60 events on EVERY sync tick)
-      // re-sends content-identical events with fresh object references.
-      // The rows() memo invalidates a Row on `msgRow.ev !== ev` (strict
-      // identity), so blindly assigning `next[existing] = ev` for every
-      // re-emit re-mints every Row → <For> remounts every <li> → every
-      // bubble re-fires its 120 ms enter-fade. THAT is the "flashing"
-      // regression. Guard: only replace an existing event when its
-      // rendered content genuinely differs (decrypt placeholder →
-      // cleartext, new edit, reaction count change). Otherwise keep the
-      // OLD reference so unchanged re-emits are a no-op and nothing
-      // re-renders.
-      let mutated = false;
-      for (const ev of delta.newEvents) {
-        const existing = indexById.get(ev.eventId);
-        if (existing !== undefined) {
-          if (!sameRenderedEvent(next[existing], ev)) {
-            next[existing] = ev;
-            mutated = true;
-          }
-        } else {
-          indexById.set(ev.eventId, next.length);
-          next.push(ev);
-          mutated = true;
-        }
-      }
-      // Only assign a fresh array reference when something changed —
-      // an untouched array reference keeps the rows() memo from
-      // recomputing at all on idle reconcile ticks.
-      if (mutated) c.events = next;
-
-      // Atomic pending-bubble lock-in. Drop a pending entry the moment
-      // its confirmed server event lands in this same delta — the real
-      // event is already in `events` above, so the swap is a single
-      // frame (no coexistence = no double, no gap = no flash).
-      //
-      // Two correlation paths, OR'd together:
-      //   1. txnId echo — the homeserver stamps our own
-      //      `unsigned.transaction_id` on the event delivered back to
-      //      THIS device. This is the deterministic match and the real
-      //      double-bubble fix: it does NOT depend on the `sendStatus`
-      //      'sent' message arriving first. The previous code only had
-      //      path 2, so when the reconcile tail delivered the server
-      //      event before sendStatus recorded expectedEventId, the
-      //      optimistic bubble had nothing to match against and lingered
-      //      next to the real one — the "double sent message" the user
-      //      saw.
-      //   2. expectedEventId — fallback for the (rare) event whose
-      //      echoed txnId the server dropped; still resolved once
-      //      sendStatus has recorded the canonical id.
-      if (c.pending.length > 0) {
-        const incomingTxns = new Set<string>();
-        for (const ev of delta.newEvents) {
-          if (ev.txnId) incomingTxns.add(ev.txnId);
-        }
-        const nextPending = c.pending.filter(
-          (p) =>
-            !incomingTxns.has(p.txnId) &&
-            !(p.expectedEventId && incomingIds.has(p.expectedEventId)),
-        );
-        if (nextPending.length !== c.pending.length) {
-          c.pending = nextPending;
-        }
-      }
-    });
     if (stickToBottom()) {
       requestAnimationFrame(() => scrollToBottom('smooth'));
     } else {
@@ -763,7 +680,7 @@ export function RoomView(props: {
       }
       if (added > 0) setNewMsgCount((n) => n + added);
     }
-    // Read receipt at the bottom of the cache.
+    // Read receipt at the bottom of the cache (home has already merged).
     const last = props.cache.events[props.cache.events.length - 1];
     if (last && stickToBottom() && document.hasFocus()) {
       void bridge
@@ -779,38 +696,10 @@ export function RoomView(props: {
   });
   onCleanup(unsubSync);
 
-  // ---- Send-confirmation handling ----------------------------------------
-  const unsubSend = bridge.on('sendStatus', (e) => {
-    props.setCache(props.room.roomId, (c: RoomCache) => {
-      const idx = c.pending.findIndex((p) => p.txnId === e.txnId);
-      if (idx < 0) return;
-      if (e.status === 'sent') {
-        // DON'T splice yet. The server confirmed the send and gave us
-        // the canonical eventId, but the /sync delivery for that event
-        // hasn't necessarily landed in `c.events` yet. If we splice
-        // now, the bubble disappears until sync arrives (visible flash
-        // / "message vanished" symptom). Instead, record the expected
-        // eventId — the syncUpdate handler above splices the pending
-        // entry in the same setCache transaction it appends the real
-        // event, producing a single-frame swap.
-        //
-        // Fresh array reference so Solid's pending For() rerenders.
-        const nextPending = c.pending.slice();
-        nextPending[idx] = { ...nextPending[idx], expectedEventId: e.eventId };
-        c.pending = nextPending;
-      } else if (e.status === 'failed') {
-        const nextPending = c.pending.slice();
-        nextPending[idx] = {
-          ...nextPending[idx],
-          status: 'failed',
-          errorReason: e.error?.message ?? 'send failed',
-        };
-        c.pending = nextPending;
-        showToast('error', `Send failed: ${nextPending[idx].errorReason}`);
-      }
-    });
-  });
-  onCleanup(unsubSend);
+  // NOTE: there is intentionally NO `sendStatus` subscription here. The
+  // data layer (home.tsx) owns the pending-send lifecycle (records the
+  // expected event id on 'sent', flips to error + toasts on 'failed')
+  // through applySendStatus(). A second handler here would double-toast.
 
   // ---- Typing indicator --------------------------------------------------
   const unsubTyping = bridge.on('typing', (e) => {
@@ -2578,33 +2467,6 @@ function readImageDimensions(file: File): Promise<{ w: number; h: number } | nul
 
 function msgOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-/**
- * True when two versions of the SAME event (matched by eventId) carry
- * identical rendered content — so the timeline can keep the existing
- * object reference and avoid re-minting its Row (which would remount the
- * <li> and re-fire its enter-fade = flash).
- *
- * Both operands are produced by the worker's `toTimelineEvent`, which
- * emits a stable key order per event type, so a structural JSON compare
- * is deterministic. It's only ever called on a same-eventId pair from
- * the reconcile tail (≤60 events/tick), so the cost is negligible.
- *
- * Returning `false` here is always safe (worst case: one extra Row
- * re-mint). Returning `true` when content actually changed would pin a
- * stale bubble — so the compare is total: JSON covers every rendered
- * field (content, decryptionStatus, edits, reactions, inReplyTo,
- * threadRoot) without us enumerating them and risking a miss as the
- * schema grows.
- */
-function sameRenderedEvent(a: TimelineEvent, b: TimelineEvent): boolean {
-  if (a === b) return true;
-  try {
-    return JSON.stringify(a) === JSON.stringify(b);
-  } catch {
-    return false;
-  }
 }
 
 function cssEsc(s: string): string {
