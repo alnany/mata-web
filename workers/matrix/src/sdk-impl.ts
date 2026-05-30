@@ -1188,7 +1188,7 @@ export class SdkSession {
     encrypted: boolean;
     invite: UserId[];
   }): Promise<RoomId> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const initialState: Array<{
       type: string;
       state_key?: string;
@@ -1240,58 +1240,23 @@ export class SdkSession {
   }
 
   async inviteToRoom(roomId: RoomId, userId: UserId): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     await c.invite(roomId, userId);
   }
 
   /**
    * Forward `sourceEventId` from `sourceRoomId` into `targetRoomId`.
-   *
-   * Implementation notes:
-   *
-   * 1. We pull the source event via `room.findEventById` so we get
-   *    matrix-js-sdk's already-decrypted view (the UI displayed it
-   *    a moment ago, so megolm keys are guaranteed in scope). For
-   *    edited messages, `getEffectiveEvent().content` returns the
-   *    latest-replacement content; for plain messages it's identical
-   *    to `getContent()`. Using the effective content means the
-   *    forward carries the user's edited body, not the original.
-   *
-   * 2. We strip:
-   *    - `m.relates_to` (the original's reply/thread/edit relation —
-   *      meaningless in the target room)
-   *    - `m.new_content` (replacement-event side-channel for edits;
-   *      we already collapsed to the effective body above)
-   *    - `m.mentions` (different audience — never carry mentions
-   *      across rooms; the original author wouldn't have @-ed people
-   *      who aren't in the target)
-   *    - the rich-reply `> <@sender>` text fallback prefix (it's
-   *      decoration that points at an event the target room can't
-   *      resolve — leaving it produces "In reply to a message that
-   *      doesn't exist" garbage)
-   *
-   * 3. For text-class messages (`m.text` / `m.notice` / `m.emote`)
-   *    we prepend a "[Forwarded from @sender]" header so the
-   *    recipient knows this isn't the sender's own words. Media
-   *    messages don't get a prefix — the `body` field there is an
-   *    alt-text caption, not the message body.
-   *
-   * 4. We call `client.sendEvent` directly rather than threading
-   *    through `sendMessage` because:
-   *    - The status-trace / pending-bubble pipeline is wired to the
-   *      source room; forwarding sends to a DIFFERENT room and the
-   *      UI surfaces success via a toast, not an optimistic bubble.
-   *    - We need to pass raw IContent (with `file` for encrypted
-   *      media) — `encodeMessageBody` re-encodes from MessageBody
-   *      and currently only emits `url`, which would silently
-   *      strip the AES key from forwarded E2EE media.
-   *
-   * 5. Encryption works without re-uploading: for E2EE rooms the
-   *    AES-CTR key for media lives in `content.file.key` and is
-   *    re-encrypted by the TARGET room's megolm session as part
-   *    of the outer event. The recipient decrypts megolm → reads
-   *    `file.key` → fetches the encrypted blob from the (any)
-   *    homeserver → decrypts the bytes locally. No re-upload.
+   * - Source read via findEventById → getEffectiveEvent().content, so
+   *   edits forward the latest body with megolm keys already in scope.
+   * - Strip m.relates_to / m.new_content / m.mentions and the rich-reply
+   *   "> <@sender>" fallback prefix (all meaningless in the target room).
+   * - Text-class msgs get a "[Forwarded from @sender]" header; media
+   *   doesn't (its `body` is alt-text, not the message).
+   * - Send via client.sendEvent (not sendMessage): the pending-bubble
+   *   pipeline is bound to the source room, and we must pass raw IContent
+   *   with `file` so E2EE media keeps its AES key (encodeMessageBody would
+   *   strip it). No re-upload needed — content.file.key rides the target
+   *   room's megolm envelope and the recipient decrypts locally.
    */
   async forwardEvent(
     sourceRoomId: RoomId,
@@ -2194,6 +2159,23 @@ export class SdkSession {
     return this.client;
   }
 
+  /**
+   * Resolve once the live client exists, polling briefly instead of
+   * failing instantly — closes the cold-boot race where a write RPC
+   * (createRoom, invite, user-search) fires before bootClient assigns
+   * `this.client`, which otherwise rejects with a spurious "Not logged
+   * in" mid-login. A genuinely logged-out session still errors, later.
+   */
+  async waitForClient(timeoutMs = 12000): Promise<MatrixClient> {
+    if (this.client) return this.client;
+    const start = Date.now();
+    while (!this.client && Date.now() - start < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!this.client) throw authError('Not logged in');
+    return this.client;
+  }
+
   private async probeSyncStartup(client: MatrixClient): Promise<void> {
     // Reproduce the SDK's startup prerequisites with explicit timeouts +
     // banner reporting. We probe in the same order matrix-js-sdk does
@@ -2943,6 +2925,25 @@ export class SdkSession {
         ],
         nextBatch: client.getSyncStateData()?.nextSyncToken ?? '',
       });
+    });
+
+    // Live redaction repaint. RoomEvent.Redaction fires immediately on a
+    // local delete echo, before it round-trips through /sync; the Timeline
+    // tap only catches the synced one, so without this a deleted message
+    // lingers until refresh. Repaint the target as a tombstone (toTev maps
+    // redacted → redaction); for a reaction, repaint its parent.
+    client.on(RoomEvent.Redaction, (event: MatrixEvent, room: Room) => {
+      if (!room) return;
+      const redactedId =
+        (event.getContent() as { redacts?: string }).redacts ?? event.getAssociatedId();
+      if (!redactedId) return;
+      const redacted = room.findEventById(redactedId);
+      if (redacted?.getType() === EventType.Reaction) {
+        const parentId = redacted.getRelation()?.event_id;
+        if (parentId) this.emitReactionUpdate(room, client, parentId);
+      } else {
+        this.emitReactionUpdate(room, client, redactedId);
+      }
     });
 
     client.on(RoomEvent.Name, (room: Room) => this.emitRoomDelta(room));
