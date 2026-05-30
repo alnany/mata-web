@@ -29,6 +29,13 @@ export function InviteUserModal(props: {
   rooms?: RoomSummary[] | null;
   /** MXIDs already in the room (joined or invited) — filtered out. */
   existingMemberIds?: string[];
+  /**
+   * The signed-in user's own MXID — we lift the homeserver domain off
+   * it so a bare username ("cyrano") auto-completes to a full MXID,
+   * matching NewRoomModal. Most user directories don't index bare
+   * localparts, so without this an invite-by-username dead-ends.
+   */
+  myUserId?: UserId | null;
   onClose: () => void;
   onInvited: () => void;
 }) {
@@ -42,6 +49,27 @@ export function InviteUserModal(props: {
   let searchSeq = 0;
 
   const isFullMxid = (s: string): boolean => /^@[^:\s]+:[^\s]+$/.test(s.trim());
+
+  const ownDomain = (): string | null => {
+    const id = props.myUserId;
+    if (!id) return null;
+    const i = id.indexOf(':');
+    return i > 0 ? id.slice(i + 1) : null;
+  };
+
+  // Resolve a typed value into a full MXID, completing a bare
+  // localpart against our own homeserver. See NewRoomModal for the
+  // accepted shapes. Null = not usable as an invite target.
+  const resolveTypedId = (raw: string): UserId | null => {
+    const t = raw.trim();
+    if (!t || /\s/.test(t)) return null;
+    if (isFullMxid(t)) return t as UserId;
+    if (t.includes(':')) return null;
+    const dom = ownDomain();
+    if (!dom) return null;
+    const lp = t.startsWith('@') ? t.slice(1) : t;
+    return lp ? (`@${lp}:${dom}` as UserId) : null;
+  };
 
   const reset = () => {
     setTerm('');
@@ -125,10 +153,10 @@ export function InviteUserModal(props: {
   );
 
   const invite = async (rawId: string) => {
-    const id = rawId.trim();
+    const id = resolveTypedId(rawId) ?? '';
     if (submitting()) return;
-    if (!isFullMxid(id)) {
-      showToast('error', 'Pick someone from the list, or paste a full Matrix ID like @alice:example.org');
+    if (!id) {
+      showToast('error', 'Pick someone from the list, or type a username / full Matrix ID.');
       inputRef?.focus();
       return;
     }
@@ -180,7 +208,7 @@ export function InviteUserModal(props: {
               value={term()}
               onInput={(e) => setTerm(e.currentTarget.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && isFullMxid(term())) {
+                if (e.key === 'Enter' && resolveTypedId(term())) {
                   e.preventDefault();
                   void invite(term());
                 } else if (e.key === 'Escape') {
@@ -235,19 +263,21 @@ export function InviteUserModal(props: {
                 when={results().length > 0}
                 fallback={
                   <Show
-                    when={isFullMxid(term())}
+                    when={resolveTypedId(term())}
                     fallback={
                       <div class="px-3 py-3 text-center text-xs text-fg-3">
-                        {searching() ? 'Searching…' : 'No matches.'}
+                        {searching() ? 'Searching…' : 'No directory match — type a username to invite directly.'}
                       </div>
                     }
                   >
-                    <UserRow
-                      hit={{ userId: term().trim() as UserId } as UserSearchHit}
-                      busy={submitting() === term().trim()}
-                      onSelect={() => void invite(term())}
-                      hintLabel="Invite this ID"
-                    />
+                    {(id) => (
+                      <UserRow
+                        hit={{ userId: id() } as UserSearchHit}
+                        busy={submitting() === id()}
+                        onSelect={() => void invite(term())}
+                        hintLabel={isFullMxid(term()) ? 'Invite this ID' : 'Invite'}
+                      />
+                    )}
                   </Show>
                 }
               >

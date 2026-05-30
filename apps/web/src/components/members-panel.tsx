@@ -216,6 +216,7 @@ export function MembersPanel(props: {
         roomId={props.room.roomId}
         roomName={props.room.name || props.room.roomId}
         rooms={props.rooms}
+        myUserId={props.myUserId}
         existingMemberIds={(members() ?? []).map((m) => m.userId as string)}
         onClose={() => setInviteOpen(false)}
         onInvited={() => setVersion(version() + 1)}

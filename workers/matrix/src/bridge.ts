@@ -302,7 +302,7 @@ const handlers: Handlers = {
     // through MatrixCore directly so we can iterate on this surface
     // without re-uploading the large sdk-impl module. See
     // `MatrixCore.getMatrixClient` for the typed-leak seam.
-    const client = core.getMatrixClient() as Parameters<typeof runUserSearch>[0];
+    const client = (await core.getMatrixClientReady()) as Parameters<typeof runUserSearch>[0];
     const { results, limited } = await runUserSearch(client, req.term, req.limit);
     return { kind: 'searchUsers', results, limited };
   },

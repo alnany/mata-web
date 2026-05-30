@@ -37,6 +37,15 @@ export function NewRoomModal(props: {
    * quick-add row hides instead of flashing empty.
    */
   rooms: RoomSummary[] | null;
+  /**
+   * The signed-in user's own Matrix ID (e.g. `@me:chat.greatass.me`).
+   * We extract the homeserver domain from it so a bare username typed
+   * in the search box ("cyrano") can be auto-completed to a full
+   * MXID (`@cyrano:chat.greatass.me`) — most homeservers' user
+   * directories don't index by bare localpart (or are disabled
+   * entirely), so without this fallback "find a person" dead-ends.
+   */
+  myUserId?: UserId | null;
 }) {
   const bridge = useBridge();
   const [mode, setMode] = createSignal<Mode>('room');
@@ -62,6 +71,36 @@ export function NewRoomModal(props: {
   let dmSearchSeq = 0;
 
   const isFullMxid = (s: string): boolean => /^@[^:]+:.+/.test(s.trim());
+
+  // The homeserver domain pulled off our own MXID — the part after
+  // the first colon. Null until we know who we are (myUserId not yet
+  // passed / malformed).
+  const ownDomain = (): string | null => {
+    const id = props.myUserId;
+    if (!id) return null;
+    const i = id.indexOf(':');
+    return i > 0 ? id.slice(i + 1) : null;
+  };
+
+  // Resolve whatever the user typed into a usable full Matrix ID, or
+  // null if it can't be one. Three accepted shapes:
+  //   - `@user:server`  → passed through verbatim (power-user paste)
+  //   - `cyrano`        → completed to `@cyrano:<ourDomain>`
+  //   - `@cyrano`       → leading @ stripped, then completed
+  // A bare localpart only resolves once we know our own domain. We
+  // reject anything with whitespace or an embedded colon-without-@
+  // (ambiguous / malformed).
+  const resolveTypedId = (raw: string): UserId | null => {
+    const t = raw.trim();
+    if (!t || /\s/.test(t)) return null;
+    if (isFullMxid(t)) return t as UserId;
+    if (t.includes(':')) return null; // partial `user:` etc. — not usable
+    const dom = ownDomain();
+    if (!dom) return null;
+    const lp = t.startsWith('@') ? t.slice(1) : t;
+    if (!lp) return null;
+    return `@${lp}:${dom}` as UserId;
+  };
 
   createEffect(
     on([dmTerm, mode], ([term, m]) => {
@@ -235,12 +274,12 @@ export function NewRoomModal(props: {
       if (picked) {
         inviteList = [picked.userId];
       } else {
-        const typed = dmTerm().trim();
-        if (!isFullMxid(typed)) {
-          showToast('error', 'Pick a user from the list, or type a full Matrix ID.');
+        const typed = resolveTypedId(dmTerm());
+        if (!typed) {
+          showToast('error', 'Pick a user from the list, or type a username / full Matrix ID.');
           return;
         }
-        inviteList = [typed as UserId];
+        inviteList = [typed];
       }
     } else {
       // Selected chips are the source of truth. Anything sitting in
@@ -251,12 +290,13 @@ export function NewRoomModal(props: {
       const chipIds = roomInvitees().map((h) => h.userId);
       const trailing = roomTerm().trim();
       if (trailing.length > 0) {
-        if (isFullMxid(trailing) && !chipIds.includes(trailing as UserId)) {
-          chipIds.push(trailing as UserId);
-        } else if (trailing.length >= 2) {
+        const resolved = resolveTypedId(trailing);
+        if (resolved && !chipIds.includes(resolved)) {
+          chipIds.push(resolved);
+        } else if (!resolved && trailing.length >= 2) {
           showToast(
             'error',
-            'Pick a name from the list, or finish typing a full Matrix ID.',
+            'Pick a name from the list, or finish typing a username / Matrix ID.',
           );
           return;
         }
@@ -395,14 +435,14 @@ export function NewRoomModal(props: {
                     value={roomTerm()}
                     onInput={(e) => setRoomTerm(e.currentTarget.value)}
                     onKeyDown={(e) => {
-                      // Enter on a typed full MXID adds it as a chip
-                      // without picking from results — keeps the
-                      // power-user paste-and-go flow working.
-                      if (e.key === 'Enter' && isFullMxid(roomTerm())) {
+                      // Enter on a typed username or full MXID adds it
+                      // as a chip without picking from results — keeps
+                      // the power-user paste-and-go flow working, and
+                      // now also completes a bare localpart.
+                      const resolved = resolveTypedId(roomTerm());
+                      if (e.key === 'Enter' && resolved) {
                         e.preventDefault();
-                        addInvitee({
-                          userId: roomTerm().trim() as UserId,
-                        } as UserSearchHit);
+                        addInvitee({ userId: resolved } as UserSearchHit);
                       } else if (
                         e.key === 'Backspace' &&
                         roomTerm() === '' &&
@@ -467,18 +507,20 @@ export function NewRoomModal(props: {
                       when={roomResults().length > 0}
                       fallback={
                         <Show
-                          when={isFullMxid(roomTerm())}
+                          when={resolveTypedId(roomTerm())}
                           fallback={
                             <div class="px-3 py-3 text-center text-xs text-fg-3">
                               {roomSearching() ? 'Searching…' : 'No matches.'}
                             </div>
                           }
                         >
-                          <UserRow
-                            hit={{ userId: roomTerm().trim() as UserId } as UserSearchHit}
-                            onSelect={addInvitee}
-                            hintLabel="Add"
-                          />
+                          {(id) => (
+                            <UserRow
+                              hit={{ userId: id() } as UserSearchHit}
+                              onSelect={addInvitee}
+                              hintLabel="Add"
+                            />
+                          )}
                         </Show>
                       }
                     >
@@ -544,25 +586,27 @@ export function NewRoomModal(props: {
                     when={dmResults().length > 0}
                     fallback={
                       <Show
-                        when={isFullMxid(dmTerm()) && dmTerm().trim().length > 0}
+                        when={dmTerm().trim().length >= 2 ? resolveTypedId(dmTerm()) : null}
                         fallback={
                           <div class="px-3 py-4 text-center text-xs text-fg-3">
                             {dmTerm().trim().length < 2
                               ? 'Start typing to search the directory.'
                               : dmSearching()
                                 ? 'Searching…'
-                                : 'No matches on the directory.'}
+                                : 'No directory match — type a username to use it directly.'}
                           </div>
                         }
                       >
-                        <UserRow
-                          hit={{ userId: dmTerm().trim() as UserId }}
-                          onSelect={(h) => {
-                            setDmSelected(h);
-                            setDmTerm(h.userId);
-                          }}
-                          hintLabel="Use this Matrix ID"
-                        />
+                        {(id) => (
+                          <UserRow
+                            hit={{ userId: id() }}
+                            onSelect={(h) => {
+                              setDmSelected(h);
+                              setDmTerm(h.userId);
+                            }}
+                            hintLabel={isFullMxid(dmTerm()) ? 'Use this Matrix ID' : 'Start chat'}
+                          />
+                        )}
                       </Show>
                     }
                   >

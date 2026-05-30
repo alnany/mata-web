@@ -11,7 +11,7 @@ import {
 } from '../stores/toast.js';
 import { activeCall } from '../stores/call.js';
 import { mountPresence } from '../stores/presence.js';
-import type { EventId, RoomId, RoomSummary } from '@mata/shared/matrix';
+import type { EventId, RoomId, RoomSummary, UserId } from '@mata/shared/matrix';
 import { RoomView, createRoomCache, type RoomCache } from './room-view.js';
 import { SettingsDrawer } from '../components/settings-drawer.js';
 import { dispatchSyncDeltas, setRoomCounts } from '../stores/notifications.js';
@@ -914,6 +914,7 @@ export function HomePage() {
         open={newRoomOpen()}
         onClose={() => setNewRoomOpen(false)}
         rooms={rooms()}
+        myUserId={(myId() || null) as UserId | null}
         onCreated={(roomId) => {
           navigate(`/rooms/${encodeURIComponent(roomId)}`);
           setActiveId(roomId);

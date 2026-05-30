@@ -372,6 +372,28 @@ export class MatrixCore {
     return session?.client ?? null;
   }
 
+  /**
+   * Like getMatrixClient but waits briefly for the client to finish
+   * booting instead of returning null mid-login. Used by user-search
+   * so the first lookup right after a cold load / refresh doesn't come
+   * back silently empty just because /sync hadn't settled yet.
+   */
+  async getMatrixClientReady(): Promise<unknown> {
+    const session = this.session as unknown as {
+      waitForClient?: () => Promise<unknown>;
+      client?: unknown;
+    } | null;
+    if (!session) return null;
+    if (typeof session.waitForClient === 'function') {
+      try {
+        return await session.waitForClient();
+      } catch {
+        return null;
+      }
+    }
+    return session.client ?? null;
+  }
+
   private requireSession(): SdkSession {
     if (!this.session) throw authError('Not logged in');
     return this.session;
