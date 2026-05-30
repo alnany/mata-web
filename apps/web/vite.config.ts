@@ -124,5 +124,10 @@ export default defineConfig({
     environment: 'jsdom',
     globals: false,
     setupFiles: ['./vitest.setup.ts'],
+    // Unit + component tests only. Playwright e2e lives in tests/e2e and is
+    // run by `pnpm test:e2e`, not vitest — including it here makes vitest try
+    // to collect Playwright specs and crash.
+    include: ['src/**/*.test.{ts,tsx}'],
+    exclude: ['node_modules', 'dist', 'tests/e2e/**'],
   },
 });

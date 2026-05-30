@@ -87,7 +87,7 @@ export interface RoomCache {
   scrollAtBottom?: boolean;
 }
 
-interface PendingEvent {
+export interface PendingEvent {
   txnId: string;
   body: string;
   status: 'sending' | 'failed';
@@ -2372,7 +2372,7 @@ function LoadingStub() {
  * The only differences are a faint pulse while we wait for the
  * homeserver to ack and a failed-state recolouring.
  */
-function PendingRow(props: {
+export function PendingRow(props: {
   pending: PendingEvent;
   onRetry?: () => void;
   onDismiss?: () => void;
@@ -2381,7 +2381,7 @@ function PendingRow(props: {
   const failed = () => props.pending.status === 'failed';
   const canRetry = () => failed() && Boolean(props.pending.wireBody);
   return (
-    <li class="mt-0.5 flex justify-end">
+    <li class="mt-0.5 flex justify-end" data-testid="pending-bubble">
       <div class="relative max-w-[78%]">
         <div
           class={`relative rounded-2xl px-3 py-2 text-sm leading-5 transition-opacity ${
