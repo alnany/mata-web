@@ -5,6 +5,7 @@ import { createMatrixBridge } from './bridge/worker-client.js';
 import { BridgeContext } from './bridge/context.js';
 import { session, setSession } from './stores/session.js';
 import { ToastRoot } from './components/toast-root.js';
+import { showToast } from './stores/toast.js';
 import { VerificationModal } from './components/verification-modal.js';
 import { attachVerificationStore } from './stores/verification.js';
 import { notifyTotals } from './stores/notifications.js';
@@ -21,30 +22,61 @@ export function App(props: ParentProps) {
   const [bridge, setBridge] = createSignal<MatrixBridge | null>(null);
   const [bootError, setBootError] = createSignal<string | null>(null);
 
-  onMount(async () => {
+  onMount(() => {
+    // CRITICAL PAINT PATH: the bridge constructor is synchronous (it just
+    // spawns the Worker and returns the RPC façade — requests queue until
+    // the worker is live). We therefore publish the bridge IMMEDIATELY so
+    // the Switch renders HomePage on the very next microtask, and HomePage
+    // paints its IndexedDB-cached room list without waiting for anything.
+    //
+    // The previous code `await`ed a `ping` round-trip BEFORE setBridge, so
+    // the entire UI sat on the "Starting worker…" BootScreen until the
+    // worker module (matrix-js-sdk + crypto wasm, multi-MB) finished
+    // parsing, instantiating and responding — the ~10s cold-load the user
+    // reported. Worker liveness + session restore now happen in the
+    // background and only drive routing, never first paint.
+    let b: MatrixBridge;
     try {
-      const b = createMatrixBridge();
-      const pong = await b.request({ kind: 'ping' });
-      if (!pong.pong) throw new Error('Worker did not pong');
-      setBridge(b);
-      // Verification store listens globally — incoming SAS requests
-      // from a paired device should pop the modal even if the user
-      // never opened a Verify button in this tab.
-      const detachVerify = attachVerificationStore(b);
-      onCleanup(detachVerify);
-
-      // Try to restore an existing session. The result drives routing.
-      setSession({ phase: 'restoring' });
-      const res = await b.request({ kind: 'restoreSession' });
-      if (res.restored && res.userId && res.deviceId) {
-        setSession({ phase: 'authenticated', userId: res.userId, deviceId: res.deviceId });
-      } else {
-        setSession({ phase: 'anonymous' });
-      }
+      b = createMatrixBridge();
     } catch (err) {
+      // Truly synchronous failure (e.g. Worker constructor unavailable) —
+      // nothing is painted yet, so the BootScreen is the right surface.
       setBootError(err instanceof Error ? err.message : String(err));
       setSession({ phase: 'anonymous' });
+      return;
     }
+    setBridge(b);
+
+    // Verification store listens globally — incoming SAS requests from a
+    // paired device should pop the modal even if the user never opened a
+    // Verify button in this tab. Registered synchronously so onCleanup
+    // binds to this owner scope.
+    const detachVerify = attachVerificationStore(b);
+    onCleanup(detachVerify);
+
+    // Background: confirm the worker is alive, then restore any existing
+    // session. The result only drives routing (authenticated→/, anonymous
+    // →/login); the cached UI is already on screen by now.
+    setSession({ phase: 'restoring' });
+    void (async () => {
+      try {
+        const pong = await b.request({ kind: 'ping' });
+        if (!pong.pong) throw new Error('Worker did not pong');
+        const res = await b.request({ kind: 'restoreSession' });
+        if (res.restored && res.userId && res.deviceId) {
+          setSession({ phase: 'authenticated', userId: res.userId, deviceId: res.deviceId });
+        } else {
+          setSession({ phase: 'anonymous' });
+        }
+      } catch (err) {
+        // The worker died after we already painted — flipping the whole
+        // app to the BootScreen would yank the user off their (cached)
+        // chats. Surface it as a non-blocking toast and fall back to the
+        // anonymous route so the login path stays reachable.
+        showToast('error', `Worker failed to start: ${err instanceof Error ? err.message : String(err)}`);
+        setSession({ phase: 'anonymous' });
+      }
+    })();
   });
 
   onCleanup(() => {
@@ -88,13 +120,15 @@ export function App(props: ParentProps) {
   return (
     <>
       <Switch>
-        <Match when={bridge() && bootError() === null}>
+        <Match when={bridge()}>
           {/* biome-ignore lint/style/noNonNullAssertion: guarded by Match */}
           <BridgeContext.Provider value={bridge()!}>
             <SessionRouter>{props.children}</SessionRouter>
           </BridgeContext.Provider>
         </Match>
         <Match when={true}>
+          {/* Shown only until the (synchronous) bridge is published on
+              mount, or if the Worker constructor itself threw. */}
           <BootScreen
             error={bootError()}
             onRetry={() => {
