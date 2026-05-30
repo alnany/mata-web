@@ -13,6 +13,7 @@ import { session } from '../stores/session.js';
 import { dismissToast, showBootGuardedError, showToast } from '../stores/toast.js';
 import type {
   EventId,
+  MediaMessageBody,
   MessageBody,
   RoomId,
   RoomMessageEvent,
@@ -23,7 +24,12 @@ import type {
 } from '@mata/shared/matrix';
 import { dayLabel, isSameDay, shortTime } from '../lib/date-buckets.js';
 import { markdownToMatrixHtml } from '../lib/rich-text.js';
-import { MessageBubble, type MessageActions, encryptedReasonCopy } from '../components/message-bubble.js';
+import {
+  AlbumRow,
+  MessageBubble,
+  type MessageActions,
+  encryptedReasonCopy,
+} from '../components/message-bubble.js';
 import { ThreadPanel } from '../components/thread-panel.js';
 import { Composer } from '../components/composer.js';
 import { RoomHeader } from '../components/room-header.js';
@@ -1572,6 +1578,17 @@ export function RoomView(props: {
     | { kind: 'unread'; key: string }
     | { kind: 'msg'; ev: TimelineEvent; showHeader: boolean; key: string }
     | {
+        // A run of consecutive image messages from one sender, sent
+        // close together — rendered as one tile grid (Telegram-style)
+        // instead of N stacked image bubbles. `lead` is the first
+        // event (drives the sender header + day/unread placement).
+        kind: 'album';
+        lead: TimelineEvent;
+        images: { eventId: EventId; body: MediaMessageBody }[];
+        showHeader: boolean;
+        key: string;
+      }
+    | {
         // Collapsed run of consecutive undecryptable events. Renders as
         // one muted marker instead of N gravestones. Most common after
         // login on a fresh device, when the timeline backfills past
@@ -1649,6 +1666,11 @@ export function RoomView(props: {
   // reappear as normal messages.
   const UTD_STALE_DAYS = 30;
   const UTD_STALE_MS = UTD_STALE_DAYS * 24 * 60 * 60 * 1000;
+  // Max gap between two consecutive images for them to count as part
+  // of the same "sent together" album. A multi-select upload fires in
+  // a tight burst, so 90 s is generous while still keeping unrelated
+  // images sent minutes apart as separate bubbles.
+  const ALBUM_GAP_MS = 90 * 1000;
   const rows = createMemo<Row[]>(() => {
     const out: Row[] = [];
     const evsRaw = props.cache.events;
@@ -1796,6 +1818,84 @@ export function RoomView(props: {
         }
         // Singleton UTD — fall through to normal msg-row rendering so
         // it still shows up; SystemRow inside MessageBubble handles it.
+      }
+      // ---- image album grouping -----------------------------------------
+      // Consecutive image messages from one sender, sent close together,
+      // collapse into a single tile grid instead of N stacked bubbles.
+      // Threaded images are excluded (they live in their thread); a run
+      // stops at a day boundary or the first-unread divider so those
+      // separators still render in the right place.
+      const isAlbumImage = (e: TimelineEvent): boolean =>
+        e.type === 'm.room.message' &&
+        e.content.msgtype === 'm.image' &&
+        !e.threadRoot &&
+        !!(e.content.file?.url ?? e.content.url);
+      if (isAlbumImage(ev)) {
+        let j = i + 1;
+        while (
+          j < evs.length &&
+          isAlbumImage(evs[j]) &&
+          evs[j].sender === ev.sender &&
+          isSameDay(ev.originServerTs, evs[j].originServerTs) &&
+          evs[j].originServerTs - evs[j - 1].originServerTs <= ALBUM_GAP_MS &&
+          evs[j].eventId !== firstUnreadEventId
+        ) {
+          j++;
+        }
+        const runLen = j - i;
+        if (runLen >= 2) {
+          // Day divider, if this album opens a new day.
+          if (i === 0 || !isSameDay(lastTs, ev.originServerTs)) {
+            const dayKey = `d-${ev.eventId}`;
+            let dayRow = rowCache.get(dayKey);
+            if (!dayRow || dayRow.kind !== 'day' || dayRow.ts !== ev.originServerTs) {
+              dayRow = { kind: 'day', ts: ev.originServerTs, key: dayKey };
+              rowCache.set(dayKey, dayRow);
+            }
+            seen.add(dayKey);
+            out.push(dayRow);
+            lastSender = null;
+          }
+          // Unread divider, if the album opens on the first unread event.
+          if (firstUnreadEventId && !unreadEmitted && ev.eventId === firstUnreadEventId) {
+            const unreadKey = `unread-${firstUnreadEventId}`;
+            let unreadRow = rowCache.get(unreadKey);
+            if (!unreadRow || unreadRow.kind !== 'unread') {
+              unreadRow = { kind: 'unread', key: unreadKey };
+              rowCache.set(unreadKey, unreadRow);
+            }
+            seen.add(unreadKey);
+            out.push(unreadRow);
+            unreadEmitted = true;
+            lastSender = null;
+          }
+          const showHeader =
+            ev.sender !== lastSender || ev.originServerTs - lastTs > 2 * 60 * 1000;
+          const images: { eventId: EventId; body: MediaMessageBody }[] = [];
+          for (let k = i; k < j; k++) {
+            const e = evs[k] as RoomMessageEvent;
+            images.push({ eventId: e.eventId, body: e.content as MediaMessageBody });
+          }
+          const albumKey = `album-${ev.eventId}-${evs[j - 1].eventId}`;
+          let albumRow = rowCache.get(albumKey);
+          if (
+            !albumRow ||
+            albumRow.kind !== 'album' ||
+            albumRow.lead !== ev ||
+            albumRow.images.length !== images.length ||
+            albumRow.showHeader !== showHeader
+          ) {
+            albumRow = { kind: 'album', lead: ev, images, showHeader, key: albumKey };
+            rowCache.set(albumKey, albumRow);
+          }
+          seen.add(albumKey);
+          out.push(albumRow);
+          lastSender = ev.sender;
+          lastTs = evs[j - 1].originServerTs;
+          i = j - 1;
+          continue;
+        }
+        // Single image — fall through to the normal bubble path.
       }
       // ---- normal row path ----------------------------------------------
       if (i === 0 || !isSameDay(lastTs, ev.originServerTs)) {
@@ -2044,6 +2144,14 @@ export function RoomView(props: {
                       dominantReason={row.dominantReason}
                       recoverable={row.recoverable}
                       onRestore={() => props.onOpenEncryptionSettings?.()}
+                    />
+                  ) : row.kind === 'album' ? (
+                    <AlbumRow
+                      lead={row.lead}
+                      images={row.images}
+                      showHeader={row.showHeader}
+                      me={me()}
+                      onOpen={(id) => setGalleryStart(id)}
                     />
                   ) : (
                     <MessageBubble

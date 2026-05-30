@@ -11,14 +11,14 @@ import {
 } from '../stores/toast.js';
 import { activeCall } from '../stores/call.js';
 import { mountPresence } from '../stores/presence.js';
-import type { EventId, RoomId, RoomSummary, UserId } from '@mata/shared/matrix';
+import type { EventId, RoomId, RoomSummary, SearchHit, UserId } from '@mata/shared/matrix';
 import { RoomView, createRoomCache, type RoomCache } from './room-view.js';
 import { SettingsDrawer } from '../components/settings-drawer.js';
 import { dispatchSyncDeltas, setRoomCounts } from '../stores/notifications.js';
 import { NewRoomModal } from '../components/new-room-modal.js';
 import { readRoomList, writeRoomList } from '../lib/persistent-cache.js';
 import { listTime } from '../lib/date-buckets.js';
-import { initials, gradientForUser } from '../components/message-bubble.js';
+import { initials, gradientForUser, prettyName } from '../components/message-bubble.js';
 import { Mark } from '../components/logo.js';
 import { updateAvailable } from '../main.js';
 
@@ -538,6 +538,50 @@ export function HomePage() {
     );
   };
 
+  // -------- Top-bar message-content search ------------------------------
+  // The search box doubles as a global message search (Telegram-style):
+  // room-name matches render in the normal list, and message-body hits
+  // across every room surface in a "Messages" section below. Same query,
+  // two answers. The RPC is debounced and sequence-guarded so fast typing
+  // doesn't fire a request per keystroke or let a stale response win.
+  const [msgHits, setMsgHits] = createSignal<SearchHit[]>([]);
+  const [msgSearching, setMsgSearching] = createSignal(false);
+  let msgSearchTimer: ReturnType<typeof setTimeout> | undefined;
+  let msgSearchSeq = 0;
+
+  createEffect(() => {
+    const q = filter().trim();
+    if (msgSearchTimer) clearTimeout(msgSearchTimer);
+    if (q.length < 2) {
+      setMsgHits([]);
+      setMsgSearching(false);
+      return;
+    }
+    setMsgSearching(true);
+    const seq = ++msgSearchSeq;
+    msgSearchTimer = setTimeout(() => {
+      void bridge
+        .request({ kind: 'searchMessages', query: q, roomId: null })
+        .then((res) => {
+          if (seq !== msgSearchSeq) return; // a newer query superseded us
+          if (res.kind === 'searchMessages') setMsgHits(res.results.slice(0, 25));
+        })
+        .catch(() => {
+          if (seq === msgSearchSeq) setMsgHits([]);
+        })
+        .finally(() => {
+          if (seq === msgSearchSeq) setMsgSearching(false);
+        });
+    }, 280);
+  });
+  onCleanup(() => {
+    if (msgSearchTimer) clearTimeout(msgSearchTimer);
+  });
+
+  // Human-readable room label for a message hit's room chip.
+  const roomLabelFor = (id: RoomId): string =>
+    (rooms() ?? []).find((r) => r.roomId === id)?.name || prettyName(id as never);
+
   // Total unread room count drives the badge on the "Unread" tab.
   const unreadRoomCount = createMemo(
     () => joinedRooms().filter((r) => r.unreadCount > 0).length,
@@ -688,7 +732,7 @@ export function HomePage() {
             <input
               id="mata-room-search"
               type="text"
-              placeholder="Search or jump to…"
+              placeholder="Search chats & messages…"
               value={filter()}
               onInput={(e) => setFilter(e.currentTarget.value)}
               class="min-w-0 flex-1 bg-transparent text-[12.5px] text-fg placeholder:text-fg-3 focus:outline-none"
@@ -827,8 +871,16 @@ export function HomePage() {
               </ul>
             </Show>
             {/* Empty result — a scope tab or search filtered everything out
-                even though the account does have joined rooms. */}
-            <Show when={directList().length === 0 && roomsList().length === 0}>
+                even though the account does have joined rooms. Suppressed
+                when a search is active and message hits exist, so the
+                "Messages" section below stands on its own. */}
+            <Show
+              when={
+                directList().length === 0 &&
+                roomsList().length === 0 &&
+                !(filter().trim().length >= 2 && msgHits().length > 0)
+              }
+            >
               <div class="px-4 py-8 text-center">
                 <span class="mono text-[10.5px] uppercase tracking-[0.08em] text-fg-4">
                   {listScope() === 'unread'
@@ -837,6 +889,60 @@ export function HomePage() {
                       ? 'No rooms match'
                       : 'Nothing here'}
                 </span>
+              </div>
+            </Show>
+
+            {/* Messages — global message-content search results. Only
+                while a query is active. Clicking a hit jumps to that
+                room and scrolls to the event, then clears the search. */}
+            <Show when={filter().trim().length >= 2}>
+              <div class="mt-3">
+                <SectionLabel label="Messages" count={msgHits().length} />
+                <Show
+                  when={msgHits().length > 0}
+                  fallback={
+                    <div class="px-4 py-3 text-[11.5px] text-fg-4">
+                      {msgSearching() ? 'Searching messages…' : 'No messages found'}
+                    </div>
+                  }
+                >
+                  <ul class="px-[10px]">
+                    <For each={msgHits()}>
+                      {(hit) => (
+                        <li>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              jumpToRoom(hit.roomId, hit.eventId);
+                              setFilter('');
+                            }}
+                            class="flex w-full items-start gap-2.5 rounded-[8px] px-2.5 py-2 text-left transition-colors hover:bg-elev"
+                          >
+                            <span
+                              class="mt-[1px] flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-medium text-white"
+                              style={{ background: gradientForUser(hit.sender) }}
+                            >
+                              {initials(hit.sender)}
+                            </span>
+                            <span class="min-w-0 flex-1">
+                              <span class="flex items-baseline justify-between gap-2">
+                                <span class="truncate text-[12px] font-medium text-fg">
+                                  {prettyName(hit.sender)}
+                                </span>
+                                <span class="shrink-0 truncate text-[10px] text-fg-4">
+                                  {roomLabelFor(hit.roomId)}
+                                </span>
+                              </span>
+                              <span class="mt-0.5 block truncate text-[11.5px] text-fg-3">
+                                {hit.body}
+                              </span>
+                            </span>
+                          </button>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Show>
               </div>
             </Show>
           </div>

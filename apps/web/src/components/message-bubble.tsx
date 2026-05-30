@@ -1182,55 +1182,193 @@ function previewOf(ev: TimelineEvent): string {
 // the presence of `file` on the body.
 // ---------------------------------------------------------------------------
 
+// Snapshot the event's EncryptedFile out of the Solid store into a
+// plain, structured-cloneable object — passing the store proxy into
+// worker.postMessage trips DataCloneError. Shared by every media
+// loader (single bubble + album thumbs).
+function snapshotEncryptedFile(body: MediaMessageBody) {
+  return body.file
+    ? {
+        v: 'v2' as const,
+        url: body.file.url,
+        key: {
+          kty: 'oct' as const,
+          alg: 'A256CTR' as const,
+          key_ops: ['encrypt', 'decrypt'] as ['encrypt', 'decrypt'],
+          k: body.file.key.k,
+          ext: true as const,
+        },
+        iv: body.file.iv,
+        hashes: { sha256: body.file.hashes.sha256 },
+      }
+    : null;
+}
+
+type MediaLoaded = { url: string; mime: string };
+type MediaLoadResult = { loaded: MediaLoaded | null; error: string | null };
+
+// Decrypt (if needed) + objectURL a media event, via the worker's
+// loadMedia RPC. Shared loader so the single-image bubble and the
+// album grid behave identically.
+async function loadMediaResult(
+  bridge: ReturnType<typeof useBridge>,
+  body: MediaMessageBody,
+): Promise<MediaLoadResult> {
+  const mxc = body.file?.url ?? body.url;
+  if (!mxc) return { loaded: null, error: 'no mxc URI on event' };
+  try {
+    const res = await bridge.request({
+      kind: 'loadMedia',
+      mxc,
+      encryptedFile: snapshotEncryptedFile(body),
+      mime: body.info.mimetype,
+    });
+    const blob = new Blob([res.data], { type: res.mime });
+    return { loaded: { url: URL.createObjectURL(blob), mime: res.mime }, error: null };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { loaded: null, error: msg };
+  }
+}
+
+/**
+ * AlbumGrid — renders a run of consecutive image messages (from the
+ * same sender, sent together) as a single Telegram-style tile grid
+ * instead of N stacked bubbles. Clicking any tile hands the event id
+ * back up so the room's shared image-gallery overlay opens at that
+ * image. Layout adapts to count: 1 wide, 2 side-by-side, 3 with a
+ * tall lead, 4 as 2×2, 5+ as a 3-col grid with a "+N" overflow badge
+ * on the last visible tile.
+ */
+export function AlbumGrid(props: {
+  images: { eventId: EventId; body: MediaMessageBody }[];
+  onOpen: (eventId: EventId) => void;
+}) {
+  const MAX_TILES = 6;
+  const visible = () => props.images.slice(0, MAX_TILES);
+  const overflow = () => Math.max(0, props.images.length - MAX_TILES);
+  const cols = () => {
+    const n = visible().length;
+    if (n <= 1) return 1;
+    if (n === 2 || n === 4) return 2;
+    return 3;
+  };
+  return (
+    <div
+      class="my-1 grid w-fit max-w-[340px] gap-[3px] overflow-hidden rounded-lg"
+      style={{ 'grid-template-columns': `repeat(${cols()}, minmax(0, 1fr))` }}
+    >
+      <For each={visible()}>
+        {(img, idx) => (
+          <AlbumThumb
+            body={img.body}
+            onClick={() => props.onOpen(img.eventId)}
+            overflow={idx() === visible().length - 1 ? overflow() : 0}
+          />
+        )}
+      </For>
+    </div>
+  );
+}
+
+/**
+ * AlbumRow — timeline row wrapper around AlbumGrid. Mirrors the
+ * MessageBubble frame (left gutter avatar + name for others, right
+ * alignment for self, timestamp + photo count footer) so a grouped
+ * photo set reads as one coherent message.
+ */
+export function AlbumRow(props: {
+  lead: TimelineEvent;
+  images: { eventId: EventId; body: MediaMessageBody }[];
+  showHeader: boolean;
+  me: UserId | null;
+  onOpen: (eventId: EventId) => void;
+}) {
+  const isMine = () => props.lead.sender === props.me;
+  return (
+    <div
+      class={`msg-enter group relative flex ${isMine() ? 'justify-end' : 'justify-start'} ${
+        props.showHeader ? 'mt-3' : 'mt-0.5'
+      }`}
+      data-event-id={props.lead.eventId}
+    >
+      <Show when={!isMine()}>
+        <div class="mr-2 w-8 shrink-0">
+          <Show when={props.showHeader}>
+            <span class="flex h-8 w-8 items-center justify-center rounded-full bg-input text-xs font-semibold text-fg-2">
+              {initials(props.lead.sender)}
+            </span>
+          </Show>
+        </div>
+      </Show>
+      <div class="relative max-w-[78%]">
+        <Show when={props.showHeader && !isMine()}>
+          <div class="mb-0.5 text-[11px] font-semibold text-fg-2">
+            {prettyName(props.lead.sender)}
+          </div>
+        </Show>
+        <AlbumGrid images={props.images} onOpen={props.onOpen} />
+        <div
+          class={`mt-1 flex items-center gap-1 text-[10px] text-fg-4 ${
+            isMine() ? 'justify-end' : 'justify-start'
+          }`}
+        >
+          <span>{props.images.length} photos</span>
+          <span>· {shortTime(props.lead.originServerTs)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AlbumThumb(props: {
+  body: MediaMessageBody;
+  onClick: () => void;
+  overflow: number;
+}) {
+  const bridge = useBridge();
+  const [resource] = createResource<MediaLoadResult, MediaMessageBody>(
+    () => props.body,
+    (body) => loadMediaResult(bridge, body),
+  );
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      class="relative aspect-square w-full cursor-zoom-in overflow-hidden bg-elev"
+      title={props.body.body}
+    >
+      <Show
+        when={resource()?.loaded}
+        fallback={
+          <span class="flex h-full w-full items-center justify-center text-[18px] text-fg-4">
+            {resource.loading ? '🖼️' : '⚠️'}
+          </span>
+        }
+      >
+        {(r) => (
+          <img
+            src={r().url}
+            alt={props.body.body}
+            class="h-full w-full object-cover transition-transform duration-150 hover:scale-[1.03]"
+          />
+        )}
+      </Show>
+      <Show when={props.overflow > 0}>
+        <span class="absolute inset-0 flex items-center justify-center bg-black/55 text-[19px] font-semibold text-white">
+          +{props.overflow}
+        </span>
+      </Show>
+    </button>
+  );
+}
+
 function MediaContent(props: { body: MediaMessageBody; onOpenImage?: () => void }) {
   const bridge = useBridge();
 
-  type Loaded = { url: string; mime: string };
-  type LoadResult = { loaded: Loaded | null; error: string | null };
-  const [resource] = createResource<LoadResult, MediaMessageBody>(
+  const [resource] = createResource<MediaLoadResult, MediaMessageBody>(
     () => props.body,
-    async (body): Promise<LoadResult> => {
-      // Resolve the canonical mxc — for encrypted media we use file.url,
-      // for plain media we use url. If neither is present (malformed
-      // event) we render the filename fallback.
-      const mxc = body.file?.url ?? body.url;
-      if (!mxc) return { loaded: null, error: 'no mxc URI on event' };
-      try {
-        // body.file lives inside a Solid store — passing it directly into
-        // worker.postMessage trips DataCloneError ("#<Object> could not
-        // be cloned") because the proxy isn't structured-cloneable. Snap
-        // a plain copy here so the request envelope is pure JSON.
-        const ef = body.file
-          ? {
-              v: 'v2' as const,
-              url: body.file.url,
-              key: {
-                kty: 'oct' as const,
-                alg: 'A256CTR' as const,
-                key_ops: ['encrypt', 'decrypt'] as ['encrypt', 'decrypt'],
-                k: body.file.key.k,
-                ext: true as const,
-              },
-              iv: body.file.iv,
-              hashes: { sha256: body.file.hashes.sha256 },
-            }
-          : null;
-        const res = await bridge.request({
-          kind: 'loadMedia',
-          mxc,
-          encryptedFile: ef,
-          mime: body.info.mimetype,
-        });
-        const blob = new Blob([res.data], { type: res.mime });
-        return { loaded: { url: URL.createObjectURL(blob), mime: res.mime }, error: null };
-      } catch (err) {
-        // Surface the actual failure inline instead of silently rendering
-        // "unavailable" — the user is our debugger here, they shouldn't
-        // need devtools to know what's broken.
-        const msg = err instanceof Error ? err.message : String(err);
-        return { loaded: null, error: msg };
-      }
-    },
+    (body) => loadMediaResult(bridge, body),
   );
 
   return (
