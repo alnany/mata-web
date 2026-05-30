@@ -208,6 +208,7 @@ export type MainToWorkerRequest =
   | { kind: 'subscribeRoom'; roomId: RoomId }
   | { kind: 'unsubscribeRoom'; roomId: RoomId }
   | { kind: 'listDevices' }
+  | { kind: 'fetchUserDevices'; userId: UserId }
   | { kind: 'beginDeviceVerification'; userId: UserId; deviceId: DeviceId }
   | { kind: 'completeSasVerification'; transactionId: string; result: 'match' | 'mismatch' }
   | { kind: 'cancelVerification'; transactionId: string }
@@ -435,6 +436,7 @@ export type MainToWorkerResponse =
   | { kind: 'subscribeRoom' }
   | { kind: 'unsubscribeRoom' }
   | { kind: 'listDevices'; devices: Device[] }
+  | { kind: 'fetchUserDevices'; devices: Device[] }
   | { kind: 'beginDeviceVerification'; transactionId: string }
   | { kind: 'completeSasVerification' }
   | { kind: 'cancelVerification' }

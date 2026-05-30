@@ -290,6 +290,10 @@ const handlers: Handlers = {
     const devices = await core.listDevices();
     return { kind: 'listDevices', devices };
   },
+  fetchUserDevices: async (req, core) => {
+    const devices = await core.fetchUserDevices(req.userId);
+    return { kind: 'fetchUserDevices', devices };
+  },
   beginDeviceVerification: async (req, core) => {
     const { transactionId } = await core.beginDeviceVerification(req.userId, req.deviceId);
     return { kind: 'beginDeviceVerification', transactionId };

@@ -145,6 +145,54 @@ export async function listDevices(deps: EncryptionDeps): Promise<Device[]> {
 }
 
 /**
+ * Devices for an *arbitrary* user, for the profile drawer's verify UI.
+ *
+ * For our own account this just defers to `listDevices` (which has the
+ * rich /devices metadata — display name, last-seen IP). For everyone
+ * else the `/devices` admin endpoint is off-limits, so we read identity
+ * keys straight from the crypto store via `getUserDeviceInfo` (forcing a
+ * fresh download so a never-messaged user still resolves) and decorate
+ * each with its cross-signing trust. No last-seen/IP is available for
+ * other users — that's private to them — so those fields stay null.
+ */
+export async function listUserDevices(deps: EncryptionDeps, userId: UserId): Promise<Device[]> {
+  const { client, crypto } = requireCrypto(deps);
+  const me = client.getUserId();
+  if (me && userId === me) return listDevices(deps);
+
+  // Map<userId, Map<deviceId, DeviceInfo>>. downloadUncached=true so a
+  // cold profile open still resolves the target's devices.
+  const map = await crypto.getUserDeviceInfo([userId], true);
+  const devices = map.get(userId);
+  const out: Device[] = [];
+  if (devices) {
+    for (const [deviceId, info] of devices) {
+      const status = await crypto.getDeviceVerificationStatus(userId, deviceId);
+      let verified: Device['verified'] = 'unverified';
+      if (status && (status.crossSigningVerified || status.localVerified)) {
+        verified = 'verified';
+      }
+      out.push({
+        deviceId,
+        displayName: info.displayName ?? null,
+        lastSeenTs: null,
+        lastSeenIp: null,
+        isCurrent: false,
+        verified,
+      });
+    }
+  }
+  // Verified first, then by device id for a stable order.
+  out.sort((a, b) => {
+    const av = a.verified === 'verified' ? 1 : 0;
+    const bv = b.verified === 'verified' ? 1 : 0;
+    if (av !== bv) return bv - av;
+    return a.deviceId.localeCompare(b.deviceId);
+  });
+  return out;
+}
+
+/**
  * Unified "set up secure backup" — runs three Matrix protocol flows in
  * order. Each is idempotent at the SDK level, so re-running this is
  * safe (it short-circuits steps already complete).

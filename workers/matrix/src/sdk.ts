@@ -293,6 +293,10 @@ export class MatrixCore {
     return this.requireSession().listDevices();
   }
 
+  async fetchUserDevices(userId: string) {
+    return this.requireSession().fetchUserDevices(userId);
+  }
+
   async enableKeyBackup(password: string, passphrase: string) {
     return this.requireSession().enableKeyBackup(password, passphrase);
   }

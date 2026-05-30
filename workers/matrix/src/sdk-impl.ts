@@ -1845,6 +1845,11 @@ export class SdkSession {
     return listDevices(this.encryptionDeps());
   }
 
+  async fetchUserDevices(userId: string) {
+    const { listUserDevices } = await import('./encryption.js');
+    return listUserDevices(this.encryptionDeps(), userId as UserId);
+  }
+
   async enableKeyBackup(password: string, passphrase: string) {
     const { enableKeyBackup } = await import('./encryption.js');
     return enableKeyBackup(this.encryptionDeps(), password, passphrase);

@@ -16,13 +16,14 @@
  * just falls back to the localpart; presence stays dark if the server
  * has it disabled.
  */
-import { Show, createMemo, createResource, createSignal } from 'solid-js';
-import type { RoomMember, UserId } from '@mata/shared/matrix';
+import { Show, createMemo, createResource, createSignal, createEffect, For } from 'solid-js';
+import type { Device, RoomMember, UserId } from '@mata/shared/matrix';
 import { useBridge } from '../bridge/context.js';
 import { showToast } from '../stores/toast.js';
 import { initials, prettyName } from './message-bubble.js';
 import { PresenceDot } from './presence-dot.js';
 import { presenceOf, lastSeenLabel, ensurePresence } from '../stores/presence.js';
+import { startVerification, activeFlow } from '../stores/verification.js';
 
 export function ProfileDrawer(props: {
   userId: UserId | null;
@@ -83,6 +84,35 @@ export function ProfileDrawer(props: {
     } finally {
       setBusy(false);
     }
+  };
+
+  // Phase 2: device list + per-device verify. Only meaningful in
+  // encrypted contexts (trust is a cross-signing concept). The resource
+  // re-runs when the viewed user changes; we also refetch when a
+  // verification flow finishes so freshly-verified devices flip to green.
+  const [devices, { refetch: refetchDevices }] = createResource(
+    () => (props.isEncrypted ? props.userId : null),
+    async (uid) => {
+      const res = await bridge.request({ kind: 'fetchUserDevices', userId: uid });
+      return res.kind === 'fetchUserDevices' ? res.devices : [];
+    },
+  );
+
+  // When the global verification modal closes, refresh trust state.
+  let hadFlow = false;
+  createEffect(() => {
+    const active = !!activeFlow();
+    if (hadFlow && !active) void refetchDevices();
+    hadFlow = active;
+  });
+
+  // Devices worth showing a Verify button for: skip our own current
+  // device (you can't verify yourself against yourself) and already-
+  // verified ones.
+  const verifyDevice = (deviceId: string) => {
+    const uid = props.userId;
+    if (!uid) return;
+    void startVerification(bridge, uid, deviceId);
   };
 
   const trustPill = createMemo(() => {
@@ -176,6 +206,82 @@ export function ProfileDrawer(props: {
               <Show when={ignored()}>
                 <p class="text-center text-[10px] text-fg-3">
                   You won't see messages from this user.
+                </p>
+              </Show>
+            </div>
+          </Show>
+
+          <Show when={props.isEncrypted}>
+            <div class="border-t border-line px-4 py-4">
+              <div class="mb-2 flex items-center justify-between">
+                <span class="text-[10px] font-semibold uppercase tracking-wide text-fg-3">
+                  {isSelf() ? 'Your devices' : 'Devices'}
+                </span>
+                <Show when={devices.loading}>
+                  <span class="text-[10px] text-fg-3">Loading…</span>
+                </Show>
+              </div>
+
+              <Show
+                when={(devices() ?? []).length > 0}
+                fallback={
+                  <Show when={!devices.loading}>
+                    <p class="text-[11px] text-fg-3">No devices found.</p>
+                  </Show>
+                }
+              >
+                <ul class="flex flex-col gap-1.5">
+                  <For each={devices()}>
+                    {(d: Device) => {
+                      const verified = d.verified === 'verified';
+                      // Can't SAS-verify our own current session against itself.
+                      const selfCurrent = isSelf() && d.isCurrent;
+                      return (
+                        <li class="flex items-center gap-2 rounded-lg bg-input/60 px-2.5 py-2">
+                          <span
+                            class={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                              verified ? 'bg-emerald-500' : 'bg-amber-500'
+                            }`}
+                            aria-hidden="true"
+                          />
+                          <div class="min-w-0 flex-1">
+                            <div class="truncate text-[12px] font-medium text-fg">
+                              {d.displayName || d.deviceId}
+                              <Show when={d.isCurrent}>
+                                <span class="ml-1 text-[10px] font-normal text-fg-3">(this device)</span>
+                              </Show>
+                            </div>
+                            <div class="truncate font-mono text-[10px] text-fg-3">{d.deviceId}</div>
+                          </div>
+                          <Show
+                            when={!verified && !selfCurrent}
+                            fallback={
+                              <span
+                                class={`shrink-0 text-[10px] font-medium ${
+                                  verified ? 'text-emerald-600 dark:text-emerald-400' : 'text-fg-3'
+                                }`}
+                              >
+                                {verified ? 'Verified' : '—'}
+                              </span>
+                            }
+                          >
+                            <button
+                              type="button"
+                              onClick={() => verifyDevice(d.deviceId)}
+                              class="shrink-0 rounded-md border border-line px-2 py-1 text-[11px] font-medium text-fg-2 transition-colors hover:bg-elev hover:text-fg"
+                            >
+                              Verify
+                            </button>
+                          </Show>
+                        </li>
+                      );
+                    }}
+                  </For>
+                </ul>
+                <p class="mt-2 text-[10px] leading-snug text-fg-3">
+                  {isSelf()
+                    ? 'Verify each device to confirm your encrypted sessions are trusted.'
+                    : 'Verifying confirms this contact is who they claim to be.'}
                 </p>
               </Show>
             </div>
