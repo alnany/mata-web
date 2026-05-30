@@ -702,8 +702,33 @@ function MenuItem(props: { onClick: () => void; destructive?: boolean; children:
   );
 }
 
+/**
+ * Human tooltip listing who reacted, Telegram-style. `me` is shown as
+ * "You" and floated to the front. Senders are capped by the worker, so
+ * when the named list is shorter than `count` we tack on "and N others".
+ */
+function reactorTooltip(r: ReactionAggregate, me: UserId | null): string {
+  const named = r.senders ?? [];
+  const labels = named.map((id) => (id === me ? 'You' : prettyName(id)));
+  // "You" reads best first.
+  labels.sort((a, b) => (a === 'You' ? -1 : b === 'You' ? 1 : 0));
+  const shownCount = labels.length;
+  const remainder = Math.max(0, r.count - shownCount);
+
+  let who: string;
+  if (shownCount === 0) {
+    who = `${r.count} ${r.count === 1 ? 'reaction' : 'reactions'}`;
+  } else if (remainder > 0) {
+    who = `${labels.join(', ')} and ${remainder} other${remainder === 1 ? '' : 's'}`;
+  } else if (shownCount === 1) {
+    who = labels[0]!;
+  } else {
+    who = `${labels.slice(0, -1).join(', ')} and ${labels[shownCount - 1]}`;
+  }
+  return shownCount === 0 ? who : `${who} reacted with ${r.key}`;
+}
+
 function ReactionPill(props: { r: ReactionAggregate; me: UserId | null; onToggle: () => void }) {
-  void props.me; // reserved for hover tooltip when user list lands
   return (
     <button
       type="button"
@@ -713,7 +738,7 @@ function ReactionPill(props: { r: ReactionAggregate; me: UserId | null; onToggle
           ? 'border-mata-500 bg-mata-500/15 text-mata-700 dark:text-mata-300'
           : 'border-line-2 bg-elev text-fg-2 hover:bg-input'
       }`}
-      title={`${props.r.count} reaction${props.r.count === 1 ? '' : 's'}`}
+      title={reactorTooltip(props.r, props.me)}
     >
       <span>{props.r.key}</span>
       <span class="text-[11px]">{props.r.count}</span>

@@ -223,6 +223,13 @@ export interface ReactionAggregate {
   key: string;
   count: number;
   selfReacted: boolean;
+  /**
+   * User IDs who reacted with this key, in first-seen order. Capped at
+   * a small number by the worker (we only need enough to render a
+   * "Alice, Bob and 3 others" tooltip). May undercount `count` when the
+   * cap is hit — the tooltip says "and N others" using `count`.
+   */
+  senders: UserId[];
 }
 
 /**

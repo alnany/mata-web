@@ -288,20 +288,28 @@ export class SdkSession {
       ?.getRelations();
     if (!rels || rels.length === 0) return [];
     const myId = this.client?.getUserId() ?? null;
-    const agg = new Map<string, { count: number; self: boolean }>();
+    // Cap on stored sender ids per key — enough for a readable tooltip
+    // without bloating every timeline event in a high-traffic room.
+    const SENDER_CAP = 12;
+    const agg = new Map<string, { count: number; self: boolean; senders: string[] }>();
     for (const e of rels) {
       if (e.isRedacted()) continue;
       const key = e.getRelation()?.key;
       if (typeof key !== 'string' || key.length === 0) continue;
-      const cur = agg.get(key) ?? { count: 0, self: false };
+      const cur = agg.get(key) ?? { count: 0, self: false, senders: [] };
       cur.count += 1;
-      if (e.getSender() === myId) cur.self = true;
+      const sender = e.getSender();
+      if (sender === myId) cur.self = true;
+      if (sender && cur.senders.length < SENDER_CAP && !cur.senders.includes(sender)) {
+        cur.senders.push(sender);
+      }
       agg.set(key, cur);
     }
     return [...agg.entries()].map(([key, v]) => ({
       key,
       count: v.count,
       selfReacted: v.self,
+      senders: v.senders as UserId[],
     }));
   }
 
