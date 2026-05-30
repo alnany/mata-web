@@ -782,10 +782,34 @@ function reactorTooltip(r: ReactionAggregate, me: UserId | null): string {
 }
 
 function ReactionPill(props: { r: ReactionAggregate; me: UserId | null; onToggle: () => void }) {
+  // Pop the glyph whenever the count ticks up (anyone's reaction) — a
+  // brief, restrained bounce that makes incoming reactions feel alive.
+  const [popping, setPopping] = createSignal(false);
+  let prevCount = props.r.count;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const pop = () => {
+    setPopping(false);
+    // Force reflow so re-adding the class restarts the animation even on
+    // back-to-back increments.
+    requestAnimationFrame(() => {
+      setPopping(true);
+      clearTimeout(timer);
+      timer = setTimeout(() => setPopping(false), 260);
+    });
+  };
+  createEffect(() => {
+    const c = props.r.count;
+    if (c > prevCount) pop();
+    prevCount = c;
+  });
+  onCleanup(() => clearTimeout(timer));
   return (
     <button
       type="button"
-      onClick={props.onToggle}
+      onClick={() => {
+        pop();
+        props.onToggle();
+      }}
       class={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors ${
         props.r.selfReacted
           ? 'border-mata-500 bg-mata-500/15 text-mata-700 dark:text-mata-300'
@@ -793,7 +817,7 @@ function ReactionPill(props: { r: ReactionAggregate; me: UserId | null; onToggle
       }`}
       title={reactorTooltip(props.r, props.me)}
     >
-      <span>{props.r.key}</span>
+      <span class={popping() ? 'mata-react-pop' : 'inline-block'}>{props.r.key}</span>
       <span class="text-[11px]">{props.r.count}</span>
     </button>
   );
