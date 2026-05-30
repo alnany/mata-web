@@ -10,6 +10,9 @@
     "pnpm": ">=9.0.0"
   },
   "packageManager": "pnpm@9.12.3",
+  "dependencies": {
+    "web-push": "3.6.7"
+  },
   "scripts": {
     "dev": "pnpm --filter @mata/web dev",
     "build": "pnpm -r --parallel build",

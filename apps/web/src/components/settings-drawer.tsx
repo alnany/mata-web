@@ -13,7 +13,8 @@ import {
   notifyPermission,
   setNotifyEnabled,
 } from '../stores/notifications.js';
-import { withToast } from '../stores/toast.js';
+import { withToast, showToast } from '../stores/toast.js';
+import { enableWebPush, disableWebPush } from '../lib/webpush.js';
 import { useNavigate } from '@solidjs/router';
 import type { Device } from '@mata/shared/matrix';
 import { EncryptionPanel } from './encryption-panel.js';
@@ -331,7 +332,32 @@ export function SettingsDrawer(props: {
                     </div>
                     <button
                       type="button"
-                      onClick={() => void setNotifyEnabled(!notifyEnabled())}
+                      onClick={() =>
+                        void (async () => {
+                          const next = !notifyEnabled();
+                          // Foreground layer first (permission + in-tab chime).
+                          await setNotifyEnabled(next);
+                          // Background layer: subscribe / tear down the
+                          // homeserver pusher. Only register once the browser
+                          // actually granted permission.
+                          try {
+                            if (next) {
+                              if (notifyPermission() === 'granted') {
+                                await enableWebPush(bridge);
+                              }
+                            } else {
+                              await disableWebPush(bridge);
+                            }
+                          } catch (err) {
+                            showToast(
+                              'error',
+                              `Background notifications unavailable: ${
+                                err instanceof Error ? err.message : 'unknown error'
+                              }`,
+                            );
+                          }
+                        })()
+                      }
                       class={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
                         notifyEnabled()
                           ? 'bg-mata-500'

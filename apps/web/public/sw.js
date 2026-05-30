@@ -201,3 +201,69 @@ self.addEventListener('message', (event) => {
     self.skipWaiting();
   }
 });
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Web Push
+ *
+ * The homeserver's pusher forwards matching events to /api/push, which
+ * encrypts a small JSON payload and hands it to the browser's push
+ * service. That wakes this `push` handler even with every tab closed.
+ *
+ * Payload shape (see api/push.ts buildPayload):
+ *   { title, body, roomId, eventId }
+ *
+ * We collapse notifications per-room via `tag` so a chatty room shows one
+ * stacked toast instead of a wall. `data.roomId` rides along so the
+ * click handler can deep-link.
+ * ──────────────────────────────────────────────────────────────────── */
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    // Non-JSON / empty payload — show a generic nudge rather than nothing.
+    data = {};
+  }
+  const title = (data && data.title) || 'Mata';
+  const body = (data && data.body) || 'New message';
+  const roomId = (data && data.roomId) || null;
+  const eventId = (data && data.eventId) || null;
+
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: '/favicon.svg',
+      badge: '/favicon.svg',
+      // One coalesced toast per room; renotify so a new message still
+      // buzzes even when an older toast for the room is on screen.
+      tag: roomId ? `mata-room-${roomId}` : 'mata',
+      renotify: true,
+      data: { roomId, eventId },
+    }),
+  );
+});
+
+/* Focus an existing tab (and tell it which room to open) or launch a new
+ * one deep-linked via ?room=. The in-app listener (home.tsx) handles the
+ * postMessage and the ?room= query on cold start. */
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const roomId = event.notification.data && event.notification.data.roomId;
+
+  event.waitUntil(
+    (async () => {
+      const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of all) {
+        // Same-origin tab already open: focus it and hand off the room.
+        if ('focus' in client) {
+          await client.focus();
+          if (roomId) client.postMessage({ type: 'mata:navigate', roomId });
+          return;
+        }
+      }
+      // No open tab — open one pointed at the room.
+      const url = roomId ? `/?room=${encodeURIComponent(roomId)}` : '/';
+      await self.clients.openWindow(url);
+    })(),
+  );
+});

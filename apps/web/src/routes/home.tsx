@@ -352,6 +352,27 @@ export function HomePage() {
   const LAST_ROOM_KEY = 'mata:lastRoomId';
   const [activeId, setActiveId] = createSignal<RoomId | null>(
     (() => {
+      // A notification-click cold start lands on /?room=<id>. That target
+      // wins over the persisted last room; we strip the param afterwards
+      // so a later refresh doesn't keep re-forcing it.
+      try {
+        const fromUrl = new URLSearchParams(location.search).get('room');
+        if (fromUrl) {
+          try {
+            localStorage.setItem(LAST_ROOM_KEY, fromUrl);
+          } catch {
+            /* private mode — non-fatal */
+          }
+          try {
+            history.replaceState(null, '', location.pathname);
+          } catch {
+            /* ignore */
+          }
+          return fromUrl as RoomId;
+        }
+      } catch {
+        /* no URL access — fall through to persisted room */
+      }
       try {
         return (localStorage.getItem(LAST_ROOM_KEY) || null) as RoomId | null;
       } catch {
@@ -359,6 +380,21 @@ export function HomePage() {
       }
     })(),
   );
+
+  // Warm-tab deep link: the SW posts `mata:navigate` when the user clicks
+  // a push notification while a tab is already open. Switch to that room.
+  onMount(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const onMsg = (e: MessageEvent) => {
+      const d = e.data as { type?: string; roomId?: RoomId } | null;
+      if (!d || d.type !== 'mata:navigate' || !d.roomId) return;
+      const target = (rooms() ?? []).find((r) => r.roomId === d.roomId);
+      if (target) openRoom(target);
+      else setActiveId(d.roomId);
+    };
+    navigator.serviceWorker.addEventListener('message', onMsg);
+    onCleanup(() => navigator.serviceWorker.removeEventListener('message', onMsg));
+  });
   const [caches, setCaches] = createStore<Record<string, RoomCache>>({});
   const updateCache = (roomId: RoomId, updater: (c: RoomCache) => void) => {
     setCaches(
