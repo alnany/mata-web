@@ -14,7 +14,6 @@ import { mountPresence } from '../stores/presence.js';
 import type { EventId, RoomId, RoomSummary, SearchHit, UserId } from '@mata/shared/matrix';
 import { RoomView, createRoomCache, type RoomCache } from './room-view.js';
 import { mergeEvents, reconcilePending } from '../lib/timeline-merge.js';
-import { showToast } from '../stores/toast.js';
 import { SettingsDrawer } from '../components/settings-drawer.js';
 import { dispatchSyncDeltas, setRoomCounts } from '../stores/notifications.js';
 import { NewRoomModal } from '../components/new-room-modal.js';
