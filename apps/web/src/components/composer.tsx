@@ -482,7 +482,6 @@ export function Composer(props: {
       class="border-t bg-conv px-[22px] pb-[18px] pt-[12px]"
       style={{ 'border-color': 'var(--color-line)' }}
     >
-      <div class="mx-auto w-full max-w-[var(--w-content,760px)]">
       <Show when={contextStrip()}>
         {(strip) => (
           <div
@@ -679,7 +678,6 @@ export function Composer(props: {
           </Show>
         </div>
         </Show>
-      </div>
       </div>
     </div>
   );

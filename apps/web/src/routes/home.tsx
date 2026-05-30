@@ -1024,7 +1024,7 @@ export function HomePage() {
       </aside>
 
       {/* -------- Conversation column ---------------------------------- */}
-      <div class="flex min-h-0 flex-col bg-conv">
+      <div class="flex min-h-0 min-w-0 flex-col bg-conv">
         {/* Offline / reconnecting banner — spans full conv column,
             auto-hides when sync returns to 'syncing'. Only shown
             after the app has successfully connected at least once so
