@@ -18,6 +18,7 @@ import { SettingsDrawer } from '../components/settings-drawer.js';
 import { dispatchSyncDeltas, setRoomCounts } from '../stores/notifications.js';
 import { NewRoomModal } from '../components/new-room-modal.js';
 import { readRoomList, writeRoomList } from '../lib/persistent-cache.js';
+import { highlightSegments } from '../lib/search-highlight.js';
 import { listTime } from '../lib/date-buckets.js';
 import { initials, gradientForUser, prettyName } from '../components/message-bubble.js';
 import { Mark } from '../components/logo.js';
@@ -973,9 +974,32 @@ export function HomePage() {
                                   {roomLabelFor(hit.roomId)}
                                 </span>
                               </span>
+                              {/* Context search: the matched line with the
+                                  query term emphasized, framed by the muted
+                                  message immediately before/after it. */}
+                              <Show when={hit.contextBefore}>
+                                <span class="mt-0.5 block truncate text-[11px] italic text-fg-4">
+                                  {hit.contextBefore}
+                                </span>
+                              </Show>
                               <span class="mt-0.5 block truncate text-[11.5px] text-fg-3">
-                                {hit.body}
+                                <For each={highlightSegments(hit.body, filter().trim())}>
+                                  {(seg) =>
+                                    seg.match ? (
+                                      <mark class="rounded-[2px] bg-accent/25 px-0.5 text-fg">
+                                        {seg.text}
+                                      </mark>
+                                    ) : (
+                                      <>{seg.text}</>
+                                    )
+                                  }
+                                </For>
                               </span>
+                              <Show when={hit.contextAfter}>
+                                <span class="mt-0.5 block truncate text-[11px] italic text-fg-4">
+                                  {hit.contextAfter}
+                                </span>
+                              </Show>
                             </span>
                           </button>
                         </li>
