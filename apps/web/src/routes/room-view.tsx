@@ -605,6 +605,17 @@ export function RoomView(props: {
       () => props.room.roomId,
       () => {
         loadInitial();
+        // Re-subscribe on EVERY room switch, independent of loadInitial's
+        // `loaded` guard. loadInitial early-returns for an already-loaded
+        // room, so without this the worker's `subscribedRoomId` (and its
+        // reconcile-tail safety net that re-emits the tail on every sync
+        // tick to catch events that slipped through RoomEvent.Timeline on
+        // reconnect / gap-fill) would stay pinned to the last NEWLY-opened
+        // room — leaving a revisited room without that net. Idempotent on
+        // the worker side (just sets the id + emits the tail once).
+        void bridge
+          .request({ kind: 'subscribeRoom', roomId: props.room.roomId })
+          .catch(() => {});
         setTypingUsers([]);
         // Reload the destination room's draft from localStorage. We
         // MUST NOT call setDraft('') here: setDraft writes through
