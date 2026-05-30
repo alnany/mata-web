@@ -8,6 +8,7 @@ import type {
   UserId,
 } from '@mata/shared/matrix';
 import { shortTime } from '../lib/date-buckets.js';
+import { showToast } from '../stores/toast.js';
 import { normalizeWaveform, formatDuration } from '../lib/voice.js';
 import { useBridge } from '../bridge/context.js';
 import { LinkPreviewCard, extractFirstUrl, findUrlSpans } from './link-preview.js';
@@ -217,10 +218,12 @@ export function MessageBubble(props: {
   };
 
   const copyText = async () => {
+    const body = msg.content.msgtype === 'm.text' ? msg.content.body : '';
     try {
-      await navigator.clipboard.writeText(msg.content.msgtype === 'm.text' ? msg.content.body : '');
+      await navigator.clipboard.writeText(body);
+      showToast('success', 'Copied to clipboard', 1800);
     } catch {
-      // ignore
+      showToast('error', "Couldn't copy — clipboard blocked", 2500);
     }
     setShowMenu(false);
   };
@@ -229,8 +232,9 @@ export function MessageBubble(props: {
     const url = `https://matrix.to/#/${msg.roomId}/${msg.eventId}`;
     try {
       await navigator.clipboard.writeText(url);
+      showToast('success', 'Link copied', 1800);
     } catch {
-      // ignore
+      showToast('error', "Couldn't copy — clipboard blocked", 2500);
     }
     setShowMenu(false);
   };
@@ -478,7 +482,12 @@ export function MessageBubble(props: {
             class={`absolute top-0 z-20 -translate-y-1/2 transition-opacity duration-100 ${
               showMenu() || showEmoji()
                 ? 'pointer-events-auto opacity-100'
-                : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100'
+                : // Desktop (fine pointer): reveal on hover/focus. Touch
+                  // devices have no hover, so the bar would be undiscoverable
+                  // — `pointer-coarse` keeps it persistently visible there so
+                  // reply/react/more are tappable without a hidden long-press
+                  // (QA: IM-QA-MOBILE-002).
+                  'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100'
             } ${isMine() ? 'right-2' : 'left-2'}`}
           >
             <div

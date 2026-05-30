@@ -287,7 +287,34 @@ export function RoomView(props: {
   const revokeStaged = (s: StagedAttachment): void => {
     if (s.previewUrl) URL.revokeObjectURL(s.previewUrl);
   };
+  // Attachment guardrails. Runs at the single staging funnel so every
+  // entry point (attach button, drag-drop, clipboard paste) is covered.
+  // Rejects before preview with a clear, dismissible toast so the user
+  // stays in the composer and can keep chatting (QA: IM-QA-ATTACH-003).
+  const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024; // 100 MB
+  // Executable / script types we refuse to relay — never useful in chat,
+  // and a footgun if a recipient double-clicks. Everything else (images,
+  // video, audio, PDFs, docs, archives, plain text…) is allowed through.
+  const BLOCKED_ATTACHMENT_EXT =
+    /\.(exe|msi|bat|cmd|com|scr|pif|cpl|jar|sh|bash|zsh|ps1|vbs|js|app|deb|dmg|apk)$/i;
+  const attachmentRejection = (file: File): string | null => {
+    if (file.size === 0) return `"${file.name}" is empty — nothing to send.`;
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      const mb = (file.size / (1024 * 1024)).toFixed(1);
+      return `"${file.name}" is ${mb} MB — over the 100 MB upload limit.`;
+    }
+    if (BLOCKED_ATTACHMENT_EXT.test(file.name)) {
+      return `"${file.name}" is an executable/script type that can't be shared here.`;
+    }
+    return null;
+  };
+
   const stageAttachment = (file: File): void => {
+    const reason = attachmentRejection(file);
+    if (reason) {
+      showToast('error', reason, 5000);
+      return;
+    }
     const isImage = file.type.startsWith('image/');
     const entry: StagedAttachment = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -1312,7 +1339,11 @@ export function RoomView(props: {
       dismissToast(toastId);
     } catch (err) {
       dismissToast(toastId);
-      showToast('error', `Upload failed: ${msgOf(err)}`);
+      // Recover gracefully: re-stage the file so the user can retry
+      // without re-picking it. No page reload, composer stays usable
+      // (QA: IM-QA-ATTACH-001/002 upload-recovery expectation).
+      showToast('error', `Upload failed: ${msgOf(err)} — re-staged for retry.`);
+      stageAttachment(file);
     }
   };
 

@@ -61,6 +61,13 @@ import { authError, networkError, syncError } from '@mata/shared/errors';
 import type { WorkerEvent } from '@mata/shared/rpc';
 import type { IceServer, UrlPreview, UserSearchHit, WebPushSubscriptionJson } from '@mata/shared/rpc';
 import { parseHsPreview, fetchPreviewViaProxy, fetchPreviewClientSide } from './preview.js';
+// Attachments are statically imported (not lazy) so they fold into the
+// worker bundle. A previous `await import('./attachments.js')` produced a
+// standalone `attachments-<hash>.js` chunk that 404'd ("Failed to fetch
+// dynamically imported module") whenever a client held a stale worker
+// after a fresh deploy — surfacing as an upload failure. The module is
+// WebCrypto-only (no crypto-wasm), so bundling it costs nothing.
+import { sendFileMessage, loadMedia } from './attachments.js';
 import { VerificationService } from './verification.js';
 import {
   type SessionRecord,
@@ -1960,7 +1967,6 @@ export class SdkSession {
     extraContent?: Record<string, unknown>;
   }) {
     const c = this.requireClient();
-    const { sendFileMessage } = await import('./attachments.js');
     return sendFileMessage(c, args);
   }
 
@@ -1970,7 +1976,6 @@ export class SdkSession {
     mime: string;
   }) {
     const c = this.requireClient();
-    const { loadMedia } = await import('./attachments.js');
     return loadMedia(c, args);
   }
 
@@ -2642,13 +2647,33 @@ export class SdkSession {
             reason: `sdk: ${state}${errStr}`,
           });
           break;
-        case SyncState.Error:
-          this.emit({
-            kind: 'syncStatus',
-            status: 'error',
-            reason: errPayload ? describe(errPayload) : (data instanceof Error ? data.message : 'sync error'),
-          });
+        case SyncState.Error: {
+          // Classify expected aborts (long-poll /sync cancelled during
+          // navigation, tab shutdown, or offline transition) separately
+          // from real sync failures. These surface as AbortError /
+          // net::ERR_ABORTED and are benign — downgrade to a quiet
+          // "reconnecting" rather than a scary user-visible error so a
+          // genuine failure stands out (QA: IM-QA-NET-001/002).
+          const probe = `${errPayload ? describe(errPayload) : ''} ${
+            data instanceof Error ? `${data.name} ${data.message}` : ''
+          }`.toLowerCase();
+          const isAbort =
+            probe.includes('abort') || probe.includes('err_aborted');
+          this.emit(
+            isAbort
+              ? { kind: 'syncStatus', status: 'reconnecting', reason: 'sync paused (aborted)' }
+              : {
+                  kind: 'syncStatus',
+                  status: 'error',
+                  reason: errPayload
+                    ? describe(errPayload)
+                    : data instanceof Error
+                      ? data.message
+                      : 'sync error',
+                },
+          );
           break;
+        }
         case SyncState.Stopped:
           this.emit({ kind: 'syncStatus', status: 'idle' });
           break;
