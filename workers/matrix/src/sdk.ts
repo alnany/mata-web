@@ -28,6 +28,12 @@ type Emit = (event: WorkerEvent) => void;
 export class MatrixCore {
   private emit: Emit;
   private session: SdkSession | null = null;
+  // Single in-flight restore promise shared by tryRestore/restoreFrom/
+  // ensureSession so a cold-boot restore and a concurrent self-heal
+  // never kick off two bootClients on the same wrapper (which race the
+  // crypto store + teardown). Whoever arrives first owns the boot; the
+  // rest await the same promise.
+  private restoring: Promise<LoggedIn> | null = null;
   private loading: Promise<typeof import('./sdk-impl.js')> | null = null;
 
   constructor(emit: Emit) {
@@ -67,9 +73,15 @@ export class MatrixCore {
   }
 
   async restoreFrom(record: SessionRecord): Promise<LoggedIn> {
-    const impl = await this.ensureImpl();
-    if (!this.session) this.session = new impl.SdkSession(this.emit);
-    return this.session.restoreFrom(record);
+    if (this.restoring) return this.restoring;
+    this.restoring = (async () => {
+      const impl = await this.ensureImpl();
+      if (!this.session) this.session = new impl.SdkSession(this.emit);
+      return this.session.restoreFrom(record);
+    })().finally(() => {
+      this.restoring = null;
+    });
+    return this.restoring;
   }
 
   async logout(): Promise<void> {
@@ -79,7 +91,7 @@ export class MatrixCore {
   }
 
   async listRoomSummaries(): Promise<RoomSummary[]> {
-    return this.requireSession().listRoomSummaries();
+    return (await this.ensureSession()).listRoomSummaries();
   }
 
   async loadRoomHistory(
@@ -91,15 +103,23 @@ export class MatrixCore {
     prevToken: string | null;
     readUpToEventId: string | null;
   }> {
-    return this.requireSession().loadRoomHistory(roomId, fromToken, limit);
+    return (await this.ensureSession()).loadRoomHistory(roomId, fromToken, limit);
   }
 
   subscribeRoom(roomId: RoomId): void {
-    this.requireSession().subscribeRoom(roomId);
+    if (this.session?.isLoggedIn()) {
+      this.session.subscribeRoom(roomId);
+      return;
+    }
+    // Worker (re)spawned without a live session — heal, then subscribe.
+    void this.ensureSession()
+      .then((sess) => sess.subscribeRoom(roomId))
+      .catch(() => {});
   }
 
   unsubscribeRoom(): void {
-    this.requireSession().unsubscribeRoom();
+    // Best-effort: nothing to unsubscribe if no live session.
+    this.session?.unsubscribeRoom();
   }
 
   async sendMessage(
@@ -109,15 +129,15 @@ export class MatrixCore {
     threadRoot?: EventId,
     replyTo?: { eventId: EventId; sender: UserId; body: string },
   ): Promise<void> {
-    return this.requireSession().sendMessage(roomId, content, txnId, threadRoot, replyTo);
+    return (await this.ensureSession()).sendMessage(roomId, content, txnId, threadRoot, replyTo);
   }
 
   async setRoomMuted(roomId: RoomId, muted: boolean): Promise<boolean> {
-    return this.requireSession().setRoomMuted(roomId, muted);
+    return (await this.ensureSession()).setRoomMuted(roomId, muted);
   }
 
   async loadThread(roomId: RoomId, threadRootId: EventId): Promise<TimelineEvent[]> {
-    return this.requireSession().loadThread(roomId, threadRootId);
+    return (await this.ensureSession()).loadThread(roomId, threadRootId);
   }
 
   async sendCallEvent(
@@ -125,18 +145,18 @@ export class MatrixCore {
     eventType: string,
     content: Record<string, unknown>,
   ): Promise<EventId> {
-    return this.requireSession().sendCallEvent(roomId, eventType, content);
+    return (await this.ensureSession()).sendCallEvent(roomId, eventType, content);
   }
 
   async getTurnServers(): Promise<import('@mata/shared/rpc').IceServer[]> {
-    return this.requireSession().getTurnServers();
+    return (await this.ensureSession()).getTurnServers();
   }
 
   async searchMessages(
     query: string,
     roomId: RoomId | null,
   ): Promise<{ results: SearchHit[]; count: number; highlights: string[] }> {
-    return this.requireSession().searchMessages(query, roomId);
+    return (await this.ensureSession()).searchMessages(query, roomId);
   }
 
   async editMessage(
@@ -145,39 +165,39 @@ export class MatrixCore {
     content: MessageBody,
     txnId: string,
   ): Promise<void> {
-    return this.requireSession().editMessage(roomId, eventId, content, txnId);
+    return (await this.ensureSession()).editMessage(roomId, eventId, content, txnId);
   }
 
   async redactMessage(roomId: RoomId, eventId: EventId, reason: string | null): Promise<void> {
-    return this.requireSession().redactMessage(roomId, eventId, reason);
+    return (await this.ensureSession()).redactMessage(roomId, eventId, reason);
   }
 
   async pinEvent(roomId: RoomId, eventId: EventId): Promise<void> {
-    return this.requireSession().pinEvent(roomId, eventId);
+    return (await this.ensureSession()).pinEvent(roomId, eventId);
   }
 
   async unpinEvent(roomId: RoomId, eventId: EventId): Promise<void> {
-    return this.requireSession().unpinEvent(roomId, eventId);
+    return (await this.ensureSession()).unpinEvent(roomId, eventId);
   }
 
   async fetchEvent(roomId: RoomId, eventId: EventId): Promise<TimelineEvent | null> {
-    return this.requireSession().fetchEvent(roomId, eventId);
+    return (await this.ensureSession()).fetchEvent(roomId, eventId);
   }
 
   async fetchPresence(
     userId: UserId,
   ): Promise<{ presence: 'online' | 'offline' | 'unavailable'; lastActiveAgoMs: number | null; currentlyActive: boolean | null } | null> {
-    return this.requireSession().fetchPresence(userId);
+    return (await this.ensureSession()).fetchPresence(userId);
   }
 
   async fetchProfile(
     userId: UserId,
   ): Promise<{ displayName: string | null; avatarUrl: string | null; ignored: boolean }> {
-    return this.requireSession().fetchProfile(userId);
+    return (await this.ensureSession()).fetchProfile(userId);
   }
 
   async setIgnored(userId: UserId, ignored: boolean): Promise<void> {
-    return this.requireSession().setIgnored(userId, ignored);
+    return (await this.ensureSession()).setIgnored(userId, ignored);
   }
 
   async fetchRoomSettings(roomId: RoomId): Promise<{
@@ -187,19 +207,19 @@ export class MatrixCore {
     canSetTopic: boolean;
     canSetAvatar: boolean;
   }> {
-    return this.requireSession().fetchRoomSettings(roomId);
+    return (await this.ensureSession()).fetchRoomSettings(roomId);
   }
 
   async setRoomName(roomId: RoomId, name: string): Promise<void> {
-    return this.requireSession().setRoomName(roomId, name);
+    return (await this.ensureSession()).setRoomName(roomId, name);
   }
 
   async setRoomTopic(roomId: RoomId, topic: string): Promise<void> {
-    return this.requireSession().setRoomTopic(roomId, topic);
+    return (await this.ensureSession()).setRoomTopic(roomId, topic);
   }
 
   async setRoomAvatar(roomId: RoomId, mxc: MxcUri): Promise<void> {
-    return this.requireSession().setRoomAvatar(roomId, mxc);
+    return (await this.ensureSession()).setRoomAvatar(roomId, mxc);
   }
 
   async setMemberPowerLevel(
@@ -207,28 +227,28 @@ export class MatrixCore {
     userId: UserId,
     powerLevel: number,
   ): Promise<void> {
-    return this.requireSession().setMemberPowerLevel(roomId, userId, powerLevel);
+    return (await this.ensureSession()).setMemberPowerLevel(roomId, userId, powerLevel);
   }
 
   async fetchReadReceipts(
     roomId: RoomId,
   ): Promise<{ userId: UserId; eventId: EventId; ts: number }[]> {
-    return this.requireSession().fetchReadReceipts(roomId);
+    return (await this.ensureSession()).fetchReadReceipts(roomId);
   }
 
   async fetchEditHistory(
     roomId: RoomId,
     eventId: EventId,
   ): Promise<{ body: string; ts: number; sender: UserId }[]> {
-    return this.requireSession().fetchEditHistory(roomId, eventId);
+    return (await this.ensureSession()).fetchEditHistory(roomId, eventId);
   }
 
   async jumpToTimestamp(roomId: RoomId, ts: number): Promise<EventId | null> {
-    return this.requireSession().jumpToTimestamp(roomId, ts);
+    return (await this.ensureSession()).jumpToTimestamp(roomId, ts);
   }
 
   async forgetRoom(roomId: RoomId): Promise<void> {
-    return this.requireSession().forgetRoom(roomId);
+    return (await this.ensureSession()).forgetRoom(roomId);
   }
 
   async setWebPusher(
@@ -237,113 +257,113 @@ export class MatrixCore {
     appId: string,
     lang: string,
   ): Promise<void> {
-    return this.requireSession().setWebPusher(subscription, gatewayUrl, appId, lang);
+    return (await this.ensureSession()).setWebPusher(subscription, gatewayUrl, appId, lang);
   }
 
   async removeWebPusher(endpoint: string, appId: string): Promise<void> {
-    return this.requireSession().removeWebPusher(endpoint, appId);
+    return (await this.ensureSession()).removeWebPusher(endpoint, appId);
   }
 
   async sendReaction(roomId: RoomId, eventId: EventId, key: string): Promise<void> {
-    return this.requireSession().sendReaction(roomId, eventId, key);
+    return (await this.ensureSession()).sendReaction(roomId, eventId, key);
   }
 
   async sendTyping(roomId: RoomId, timeoutMs: number): Promise<void> {
-    return this.requireSession().sendTyping(roomId, timeoutMs);
+    return (await this.ensureSession()).sendTyping(roomId, timeoutMs);
   }
 
   async sendReadReceipt(roomId: RoomId, eventId: EventId): Promise<void> {
-    return this.requireSession().sendReadReceipt(roomId, eventId);
+    return (await this.ensureSession()).sendReadReceipt(roomId, eventId);
   }
 
   async markRoomRead(roomId: RoomId): Promise<void> {
-    return this.requireSession().markRoomRead(roomId);
+    return (await this.ensureSession()).markRoomRead(roomId);
   }
 
   async uploadMedia(data: ArrayBuffer, mime: string, filename: string): Promise<MxcUri> {
-    return this.requireSession().uploadMedia(data, mime, filename);
+    return (await this.ensureSession()).uploadMedia(data, mime, filename);
   }
 
   async sendFileMessage(args: Parameters<SdkSession['sendFileMessage']>[0]) {
-    return this.requireSession().sendFileMessage(args);
+    return (await this.ensureSession()).sendFileMessage(args);
   }
 
   async loadMedia(args: Parameters<SdkSession['loadMedia']>[0]) {
-    return this.requireSession().loadMedia(args);
+    return (await this.ensureSession()).loadMedia(args);
   }
 
   async createRoom(args: Parameters<SdkSession['createRoom']>[0]) {
-    return this.requireSession().createRoom(args);
+    return (await this.ensureSession()).createRoom(args);
   }
 
   async inviteToRoom(roomId: RoomId, userId: UserId) {
-    return this.requireSession().inviteToRoom(roomId, userId);
+    return (await this.ensureSession()).inviteToRoom(roomId, userId);
   }
 
   async forwardEvent(sourceRoomId: RoomId, sourceEventId: EventId, targetRoomId: RoomId) {
-    return this.requireSession().forwardEvent(sourceRoomId, sourceEventId, targetRoomId);
+    return (await this.ensureSession()).forwardEvent(sourceRoomId, sourceEventId, targetRoomId);
   }
 
   async joinRoom(roomId: RoomId) {
-    return this.requireSession().joinRoom(roomId);
+    return (await this.ensureSession()).joinRoom(roomId);
   }
 
   async leaveRoom(roomId: RoomId) {
-    return this.requireSession().leaveRoom(roomId);
+    return (await this.ensureSession()).leaveRoom(roomId);
   }
 
   async loadRoomMembers(roomId: RoomId) {
-    return this.requireSession().loadRoomMembers(roomId);
+    return (await this.ensureSession()).loadRoomMembers(roomId);
   }
 
   async kickFromRoom(roomId: RoomId, userId: UserId, reason: string | null) {
-    return this.requireSession().kickFromRoom(roomId, userId, reason);
+    return (await this.ensureSession()).kickFromRoom(roomId, userId, reason);
   }
 
   async banFromRoom(roomId: RoomId, userId: UserId, reason: string | null) {
-    return this.requireSession().banFromRoom(roomId, userId, reason);
+    return (await this.ensureSession()).banFromRoom(roomId, userId, reason);
   }
 
   async unbanFromRoom(roomId: RoomId, userId: UserId) {
-    return this.requireSession().unbanFromRoom(roomId, userId);
+    return (await this.ensureSession()).unbanFromRoom(roomId, userId);
   }
 
   async fetchBannedMembers(roomId: RoomId) {
-    return this.requireSession().fetchBannedMembers(roomId);
+    return (await this.ensureSession()).fetchBannedMembers(roomId);
   }
 
   async beginDeviceVerification(userId: UserId, deviceId: DeviceId) {
-    return this.requireSession().beginDeviceVerification(userId, deviceId);
+    return (await this.ensureSession()).beginDeviceVerification(userId, deviceId);
   }
 
   async completeSasVerification(transactionId: string, result: 'match' | 'mismatch') {
-    return this.requireSession().completeSasVerification(transactionId, result);
+    return (await this.ensureSession()).completeSasVerification(transactionId, result);
   }
 
   async cancelVerification(transactionId: string) {
-    return this.requireSession().cancelVerification(transactionId);
+    return (await this.ensureSession()).cancelVerification(transactionId);
   }
 
   // --- Phase 5.2 encryption setup -------------------------------------------
 
   async getEncryptionStatus() {
-    return this.requireSession().getEncryptionStatus();
+    return (await this.ensureSession()).getEncryptionStatus();
   }
 
   async listDevices() {
-    return this.requireSession().listDevices();
+    return (await this.ensureSession()).listDevices();
   }
 
   async fetchUserDevices(userId: string) {
-    return this.requireSession().fetchUserDevices(userId);
+    return (await this.ensureSession()).fetchUserDevices(userId);
   }
 
   async enableKeyBackup(password: string, passphrase: string) {
-    return this.requireSession().enableKeyBackup(password, passphrase);
+    return (await this.ensureSession()).enableKeyBackup(password, passphrase);
   }
 
   async restoreKeyBackup(recoveryKey: string) {
-    return this.requireSession().restoreKeyBackup(recoveryKey);
+    return (await this.ensureSession()).restoreKeyBackup(recoveryKey);
   }
 
   // --- Link previews + user directory ---------------------------------------
@@ -355,7 +375,7 @@ export class MatrixCore {
    * text without a noisy toast.
    */
   async getUrlPreview(url: string) {
-    return this.requireSession().getUrlPreview(url);
+    return (await this.ensureSession()).getUrlPreview(url);
   }
 
   /**
@@ -394,8 +414,32 @@ export class MatrixCore {
     return session.client ?? null;
   }
 
-  private requireSession(): SdkSession {
-    if (!this.session) throw authError('Not logged in');
+  /**
+   * Resolve a live, logged-in session — healing a lost one on the way.
+   *
+   * `isLoggedIn()` is `client !== null`, so this returns immediately on the
+   * happy path and otherwise re-restores from the persisted record. This is
+   * the OUTER companion to SdkSession.waitForClient(): the outer layer
+   * recreates the session wrapper + client when the whole worker was torn
+   * down; the inner layer covers a momentarily-null client on a live
+   * wrapper. Together they close the Safari "Not logged in" class for every
+   * RPC. Only a genuinely logged-out user (no persisted record) still errors.
+   */
+  private async ensureSession(): Promise<SdkSession> {
+    if (this.session?.isLoggedIn()) return this.session;
+    // A restore may already be in flight (cold boot, or another RPC's heal).
+    if (this.restoring) {
+      try {
+        await this.restoring;
+      } catch {
+        /* fall through and retry below */
+      }
+      if (this.session?.isLoggedIn()) return this.session;
+    }
+    const record = await loadActiveSession();
+    if (!record) throw authError('Not logged in');
+    await this.restoreFrom(record);
+    if (!this.session?.isLoggedIn()) throw authError('Not logged in');
     return this.session;
   }
 

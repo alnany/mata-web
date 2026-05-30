@@ -17,9 +17,11 @@ import { resolve } from 'node:path';
  */
 // vitest runs with cwd = apps/web; the worker lives two levels up.
 const sdkImpl = resolve(process.cwd(), '../../workers/matrix/src/sdk-impl.ts');
+const sdkCore = resolve(process.cwd(), '../../workers/matrix/src/sdk.ts');
 
 describe('worker client gate — Safari "Not logged in" regression guard', () => {
   const src = readFileSync(sdkImpl, 'utf8');
+  const core = readFileSync(sdkCore, 'utf8');
 
   it('has no synchronous requireClient() call sites', () => {
     const calls = src.match(/this\.requireClient\(\)/g) ?? [];
@@ -33,5 +35,17 @@ describe('worker client gate — Safari "Not logged in" regression guard', () =>
   it('still routes client access through waitForClient()', () => {
     expect(src.includes('async waitForClient(')).toBe(true);
     expect((src.match(/this\.waitForClient\(\)/g) ?? []).length).toBeGreaterThan(20);
+  });
+
+  // Outer layer (MatrixCore): the session wrapper gate must also self-heal,
+  // or send/etc. throw "Not logged in" before reaching the inner client gate
+  // when Safari respawns the worker with empty in-memory state.
+  it('MatrixCore has no synchronous requireSession() gate', () => {
+    expect(core.includes('requireSession')).toBe(false);
+  });
+
+  it('MatrixCore routes session access through the self-healing ensureSession()', () => {
+    expect(core.includes('private async ensureSession(')).toBe(true);
+    expect((core.match(/await this\.ensureSession\(\)/g) ?? []).length).toBeGreaterThan(20);
   });
 });
