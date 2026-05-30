@@ -178,9 +178,22 @@ export function applySendStatus<
     next[idx] = { ...next[idx], expectedEventId: status.eventId };
     return { pending: next, failedReason: null };
   }
-  const reason = status.error?.message ?? 'send failed';
-  next[idx] = { ...next[idx], status: 'failed', errorReason: reason };
-  return { pending: next, failedReason: reason };
+  if (status.status === 'failed') {
+    // Idempotent: a real failure makes the worker BOTH emit sendStatus
+    // 'failed' AND reject the send RPC (caught in the composer). Whichever
+    // marks the entry failed first owns the single toast; a second 'failed'
+    // for an already-failed entry is a no-op so we never double-toast.
+    if (pending[idx].status === 'failed') return { pending: pending as P[], failedReason: null };
+    const reason = status.error?.message ?? 'send failed';
+    next[idx] = { ...next[idx], status: 'failed', errorReason: reason };
+    return { pending: next, failedReason: reason };
+  }
+  // status === 'sending' (in-flight). The worker fires this FIRST on every
+  // send, before 'sent'/'failed'. It is NOT a failure — the pending entry
+  // is already in its 'sending' state, so this is a no-op. (Treating any
+  // non-'sent' status as failure was the cause of the spurious
+  // "Send failed: send failed" toast on every successful send.)
+  return { pending: pending as P[], failedReason: null };
 }
 
 /**

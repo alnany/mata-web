@@ -1132,14 +1132,24 @@ export function RoomView(props: {
       })
       .catch((err) => {
         diag(`send-UI[${shortTxn}]: rpc-rejected err=${msgOf(err).slice(0, 160)}`);
+        // The sendStatus 'failed' event (handled in home.tsx) is the
+        // primary writer + toaster. This RPC-reject path is the safety net
+        // for failures that throw BEFORE any sendStatus emit (e.g. client
+        // not ready). Guard on the entry's current status so we don't
+        // double-toast when both paths fire for the same failure.
+        let alreadyFailed = false;
         props.setCache(props.room.roomId, (c: RoomCache) => {
           const p = c.pending.find((x) => x.txnId === txnId);
           if (p) {
+            if (p.status === 'failed') {
+              alreadyFailed = true;
+              return;
+            }
             p.status = 'failed';
             p.errorReason = msgOf(err);
           }
         });
-        showToast('error', `Send failed: ${msgOf(err)}`);
+        if (!alreadyFailed) showToast('error', `Send failed: ${msgOf(err)}`);
       });
 
   };

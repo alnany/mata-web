@@ -230,6 +230,40 @@ describe('sync simulator — message-state core regressions', () => {
     expect(r.toast).toBe('M_FORBIDDEN'); // single writer ⇒ single toast
   });
 
+  it('SCENARIO: failed send is idempotent — a second "failed" never re-toasts', () => {
+    // The worker emits sendStatus 'failed' AND rejects the RPC for one
+    // failure; both reach the cache. Second 'failed' must be a no-op.
+    let s = addPending(empty(), { txnId: 't1', body: 'oops' });
+    const first = applyStatus(s, { txnId: 't1', status: 'failed', error: { message: 'M_FORBIDDEN' } });
+    expect(first.toast).toBe('M_FORBIDDEN');
+    const second = applyStatus(first.state, { txnId: 't1', status: 'failed', error: { message: 'M_FORBIDDEN' } });
+    expect(second.toast).toBeNull(); // no second toast
+    expect(second.state.pending[0].status).toBe('failed');
+  });
+
+  it('SCENARIO: in-flight "sending" status is NOT a failure (no spurious toast)', () => {
+    // REGRESSION: the worker fires sendStatus 'sending' FIRST on every
+    // send. Treating any non-'sent' status as failure made every send
+    // pop "Send failed: send failed" before the 'sent' confirmation.
+    let s = addPending(empty(), { txnId: 't1', body: 'hi' });
+    const r = applyStatus(s, { txnId: 't1', status: 'sending' });
+    s = r.state;
+    expect(r.toast).toBeNull(); // no toast
+    expect(s.pending).toHaveLength(1);
+    expect(s.pending[0].status).not.toBe('failed'); // bubble stays in-flight
+  });
+
+  it('SCENARIO: full happy path — sending → sent → echo, never flips to failed', () => {
+    let s = addPending(empty(), { txnId: 't1', body: 'hi' });
+    const a = applyStatus(s, { txnId: 't1', status: 'sending' });
+    expect(a.toast).toBeNull();
+    const b = applyStatus(a.state, { txnId: 't1', status: 'sent', eventId: 'E1' });
+    expect(b.toast).toBeNull();
+    s = applySync(b.state, [msg('E1', 'hi', { sender: ME, txnId: 't1' })]);
+    expect(s.pending).toHaveLength(0);
+    expect(totalBubbles(s)).toBe(1);
+  });
+
   it('SCENARIO: wrong-chat routing — a delta for room B never touches room A', () => {
     const world: World = new Map();
     world.set(ROOM_A, applySync(empty(), [msg('a1', 'in A', { roomId: ROOM_A })]));
