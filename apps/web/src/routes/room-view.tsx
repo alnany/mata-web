@@ -1425,27 +1425,57 @@ export function RoomView(props: {
         .then(() => showToast('success', 'Unpinned'))
         .catch((err) => showToast('error', `Unpin failed: ${msgOf(err)}`));
     },
-    onJumpTo: (eventId) => {
-      const target = document.querySelector(`[data-event-id="${cssEsc(eventId)}"]`);
-      if (target instanceof HTMLElement) {
+    onJumpTo: async (eventId) => {
+      const find = () =>
+        document.querySelector(`[data-event-id="${cssEsc(eventId)}"]`);
+      const flashAndScroll = (target: HTMLElement) => {
         target.scrollIntoView({ behavior: 'smooth', block: 'center' });
         // Flash the inner bubble (tighter, more eye-catching than ringing
         // the full-width row). Falls back to the row if no bubble found.
-        const flashEl =
-          target.querySelector<HTMLElement>('.mata-msg-text') ?? target;
+        const flashEl = target.querySelector<HTMLElement>('.mata-msg-text') ?? target;
         flashEl.classList.remove('mata-jump-flash');
         // Force reflow so re-triggering the same target restarts the anim.
         void flashEl.offsetWidth;
         flashEl.classList.add('mata-jump-flash');
-        const clear = () => flashEl.classList.remove('mata-jump-flash');
-        flashEl.addEventListener('animationend', clear, { once: true });
-      } else {
-        showToast(
-          'info',
-          'Message not loaded yet — scroll up to load older history.',
-          3000,
+        flashEl.addEventListener(
+          'animationend',
+          () => flashEl.classList.remove('mata-jump-flash'),
+          { once: true },
         );
+      };
+      const nextFrame = () =>
+        new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+      let target = find();
+      if (target instanceof HTMLElement) {
+        flashAndScroll(target);
+        return;
       }
+
+      // Target isn't in the rendered timeline — page back through history
+      // until it loads (Telegram-style "jump to quoted message"). Bounded
+      // so a reply to a very old / unreachable event eventually gives up.
+      const MAX_PAGES = 15;
+      let pages = 0;
+      while (
+        pages < MAX_PAGES &&
+        !(find() instanceof HTMLElement) &&
+        !props.cache.reachedStart &&
+        !!props.cache.prevToken
+      ) {
+        if (props.cache.paginating) {
+          await nextFrame();
+          continue;
+        }
+        pages += 1;
+        await paginateOlder();
+        // Let Solid flush the prepended rows into the DOM before re-checking.
+        await nextFrame();
+      }
+
+      target = find();
+      if (target instanceof HTMLElement) flashAndScroll(target);
+      else showToast('info', "Couldn't find that message in history.", 3000);
     },
   };
 
