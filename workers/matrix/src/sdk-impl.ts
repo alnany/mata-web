@@ -59,6 +59,7 @@ import type {
   ReactionAggregate,
 } from '@mata/shared/matrix';
 import { authError, networkError, syncError } from '@mata/shared/errors';
+import { pickExistingDirectRoom, type DedupRoom } from '@mata/shared/dm-dedup';
 import type { WorkerEvent } from '@mata/shared/rpc';
 import type { IceServer, UrlPreview, UserSearchHit, WebPushSubscriptionJson } from '@mata/shared/rpc';
 import { parseHsPreview, fetchPreviewViaProxy, fetchPreviewClientSide } from './preview.js';
@@ -1184,14 +1185,68 @@ export class SdkSession {
   // `m.direct` so other clients see the room in their DM list.
   // ---------------------------------------------------------------------------
 
+  /**
+   * Find an existing 1:1 DM room with `target` so we never spawn a second
+   * room for the same person. `m.direct` account-data is authoritative
+   * (it's how every Matrix client buckets DMs); we fall back to scanning
+   * joined rooms for an exact two-person room containing the target, which
+   * catches DMs the *other* side opened (their invite lands before our
+   * m.direct ever mentions the room). Rooms we've left/been banned from,
+   * and named/multi-party rooms, are skipped.
+   */
+  private async findExistingDirectRoom(target: UserId): Promise<RoomId | null> {
+    const c = this.client;
+    if (!c) return null;
+    // Gather the authoritative m.direct list (cached first, then server).
+    let directIds: string[] = [];
+    try {
+      const cached = c.getAccountData?.('m.direct')?.getContent?.() as
+        | Record<string, string[]>
+        | undefined;
+      const direct =
+        cached ??
+        (((await c.getAccountDataFromServer('m.direct')) as
+          | Record<string, string[]>
+          | null) ??
+          {});
+      directIds = direct[target] ?? [];
+    } catch {
+      /* m.direct unreadable — the fallback scan still runs */
+    }
+    // Map live SDK rooms into the pure decision shape.
+    const rooms: DedupRoom[] = c.getRooms().map((room) => {
+      const named = room.currentState.getStateEvents('m.room.name', '');
+      const name =
+        named && typeof named.getContent === 'function'
+          ? ((named.getContent()?.name as string | undefined) ?? null)
+          : null;
+      const tgt = room.getMember(target);
+      return {
+        roomId: room.roomId,
+        myMembership: room.getMyMembership(),
+        memberCount: room.getInvitedAndJoinedMemberCount(),
+        name,
+        targetMembership: tgt ? tgt.membership : null,
+      };
+    });
+    const match = pickExistingDirectRoom(target, directIds, rooms);
+    return (match as RoomId | null) ?? null;
+  }
+
   async createRoom(args: {
     name: string;
     topic: string | null;
     isDirect: boolean;
     encrypted: boolean;
     invite: UserId[];
-  }): Promise<RoomId> {
+  }): Promise<{ roomId: RoomId; reused: boolean }> {
     const c = await this.waitForClient();
+    // Never open a duplicate DM: if a room with this person already
+    // exists, return it and let the UI navigate there.
+    if (args.isDirect && args.invite.length === 1 && args.invite[0]) {
+      const existing = await this.findExistingDirectRoom(args.invite[0]);
+      if (existing) return { roomId: existing, reused: true };
+    }
     const initialState: Array<{
       type: string;
       state_key?: string;
@@ -1239,7 +1294,7 @@ export class SdkSession {
         console.warn('[mata] m.direct update failed', err);
       }
     }
-    return roomId;
+    return { roomId, reused: false };
   }
 
   async inviteToRoom(roomId: RoomId, userId: UserId): Promise<void> {

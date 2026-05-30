@@ -480,7 +480,7 @@ export type MainToWorkerResponse =
   | { kind: 'getEncryptionStatus'; status: EncryptionStatus }
   | { kind: 'enableKeyBackup'; recoveryKey: string }
   | { kind: 'restoreKeyBackup'; keysImported: number }
-  | { kind: 'createRoom'; roomId: RoomId }
+  | { kind: 'createRoom'; roomId: RoomId; reused: boolean }
   | { kind: 'inviteToRoom' }
   | { kind: 'joinRoom'; roomId: RoomId }
   | { kind: 'leaveRoom' }

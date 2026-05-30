@@ -323,7 +323,14 @@ export function NewRoomModal(props: {
         invite: inviteList,
       });
       props.onCreated(res.roomId);
-      showToast('success', mode() === 'dm' ? 'DM created' : 'Room created');
+      showToast(
+        'success',
+        res.reused
+          ? 'Opened your existing chat'
+          : mode() === 'dm'
+            ? 'DM created'
+            : 'Room created',
+      );
       reset();
       props.onClose();
     } catch (err) {

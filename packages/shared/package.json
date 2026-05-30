@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./rpc": "./src/rpc-contract.ts",
     "./errors": "./src/errors.ts",
-    "./matrix": "./src/matrix-types.ts"
+    "./matrix": "./src/matrix-types.ts",
+    "./dm-dedup": "./src/dm-dedup.ts"
   },
   "scripts": {
     "build": "echo \"@mata/shared is consumed via TS sources, no build step\"",

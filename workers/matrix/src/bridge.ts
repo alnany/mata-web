@@ -222,14 +222,14 @@ const handlers: Handlers = {
     return { kind: 'loadMedia', data, mime };
   },
   createRoom: async (req, core) => {
-    const roomId = await core.createRoom({
+    const { roomId, reused } = await core.createRoom({
       name: req.name,
       topic: req.topic,
       isDirect: req.isDirect,
       encrypted: req.encrypted,
       invite: req.invite,
     });
-    return { kind: 'createRoom', roomId };
+    return { kind: 'createRoom', roomId, reused };
   },
   inviteToRoom: async (req, core) => {
     await core.inviteToRoom(req.roomId, req.userId);
