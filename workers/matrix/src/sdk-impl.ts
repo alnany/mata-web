@@ -970,6 +970,45 @@ export class SdkSession {
   }
 
   /**
+   * Read positions of every *other* joined member, for the read-by
+   * avatar cluster. We read each member's public m.read receipt via
+   * `getEventReadUpTo` (the SDK's resolved up-to-event id, threaded or
+   * main). Self is excluded — Telegram shows who *else* has seen it.
+   * The receipt timestamp comes from the raw receipt record when the
+   * SDK exposes it, else 0.
+   */
+  async fetchReadReceipts(
+    roomId: RoomId,
+  ): Promise<{ userId: UserId; eventId: EventId; ts: number }[]> {
+    const c = this.requireClient();
+    const room = c.getRoom(roomId);
+    if (!room) return [];
+    const me = c.getUserId();
+    const out: { userId: UserId; eventId: EventId; ts: number }[] = [];
+    for (const member of room.getJoinedMembers()) {
+      const uid = member.userId;
+      if (uid === me) continue;
+      let eventId: string | null = null;
+      try {
+        eventId = room.getEventReadUpTo(uid, false);
+      } catch {
+        eventId = null;
+      }
+      if (!eventId) continue;
+      // Best-effort timestamp from the raw receipt record.
+      let ts = 0;
+      try {
+        const rec = room.getReadReceiptForUserId(uid);
+        ts = typeof rec?.data?.ts === 'number' ? rec.data.ts : 0;
+      } catch {
+        ts = 0;
+      }
+      out.push({ userId: uid as UserId, eventId: eventId as EventId, ts });
+    }
+    return out;
+  }
+
+  /**
    * Mark an entire room read from the room list — i.e. without ever
    * opening it. The UI has no event id to anchor on (the timeline was
    * never loaded into a RoomView), so we resolve the room's newest
@@ -2746,7 +2785,11 @@ export class SdkSession {
 
     client.on(RoomEvent.Name, (room: Room) => this.emitRoomDelta(room));
     client.on(RoomEvent.AccountData, (_ev: MatrixEvent, room: Room) => this.emitRoomDelta(room));
-    client.on(RoomEvent.Receipt, (_ev: MatrixEvent, room: Room) => this.emitRoomDelta(room));
+    client.on(RoomEvent.Receipt, (_ev: MatrixEvent, room: Room) => {
+      this.emitRoomDelta(room);
+      // Nudge the open room to recompute its read-by avatar map.
+      this.emit({ kind: 'receipts', roomId: room.roomId as RoomId });
+    });
     client.on(RoomStateEvent.Members, (_ev: MatrixEvent, _state, member) => {
       const room = client.getRoom(member.roomId);
       if (room) this.emitRoomDelta(room);

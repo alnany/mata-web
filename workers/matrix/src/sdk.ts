@@ -210,6 +210,12 @@ export class MatrixCore {
     return this.requireSession().setMemberPowerLevel(roomId, userId, powerLevel);
   }
 
+  async fetchReadReceipts(
+    roomId: RoomId,
+  ): Promise<{ userId: UserId; eventId: EventId; ts: number }[]> {
+    return this.requireSession().fetchReadReceipts(roomId);
+  }
+
   async forgetRoom(roomId: RoomId): Promise<void> {
     return this.requireSession().forgetRoom(roomId);
   }

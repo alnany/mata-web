@@ -181,6 +181,11 @@ export function RoomView(props: {
   let scrollerRef: HTMLDivElement | undefined;
   const [stickToBottom, setStickToBottom] = createSignal(true);
   const [typingUsers, setTypingUsers] = createSignal<UserId[]>([]);
+  // Other members' read positions → read-by avatar clusters. Keyed by
+  // the event each member has read up to.
+  const [readReceipts, setReadReceipts] = createSignal<
+    { userId: UserId; eventId: EventId; ts: number }[]
+  >([]);
 
   // Composer state lives here because reply/edit context is per-room view.
   // The draft is persisted to localStorage keyed by roomId so it
@@ -749,6 +754,50 @@ export function RoomView(props: {
     setTypingUsers(e.userIds.filter((u) => u !== me()));
   });
   onCleanup(unsubTyping);
+
+  // ---- Read-by avatars ---------------------------------------------------
+  // Refetch every member's read position when a receipt lands. Receipts
+  // arrive in bursts during catch-up sync, so coalesce into one fetch.
+  let receiptTimer: number | undefined;
+  const refetchReceipts = () => {
+    void bridge
+      .request({ kind: 'fetchReadReceipts', roomId: props.room.roomId })
+      .then((r) => {
+        if (r.kind === 'fetchReadReceipts') setReadReceipts(r.receipts);
+      })
+      .catch(() => undefined);
+  };
+  const unsubReceipts = bridge.on('receipts', (e) => {
+    if (e.roomId !== props.room.roomId) return;
+    if (receiptTimer) return;
+    receiptTimer = window.setTimeout(() => {
+      receiptTimer = undefined;
+      refetchReceipts();
+    }, 400);
+  });
+  onCleanup(() => {
+    unsubReceipts();
+    if (receiptTimer) window.clearTimeout(receiptTimer);
+  });
+  // Initial load whenever the open room changes.
+  createEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+    props.room.roomId;
+    setReadReceipts([]);
+    refetchReceipts();
+  });
+
+  // Map of eventId → reader MXIDs (the message sender is filtered out at
+  // render time so nobody appears to "read" their own message).
+  const readByMap = createMemo(() => {
+    const m = new Map<EventId, UserId[]>();
+    for (const r of readReceipts()) {
+      const arr = m.get(r.eventId);
+      if (arr) arr.push(r.userId);
+      else m.set(r.eventId, [r.userId]);
+    }
+    return m;
+  });
 
   // ---- Outgoing typing ---------------------------------------------------
   let typingTimeout: number | undefined;
@@ -1924,6 +1973,9 @@ export function RoomView(props: {
                           : undefined
                       }
                       threadSummary={threadSummaries().get(row.ev.eventId)}
+                      readBy={(readByMap().get(row.ev.eventId) ?? []).filter(
+                        (uid) => uid !== row.ev.sender,
+                      )}
                       actions={actions}
                       onOpenProfile={openProfile}
                     />

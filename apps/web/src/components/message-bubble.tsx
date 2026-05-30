@@ -95,6 +95,12 @@ export function MessageBubble(props: {
     lastSender: UserId | null;
   };
   actions: MessageActions;
+  /**
+   * MXIDs of other members whose read receipt sits on this exact event
+   * (the message sender is already filtered out by the parent). Rendered
+   * as a small stacked avatar cluster, Telegram-style, in the meta row.
+   */
+  readBy?: UserId[];
   /** Click the sender's gutter avatar → open their profile drawer. */
   onOpenProfile?: (userId: UserId) => void;
 }) {
@@ -649,8 +655,55 @@ export function MessageBubble(props: {
             </For>
           </div>
         </Show>
+
+        {/* Read-by avatar cluster (Telegram-style "seen by") */}
+        <Show when={(props.readBy ?? []).length > 0}>
+          <div class={`mt-0.5 flex ${isMine() ? 'justify-end' : 'justify-start'}`}>
+            <ReadByCluster readers={props.readBy!} onOpenProfile={props.onOpenProfile} />
+          </div>
+        </Show>
       </div>
     </li>
+  );
+}
+
+/**
+ * Stacked mini-avatars of members who have read up to this message.
+ * Shows up to 3 overlapping avatars; any overflow collapses into a
+ * "+N" chip. The whole cluster carries a "Seen by …" tooltip.
+ */
+function ReadByCluster(props: {
+  readers: UserId[];
+  onOpenProfile?: (userId: UserId) => void;
+}) {
+  const MAX = 3;
+  const shown = () => props.readers.slice(0, MAX);
+  const overflow = () => Math.max(0, props.readers.length - MAX);
+  const tooltip = () =>
+    `Seen by ${props.readers.map((id) => prettyName(id)).join(', ')}`;
+  return (
+    <div class="flex items-center gap-1" title={tooltip()}>
+      <div class="flex -space-x-1.5">
+        <For each={shown()}>
+          {(uid) => {
+            const g = gradientForUser(uid);
+            return (
+              <button
+                type="button"
+                onClick={() => props.onOpenProfile?.(uid)}
+                class="flex h-3.5 w-3.5 items-center justify-center rounded-full ring-1 ring-bg"
+                style={{ background: g.background, color: g.color }}
+              >
+                <span class="text-[6px] font-semibold leading-none">{initials(uid)}</span>
+              </button>
+            );
+          }}
+        </For>
+      </div>
+      <Show when={overflow() > 0}>
+        <span class="text-[9px] leading-none text-fg-4">+{overflow()}</span>
+      </Show>
+    </div>
   );
 }
 

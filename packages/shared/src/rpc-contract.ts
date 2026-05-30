@@ -171,6 +171,7 @@ export type MainToWorkerRequest =
   | { kind: 'sendReaction'; roomId: RoomId; eventId: EventId; key: string }
   | { kind: 'sendTyping'; roomId: RoomId; timeoutMs: number }
   | { kind: 'sendReadReceipt'; roomId: RoomId; eventId: EventId }
+  | { kind: 'fetchReadReceipts'; roomId: RoomId }
   | { kind: 'markRoomRead'; roomId: RoomId }
   | { kind: 'uploadMedia'; data: ArrayBuffer; mime: string; filename: string }
   | {
@@ -435,6 +436,17 @@ export type MainToWorkerResponse =
   | { kind: 'sendReaction' }
   | { kind: 'sendTyping' }
   | { kind: 'sendReadReceipt' }
+  | {
+      kind: 'fetchReadReceipts';
+      /**
+       * Other members' read positions — one entry per joined member
+       * (excluding ourselves) who has a public read receipt. `eventId`
+       * is the latest event that member has read up to; the UI clusters
+       * each reader's avatar onto that event. `ts` is the receipt
+       * timestamp (ms) or 0 when the SDK didn't surface one.
+       */
+      receipts: { userId: UserId; eventId: EventId; ts: number }[];
+    }
   | { kind: 'markRoomRead' }
   | { kind: 'uploadMedia'; mxc: MxcUri }
   | { kind: 'sendFileMessage'; eventId: EventId }
@@ -575,6 +587,16 @@ export type WorkerEvent =
       kind: 'typing';
       roomId: RoomId;
       userIds: UserId[];
+    }
+  | {
+      /**
+       * A read-receipt landed in this room. Carries no payload beyond
+       * the room id — the main thread refetches `fetchReadReceipts` to
+       * recompute the read-by avatar map. Coalescing/debounce is the
+       * UI's job; receipts can arrive in bursts during catch-up sync.
+       */
+      kind: 'receipts';
+      roomId: RoomId;
     }
   | {
       kind: 'presence';

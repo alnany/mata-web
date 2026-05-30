@@ -158,6 +158,10 @@ const handlers: Handlers = {
     await core.setMemberPowerLevel(req.roomId, req.userId, req.powerLevel);
     return { kind: 'setMemberPowerLevel' };
   },
+  fetchReadReceipts: async (req, core) => {
+    const receipts = await core.fetchReadReceipts(req.roomId);
+    return { kind: 'fetchReadReceipts', receipts };
+  },
   forgetRoom: async (req, core) => {
     await core.forgetRoom(req.roomId);
     return { kind: 'forgetRoom' };
