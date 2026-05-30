@@ -1377,6 +1377,37 @@ export class SdkSession {
     await c.unban(roomId, userId);
   }
 
+  /**
+   * List currently-banned members for the room's moderation panel.
+   * Lightweight (no crypto/trust) — just enough to render the row and
+   * offer an unban. `reason` comes from the m.room.member ban event.
+   */
+  async fetchBannedMembers(
+    roomId: RoomId,
+  ): Promise<{ userId: UserId; displayname: string | null; reason: string | null }[]> {
+    const c = this.requireClient();
+    const room = c.getRoom(roomId);
+    if (!room) return [];
+    await room.loadMembersIfNeeded();
+    const out: { userId: UserId; displayname: string | null; reason: string | null }[] = [];
+    for (const m of room.getMembersWithMembership('ban')) {
+      let reason: string | null = null;
+      try {
+        const ev = m.events?.member;
+        const content = ev?.getContent() as { reason?: string } | undefined;
+        reason = typeof content?.reason === 'string' && content.reason ? content.reason : null;
+      } catch {
+        reason = null;
+      }
+      out.push({
+        userId: m.userId as UserId,
+        displayname: m.rawDisplayName ?? null,
+        reason,
+      });
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------------------
   // Room mute (Phase 12)
   //

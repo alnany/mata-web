@@ -301,6 +301,29 @@ function RoomSettingsModal(props: {
     },
   );
 
+  // Banned roster for the moderation panel — lets bans be lifted.
+  const [banned, { refetch: refetchBanned }] = createResource(
+    () => r.roomId,
+    async (roomId) => {
+      const res = await bridge.request({ kind: 'fetchBannedMembers', roomId });
+      return res.kind === 'fetchBannedMembers' ? res.banned : [];
+    },
+  );
+  const [unbanBusy, setUnbanBusy] = createSignal<string | null>(null);
+  const unbanMember = async (userId: UserId, name: string) => {
+    if (unbanBusy()) return;
+    setUnbanBusy(userId);
+    try {
+      await bridge.request({ kind: 'unbanFromRoom', roomId: r.roomId, userId });
+      showToast('success', `${name} unbanned`);
+      await refetchBanned();
+    } catch (err) {
+      showToast('error', `Could not unban: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setUnbanBusy(null);
+    }
+  };
+
   const canSetName = () => settings()?.canSetName ?? false;
   const canSetTopic = () => settings()?.canSetTopic ?? false;
   const canSetAvatar = () => settings()?.canSetAvatar ?? false;
@@ -363,6 +386,7 @@ function RoomSettingsModal(props: {
       showToast('success', p.action === 'kick' ? `${p.name} removed` : `${p.name} banned`);
       setPendingMod(null);
       await refetchMembers();
+      if (p.action === 'ban') await refetchBanned();
     } catch (err) {
       showToast(
         'error',
@@ -679,6 +703,39 @@ function RoomSettingsModal(props: {
                 You don't have permission to change member roles.
               </p>
             </Show>
+          </div>
+        </Show>
+
+        {/* Banned members — only when we can lift bans, and only if any exist */}
+        <Show when={canBan() && (banned()?.length ?? 0) > 0}>
+          <div class="mt-4 border-t pt-4" style={{ 'border-color': 'var(--color-line)' }}>
+            <h4 class="mb-2 text-[12px] font-semibold uppercase tracking-wide text-fg-3">
+              Banned ({banned()!.length})
+            </h4>
+            <ul class="max-h-40 space-y-1 overflow-y-auto">
+              <For each={banned()}>
+                {(b) => (
+                  <li class="flex items-center gap-2 rounded-lg px-1 py-1">
+                    <div class="min-w-0 flex-1">
+                      <div class="truncate text-[13px] text-fg">
+                        {prettyName(b.displayname, b.userId)}
+                      </div>
+                      <div class="mono truncate text-[10px] text-fg-4">
+                        {b.reason ? `${b.userId} · ${b.reason}` : b.userId}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void unbanMember(b.userId, prettyName(b.displayname, b.userId))}
+                      disabled={unbanBusy() === b.userId}
+                      class="shrink-0 rounded-md border border-line px-2 py-1 text-[11px] text-fg-2 transition-colors hover:bg-elev disabled:opacity-50"
+                    >
+                      {unbanBusy() === b.userId ? 'Working…' : 'Unban'}
+                    </button>
+                  </li>
+                )}
+              </For>
+            </ul>
           </div>
         </Show>
 

@@ -297,6 +297,10 @@ export class MatrixCore {
     return this.requireSession().unbanFromRoom(roomId, userId);
   }
 
+  async fetchBannedMembers(roomId: RoomId) {
+    return this.requireSession().fetchBannedMembers(roomId);
+  }
+
   async beginDeviceVerification(userId: UserId, deviceId: DeviceId) {
     return this.requireSession().beginDeviceVerification(userId, deviceId);
   }
