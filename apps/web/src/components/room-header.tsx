@@ -268,6 +268,13 @@ function RoomSettingsModal(props: {
   const [leaving, setLeaving] = createSignal(false);
   const [confirmLeave, setConfirmLeave] = createSignal(false);
   const [savingRole, setSavingRole] = createSignal<string | null>(null);
+  // Pending moderation action awaiting inline confirmation.
+  const [pendingMod, setPendingMod] = createSignal<{
+    userId: UserId;
+    name: string;
+    action: 'kick' | 'ban';
+  } | null>(null);
+  const [modBusy, setModBusy] = createSignal(false);
   let fileInput: HTMLInputElement | undefined;
 
   const [settings] = createResource(
@@ -298,7 +305,17 @@ function RoomSettingsModal(props: {
   const canSetTopic = () => settings()?.canSetTopic ?? false;
   const canSetAvatar = () => settings()?.canSetAvatar ?? false;
   const canSetPowerLevel = () => settings()?.canSetPowerLevel ?? false;
+  const canKick = () => settings()?.canKick ?? false;
+  const canBan = () => settings()?.canBan ?? false;
   const myPower = () => settings()?.myPowerLevel ?? 0;
+
+  // Moderation is allowed only against members strictly below our own
+  // level (never ourselves, peers, or superiors), and only when the room
+  // grants us the kick / ban power.
+  const canKickMember = (m: RoomMember) =>
+    canKick() && m.userId !== me && m.powerLevel < myPower();
+  const canBanMember = (m: RoomMember) =>
+    canBan() && m.userId !== me && m.powerLevel < myPower();
 
   const ROLES: { label: string; value: number }[] = [
     { label: 'Admin', value: 100 },
@@ -330,6 +347,29 @@ function RoomSettingsModal(props: {
       showToast('error', `Could not change role: ${err instanceof Error ? err.message : 'unknown error'}`);
     } finally {
       setSavingRole(null);
+    }
+  };
+
+  const runMod = async () => {
+    const p = pendingMod();
+    if (!p || modBusy()) return;
+    setModBusy(true);
+    try {
+      await bridge.request(
+        p.action === 'kick'
+          ? { kind: 'kickFromRoom', roomId: r.roomId, userId: p.userId, reason: null }
+          : { kind: 'banFromRoom', roomId: r.roomId, userId: p.userId, reason: null },
+      );
+      showToast('success', p.action === 'kick' ? `${p.name} removed` : `${p.name} banned`);
+      setPendingMod(null);
+      await refetchMembers();
+    } catch (err) {
+      showToast(
+        'error',
+        `Could not ${p.action === 'kick' ? 'remove' : 'ban'} member: ${err instanceof Error ? err.message : 'unknown error'}`,
+      );
+    } finally {
+      setModBusy(false);
     }
   };
 
@@ -537,32 +577,98 @@ function RoomSettingsModal(props: {
             <ul class="max-h-56 space-y-1 overflow-y-auto">
               <For each={members()}>
                 {(m) => (
-                  <li class="flex items-center gap-2 rounded-lg px-1 py-1">
-                    <div class="min-w-0 flex-1">
-                      <div class="truncate text-[13px] text-fg">
-                        {prettyName(m.displayname, m.userId)}
-                        <Show when={m.userId === me}>
-                          <span class="ml-1 text-[10px] text-fg-3">(you)</span>
-                        </Show>
-                      </div>
-                      <div class="mono truncate text-[10px] text-fg-4">{m.userId}</div>
-                    </div>
+                  <li class="rounded-lg px-1 py-1">
                     <Show
-                      when={canEditMember(m)}
+                      when={pendingMod()?.userId === m.userId}
                       fallback={
-                        <span class="shrink-0 text-[11px] text-fg-3">{roleLabel(m.powerLevel)}</span>
+                        <div class="flex items-center gap-2">
+                          <div class="min-w-0 flex-1">
+                            <div class="truncate text-[13px] text-fg">
+                              {prettyName(m.displayname, m.userId)}
+                              <Show when={m.userId === me}>
+                                <span class="ml-1 text-[10px] text-fg-3">(you)</span>
+                              </Show>
+                            </div>
+                            <div class="mono truncate text-[10px] text-fg-4">{m.userId}</div>
+                          </div>
+                          <Show
+                            when={canEditMember(m)}
+                            fallback={
+                              <span class="shrink-0 text-[11px] text-fg-3">{roleLabel(m.powerLevel)}</span>
+                            }
+                          >
+                            <select
+                              value={ROLES.find((x) => x.value === m.powerLevel)?.value ?? m.powerLevel}
+                              disabled={savingRole() === m.userId}
+                              onChange={(e) => void changeRole(m, Number(e.currentTarget.value))}
+                              class="shrink-0 rounded-md border border-line bg-elev px-2 py-1 text-[12px] text-fg-2 focus:border-mata-500 focus:outline-none disabled:opacity-50"
+                            >
+                              <For each={ROLES.filter((x) => x.value < myPower() || x.value === m.powerLevel)}>
+                                {(role) => <option value={role.value}>{role.label}</option>}
+                              </For>
+                            </select>
+                          </Show>
+                          <Show when={canKickMember(m)}>
+                            <button
+                              type="button"
+                              title="Remove from room"
+                              onClick={() =>
+                                setPendingMod({
+                                  userId: m.userId,
+                                  name: prettyName(m.displayname, m.userId),
+                                  action: 'kick',
+                                })
+                              }
+                              class="shrink-0 rounded-md px-1.5 py-1 text-[11px] text-fg-3 transition-colors hover:bg-input hover:text-fg-2"
+                            >
+                              Remove
+                            </button>
+                          </Show>
+                          <Show when={canBanMember(m)}>
+                            <button
+                              type="button"
+                              title="Ban from room"
+                              onClick={() =>
+                                setPendingMod({
+                                  userId: m.userId,
+                                  name: prettyName(m.displayname, m.userId),
+                                  action: 'ban',
+                                })
+                              }
+                              class="shrink-0 rounded-md px-1.5 py-1 text-[11px] text-red-500/80 transition-colors hover:bg-red-500/10 hover:text-red-500"
+                            >
+                              Ban
+                            </button>
+                          </Show>
+                        </div>
                       }
                     >
-                      <select
-                        value={ROLES.find((x) => x.value === m.powerLevel)?.value ?? m.powerLevel}
-                        disabled={savingRole() === m.userId}
-                        onChange={(e) => void changeRole(m, Number(e.currentTarget.value))}
-                        class="shrink-0 rounded-md border border-line bg-elev px-2 py-1 text-[12px] text-fg-2 focus:border-mata-500 focus:outline-none disabled:opacity-50"
-                      >
-                        <For each={ROLES.filter((x) => x.value < myPower() || x.value === m.powerLevel)}>
-                          {(role) => <option value={role.value}>{role.label}</option>}
-                        </For>
-                      </select>
+                      <div class="flex items-center gap-2 rounded-lg bg-input/60 px-2 py-1.5">
+                        <span class="min-w-0 flex-1 truncate text-[12px] text-fg-2">
+                          {pendingMod()!.action === 'kick' ? 'Remove' : 'Ban'}{' '}
+                          <span class="font-medium text-fg">{pendingMod()!.name}</span>?
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setPendingMod(null)}
+                          disabled={modBusy()}
+                          class="shrink-0 rounded-md border border-line px-2 py-1 text-[11px] text-fg-2 hover:bg-elev disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void runMod()}
+                          disabled={modBusy()}
+                          class="shrink-0 rounded-md bg-red-500 px-2 py-1 text-[11px] font-semibold text-white transition-[filter] hover:brightness-95 disabled:opacity-50"
+                        >
+                          {modBusy()
+                            ? 'Working…'
+                            : pendingMod()!.action === 'kick'
+                              ? 'Remove'
+                              : 'Ban'}
+                        </button>
+                      </div>
                     </Show>
                   </li>
                 )}

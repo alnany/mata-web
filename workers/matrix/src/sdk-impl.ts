@@ -757,6 +757,8 @@ export class SdkSession {
     canSetTopic: boolean;
     canSetAvatar: boolean;
     canSetPowerLevel: boolean;
+    canKick: boolean;
+    canBan: boolean;
     myPowerLevel: number;
   }> {
     const c = this.requireClient();
@@ -794,6 +796,17 @@ export class SdkSession {
     } catch {
       /* default 0 */
     }
+    // Moderation gates compare our level against the room's kick/ban
+    // thresholds (default 50). The per-target guard (can't remove a peer
+    // or superior) is enforced separately at the action site.
+    let canKick = false;
+    let canBan = false;
+    try {
+      canKick = room.currentState.hasSufficientPowerLevelFor('kick', myPowerLevel);
+      canBan = room.currentState.hasSufficientPowerLevelFor('ban', myPowerLevel);
+    } catch {
+      /* leave both false */
+    }
     return {
       name: typeof nameRaw === 'string' ? nameRaw : (room.name ?? ''),
       topic: typeof topicRaw === 'string' ? topicRaw : '',
@@ -801,6 +814,8 @@ export class SdkSession {
       canSetTopic,
       canSetAvatar,
       canSetPowerLevel,
+      canKick,
+      canBan,
       myPowerLevel,
     };
   }
@@ -1348,6 +1363,18 @@ export class SdkSession {
   async kickFromRoom(roomId: RoomId, userId: UserId, reason: string | null): Promise<void> {
     const c = this.requireClient();
     await c.kick(roomId, userId, reason ?? undefined);
+  }
+
+  /** Ban a member — sets membership=ban so they can't rejoin until unbanned. */
+  async banFromRoom(roomId: RoomId, userId: UserId, reason: string | null): Promise<void> {
+    const c = this.requireClient();
+    await c.ban(roomId, userId, reason ?? undefined);
+  }
+
+  /** Lift a ban — membership returns to leave; the user may be re-invited. */
+  async unbanFromRoom(roomId: RoomId, userId: UserId): Promise<void> {
+    const c = this.requireClient();
+    await c.unban(roomId, userId);
   }
 
   // ---------------------------------------------------------------------------

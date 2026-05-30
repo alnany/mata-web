@@ -289,6 +289,14 @@ export class MatrixCore {
     return this.requireSession().kickFromRoom(roomId, userId, reason);
   }
 
+  async banFromRoom(roomId: RoomId, userId: UserId, reason: string | null) {
+    return this.requireSession().banFromRoom(roomId, userId, reason);
+  }
+
+  async unbanFromRoom(roomId: RoomId, userId: UserId) {
+    return this.requireSession().unbanFromRoom(roomId, userId);
+  }
+
   async beginDeviceVerification(userId: UserId, deviceId: DeviceId) {
     return this.requireSession().beginDeviceVerification(userId, deviceId);
   }

@@ -251,6 +251,14 @@ const handlers: Handlers = {
     await core.kickFromRoom(req.roomId, req.userId, req.reason);
     return { kind: 'kickFromRoom' };
   },
+  banFromRoom: async (req, core) => {
+    await core.banFromRoom(req.roomId, req.userId, req.reason);
+    return { kind: 'banFromRoom' };
+  },
+  unbanFromRoom: async (req, core) => {
+    await core.unbanFromRoom(req.roomId, req.userId);
+    return { kind: 'unbanFromRoom' };
+  },
   setRoomMuted: async (req, core) => {
     // Returns the resulting boolean so the UI doesn't have to wait
     // for the next sync delta to flip RoomSummary.isMuted in place.

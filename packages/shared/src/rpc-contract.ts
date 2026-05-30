@@ -273,6 +273,8 @@ export type MainToWorkerRequest =
       roomId: RoomId;
     }
   | { kind: 'kickFromRoom'; roomId: RoomId; userId: UserId; reason: string | null }
+  | { kind: 'banFromRoom'; roomId: RoomId; userId: UserId; reason: string | null }
+  | { kind: 'unbanFromRoom'; roomId: RoomId; userId: UserId }
   /**
    * Set/clear the per-room mute push rule (`global.room` override).
    * Server-side: matrix-js-sdk's `setRoomMutePushRule('global', roomId, muted)`.
@@ -426,6 +428,8 @@ export type MainToWorkerResponse =
       canSetTopic: boolean;
       canSetAvatar: boolean;
       canSetPowerLevel: boolean;
+      canKick: boolean;
+      canBan: boolean;
       myPowerLevel: number;
     }
   | { kind: 'setRoomName' }
@@ -467,6 +471,8 @@ export type MainToWorkerResponse =
   | { kind: 'leaveRoom' }
   | { kind: 'loadRoomMembers'; members: RoomMember[] }
   | { kind: 'kickFromRoom' }
+  | { kind: 'banFromRoom' }
+  | { kind: 'unbanFromRoom' }
   | { kind: 'setRoomMuted'; muted: boolean }
   | { kind: 'loadThread'; events: TimelineEvent[] }
   | { kind: 'sendCallEvent'; eventId: EventId }
