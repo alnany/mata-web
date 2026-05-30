@@ -378,6 +378,19 @@ export class SdkSession {
     const tail = live.slice(-SdkSession.RECONCILE_TAIL_SIZE);
     const events: TimelineEvent[] = [];
     for (const e of tail) {
+      // Skip unconfirmed local echoes — identical reasoning to the live
+      // RoomEvent.Timeline handler. matrix-js-sdk keeps the outgoing
+      // event in the live timeline with a TEMPORARY local-only id while
+      // it's `status = 'sending'/'not_sent'`, then swaps that same object
+      // to the real server id once /sync confirms it. This reconcile tail
+      // runs on every sync tick, so without the filter it emits the echo
+      // once under its temp id and again under the real id; mergeEvents
+      // dedupes by eventId and can't unify the two, leaving the sender's
+      // message rendered twice. The optimistic bubble is owned by the
+      // main thread's `pending` array, so dropping the echo here loses
+      // nothing. Confirmed + inbound events have status === null.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((e as any).status != null) continue;
       const tev = this.toTev(e, room);
       if (tev) events.push(tev);
     }

@@ -1584,6 +1584,14 @@ export function RoomView(props: {
     const nowTs = Date.now();
     const evs = evsRaw
       .filter((e) => {
+        // Redacted (deleted) messages disappear entirely — Telegram
+        // behavior. toTimelineEvent maps a redacted message to an
+        // `m.room.redaction` tombstone carrying the original event id;
+        // dropping it here means a delete removes the bubble outright
+        // instead of leaving a "message removed" placeholder. The
+        // redaction is server-side and global, so the message vanishes
+        // for every viewer once their client merges the redaction.
+        if (e.type === 'm.room.redaction') return false;
         if (
           e.type === 'm.room.encrypted' &&
           (e as Extract<TimelineEvent, { type: 'm.room.encrypted' }>)
