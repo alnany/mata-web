@@ -265,7 +265,7 @@ export class SdkSession {
   }
 
   async listRoomSummaries(): Promise<RoomSummary[]> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     return c.getRooms().map((r) => toSummary(r, c));
   }
 
@@ -476,7 +476,7 @@ export class SdkSession {
     };
 
     tag('entered');
-    const c = this.requireClient();
+    const c = await this.waitForClient();
 
     // Probe room state before doing anything else. If room is null,
     // matrix-js-sdk's sendEvent will throw immediately with an opaque
@@ -596,7 +596,7 @@ export class SdkSession {
     content: MessageBody,
     txnId: string,
   ): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     this.emit({ kind: 'sendStatus', txnId, roomId, status: 'sending' });
     const newBody = encodeMessageBody(content);
     const payload: IContent = {
@@ -628,7 +628,7 @@ export class SdkSession {
     eventId: EventId,
     reason: string | null,
   ): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     await c.redactEvent(roomId, eventId, undefined, reason ? { reason } : undefined);
   }
 
@@ -639,7 +639,7 @@ export class SdkSession {
    * re-emits the summary, so the bar updates without a manual refresh.
    */
   async pinEvent(roomId: RoomId, eventId: EventId): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const room = c.getRoom(roomId);
     if (!room) throw new Error('room not found');
     const current = readPinnedEventIds(room);
@@ -650,7 +650,7 @@ export class SdkSession {
 
   /** Unpin: remove `eventId` from the pinned list and write it back. */
   async unpinEvent(roomId: RoomId, eventId: EventId): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const room = c.getRoom(roomId);
     if (!room) throw new Error('room not found');
     const current = readPinnedEventIds(room);
@@ -666,7 +666,7 @@ export class SdkSession {
    * mapping. Returns null when the event can't be retrieved.
    */
   async fetchEvent(roomId: RoomId, eventId: EventId): Promise<TimelineEvent | null> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const room = c.getRoom(roomId);
     const cached = room?.findEventById(eventId);
     if (cached) return this.toTev(cached, room as Room);
@@ -698,7 +698,7 @@ export class SdkSession {
   async fetchPresence(
     userId: UserId,
   ): Promise<{ presence: 'online' | 'offline' | 'unavailable'; lastActiveAgoMs: number | null; currentlyActive: boolean | null } | null> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     try {
       const res = await c.getPresence(userId);
       return {
@@ -722,7 +722,7 @@ export class SdkSession {
   async fetchProfile(
     userId: UserId,
   ): Promise<{ displayName: string | null; avatarUrl: string | null; ignored: boolean }> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     let displayName: string | null = null;
     let avatarUrl: string | null = null;
     try {
@@ -748,7 +748,7 @@ export class SdkSession {
    * list each call (setIgnoredUsers replaces wholesale).
    */
   async setIgnored(userId: UserId, ignored: boolean): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const current = new Set<string>(c.getIgnoredUsers());
     if (ignored) current.add(userId);
     else current.delete(userId);
@@ -773,7 +773,7 @@ export class SdkSession {
     canBan: boolean;
     myPowerLevel: number;
   }> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const room = c.getRoom(roomId);
     if (!room) throw new Error('room not found');
     const me = c.getUserId() ?? '';
@@ -844,7 +844,7 @@ export class SdkSession {
     userId: UserId,
     powerLevel: number,
   ): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     await c.setPowerLevel(roomId, userId, powerLevel);
   }
 
@@ -854,7 +854,7 @@ export class SdkSession {
    * (idempotent: a 403 "already left" is swallowed) then forget.
    */
   async forgetRoom(roomId: RoomId): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     try {
       await c.leave(roomId);
     } catch {
@@ -865,13 +865,13 @@ export class SdkSession {
 
   /** Set the room display name (`m.room.name` state event). */
   async setRoomName(roomId: RoomId, name: string): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     await c.sendStateEvent(roomId, 'm.room.name' as never, { name } as never, '');
   }
 
   /** Set the room topic (`m.room.topic` state event). */
   async setRoomTopic(roomId: RoomId, topic: string): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     await c.sendStateEvent(roomId, 'm.room.topic' as never, { topic } as never, '');
   }
 
@@ -880,7 +880,7 @@ export class SdkSession {
    * image via `uploadMedia` first and passes the resulting `mxc://` URI.
    */
   async setRoomAvatar(roomId: RoomId, mxc: MxcUri): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     await c.sendStateEvent(roomId, 'm.room.avatar' as never, { url: mxc } as never, '');
   }
 
@@ -906,7 +906,7 @@ export class SdkSession {
     appId: string,
     lang: string,
   ): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const data = {
       url: gatewayUrl,
       endpoint: subscription.endpoint,
@@ -930,7 +930,7 @@ export class SdkSession {
 
   /** Delete the Web Push pusher identified by its endpoint (= pushkey). */
   async removeWebPusher(endpoint: string, appId: string): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     await c.removePusher(endpoint, appId);
   }
 
@@ -949,7 +949,7 @@ export class SdkSession {
    * server event to redact yet, and the original send is still in flight.
    */
   async sendReaction(roomId: RoomId, eventId: EventId, key: string): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const room = c.getRoom(roomId);
     const myId = c.getUserId();
 
@@ -984,12 +984,12 @@ export class SdkSession {
   }
 
   async sendTyping(roomId: RoomId, timeoutMs: number): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     await c.sendTyping(roomId, timeoutMs > 0, timeoutMs);
   }
 
   async sendReadReceipt(roomId: RoomId, eventId: EventId): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const room = c.getRoom(roomId);
     const ev = room?.findEventById(eventId);
     if (!ev) return;
@@ -1007,7 +1007,7 @@ export class SdkSession {
   async fetchReadReceipts(
     roomId: RoomId,
   ): Promise<{ userId: UserId; eventId: EventId; ts: number }[]> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const room = c.getRoom(roomId);
     if (!room) return [];
     const me = c.getUserId();
@@ -1047,7 +1047,7 @@ export class SdkSession {
     roomId: RoomId,
     eventId: EventId,
   ): Promise<{ body: string; ts: number; sender: UserId }[]> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const room = c.getRoom(roomId);
     if (!room) return [];
     const ev = room.findEventById(eventId);
@@ -1093,7 +1093,7 @@ export class SdkSession {
    * timeline. Returns null when nothing matches.
    */
   async jumpToTimestamp(roomId: RoomId, ts: number): Promise<EventId | null> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     try {
       const res = await c.timestampToEvent(roomId, ts, Direction.Forward);
       if (res?.event_id) return res.event_id as EventId;
@@ -1127,7 +1127,7 @@ export class SdkSession {
    * rather than waiting for the next /sync round-trip to reflect it.
    */
   async markRoomRead(roomId: RoomId): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const room = c.getRoom(roomId);
     if (!room) return;
     const live = room.getLiveTimeline().getEvents();
@@ -1162,7 +1162,7 @@ export class SdkSession {
   }
 
   async uploadMedia(data: ArrayBuffer, mime: string, filename: string): Promise<MxcUri> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const blob = new Blob([data], { type: mime });
     const res = await c.uploadContent(blob, { name: filename, type: mime });
     return res.content_uri as MxcUri;
@@ -1321,7 +1321,7 @@ export class SdkSession {
     sourceEventId: EventId,
     targetRoomId: RoomId,
   ): Promise<EventId> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const sourceRoom = c.getRoom(sourceRoomId);
     if (!sourceRoom) {
       throw new Error('Source room not loaded');
@@ -1387,13 +1387,13 @@ export class SdkSession {
   }
 
   async joinRoom(roomId: RoomId): Promise<RoomId> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const r = await c.joinRoom(roomId);
     return (r.roomId ?? roomId) as RoomId;
   }
 
   async leaveRoom(roomId: RoomId): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     await c.leave(roomId);
   }
 
@@ -1414,7 +1414,7 @@ export class SdkSession {
   // ---------------------------------------------------------------------------
 
   async loadRoomMembers(roomId: RoomId): Promise<RoomMember[]> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const room = c.getRoom(roomId);
     if (!room) throw new Error(`room ${roomId} not in store`);
     await room.loadMembersIfNeeded();
@@ -1468,19 +1468,19 @@ export class SdkSession {
   }
 
   async kickFromRoom(roomId: RoomId, userId: UserId, reason: string | null): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     await c.kick(roomId, userId, reason ?? undefined);
   }
 
   /** Ban a member — sets membership=ban so they can't rejoin until unbanned. */
   async banFromRoom(roomId: RoomId, userId: UserId, reason: string | null): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     await c.ban(roomId, userId, reason ?? undefined);
   }
 
   /** Lift a ban — membership returns to leave; the user may be re-invited. */
   async unbanFromRoom(roomId: RoomId, userId: UserId): Promise<void> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     await c.unban(roomId, userId);
   }
 
@@ -1492,7 +1492,7 @@ export class SdkSession {
   async fetchBannedMembers(
     roomId: RoomId,
   ): Promise<{ userId: UserId; displayname: string | null; reason: string | null }[]> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const room = c.getRoom(roomId);
     if (!room) return [];
     await room.loadMembersIfNeeded();
@@ -1537,7 +1537,7 @@ export class SdkSession {
   // ---------------------------------------------------------------------------
 
   async setRoomMuted(roomId: RoomId, muted: boolean): Promise<boolean> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     type MuteCapable = {
       setRoomMutePushRule?: (scope: 'global', roomId: string, muted: boolean) => Promise<unknown>;
     };
@@ -1596,7 +1596,7 @@ export class SdkSession {
     eventType: string,
     content: Record<string, unknown>,
   ): Promise<EventId> {
-    const client = this.requireClient();
+    const client = await this.waitForClient();
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const res = await (client.sendEvent as any)(roomId, eventType, content);
@@ -1614,7 +1614,7 @@ export class SdkSession {
   // network with the other side" in the UI; that's a known TURN-less
   // limitation, not a Mata bug.
   async getTurnServers(): Promise<IceServer[]> {
-    const client = this.requireClient();
+    const client = await this.waitForClient();
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const raw = await (client as any).turnServer();
@@ -1669,7 +1669,7 @@ export class SdkSession {
   ): Promise<{ results: SearchHit[]; count: number; highlights: string[] }> {
     const trimmed = query.trim();
     if (!trimmed) return { results: [], count: 0, highlights: [] };
-    const client = this.requireClient();
+    const client = await this.waitForClient();
 
     // Pick path. Without a roomId we can only run the server search
     // (cross-room scan would need iterating every joined room, which
@@ -1835,7 +1835,7 @@ export class SdkSession {
    * bearer token that authenticated media requires.
    */
   async getUrlPreview(url: string): Promise<UrlPreview | null> {
-    const client = this.requireClient();
+    const client = await this.waitForClient();
     const ts = Math.floor(Date.now() / 60000) * 60000; // 60s bucket — match SDK behaviour
 
     const raw = await this.fetchPreviewRaw(client, url, ts);
@@ -1922,7 +1922,7 @@ export class SdkSession {
   ): Promise<{ results: UserSearchHit[]; limited: boolean }> {
     const trimmed = term.trim();
     if (!trimmed) return { results: [], limited: false };
-    const client = this.requireClient();
+    const client = await this.waitForClient();
     try {
       const raw = await client.searchUserDirectory({
         term: trimmed,
@@ -1953,7 +1953,7 @@ export class SdkSession {
   }
 
   async loadThread(roomId: RoomId, threadRootId: EventId): Promise<TimelineEvent[]> {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     const room = c.getRoom(roomId);
     if (!room) throw new Error(`loadThread: room not found: ${roomId}`);
 
@@ -2031,10 +2031,9 @@ export class SdkSession {
     userId: UserId,
     deviceId: DeviceId,
   ): Promise<{ transactionId: string }> {
-    // Forces the client to exist first; the service does its own
-    // null-check but we want the more specific "Not logged in" error
-    // from requireClient surfaced consistently.
-    this.requireClient();
+    // Forces the client to exist first (self-healing); the service does
+    // its own null-check but we want the auth error surfaced consistently.
+    await this.waitForClient();
     return this.verification.begin(userId, deviceId);
   }
 
@@ -2042,12 +2041,12 @@ export class SdkSession {
     transactionId: string,
     result: 'match' | 'mismatch',
   ): Promise<void> {
-    this.requireClient();
+    await this.waitForClient();
     await this.verification.complete(transactionId, result);
   }
 
   async cancelVerification(transactionId: string): Promise<void> {
-    this.requireClient();
+    await this.waitForClient();
     await this.verification.cancel(transactionId);
   }
 
@@ -2068,7 +2067,7 @@ export class SdkSession {
     txnId: string;
     extraContent?: Record<string, unknown>;
   }) {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     return sendFileMessage(c, args);
   }
 
@@ -2077,7 +2076,7 @@ export class SdkSession {
     encryptedFile: import('@mata/shared/matrix').EncryptedFile | null;
     mime: string;
   }) {
-    const c = this.requireClient();
+    const c = await this.waitForClient();
     return loadMedia(c, args);
   }
 
@@ -2212,17 +2211,20 @@ export class SdkSession {
     return make('matrix');
   }
 
-  private requireClient(): MatrixClient {
-    if (!this.client) throw authError('Not logged in');
-    return this.client;
-  }
+  // NOTE: there is deliberately no synchronous `requireClient()`. Every
+  // client-backed operation goes through `waitForClient()` so it tolerates
+  // the worker's client being momentarily null (cold-boot race, or Safari/
+  // WebKit suspending and re-spinning the worker). A synchronous insta-throw
+  // gate is what produced the Safari-only "Not logged in" class of bugs.
 
   /**
-   * Resolve once the live client exists, polling briefly instead of
-   * failing instantly — closes the cold-boot race where a write RPC
+   * Resolve once the live client exists, polling briefly — and, if the
+   * worker was torn down, re-restoring the persisted session — instead of
+   * failing instantly. Closes the cold-boot race where a write RPC
    * (createRoom, invite, user-search) fires before bootClient assigns
-   * `this.client`, which otherwise rejects with a spurious "Not logged
-   * in" mid-login. A genuinely logged-out session still errors, later.
+   * `this.client`, AND Safari's aggressive idle-worker suspension where the
+   * in-memory client vanishes after boot. A genuinely logged-out session
+   * (no persisted record) still errors, later.
    */
   async waitForClient(timeoutMs = 12000): Promise<MatrixClient> {
     if (this.client) return this.client;
