@@ -24,7 +24,7 @@ import type {
 } from '@mata/shared/matrix';
 import { dayLabel, isSameDay, shortTime } from '../lib/date-buckets.js';
 import { markdownToMatrixHtml } from '../lib/rich-text.js';
-import { dedupeAgainst, summarizeThreads } from '../lib/timeline-merge.js';
+import { dedupeAgainst, summarizeThreads, visiblePending } from '../lib/timeline-merge.js';
 import { aggregateReadReceipts } from '../lib/notify-rules.js';
 import {
   AlbumRow,
@@ -1524,6 +1524,13 @@ export function RoomView(props: {
    */
   const threadSummaries = createMemo(() => summarizeThreads(props.cache.events));
 
+  // Render-time double-bubble guard: only draw pending sends that the
+  // confirmed event hasn't already superseded in `events`. Decouples
+  // correct rendering from the array-level reconcile prune, which races
+  // the sync delivery (see visiblePending). Without this, a sent message
+  // could flash twice (optimistic + confirmed) until the next refresh.
+  const pendingRows = createMemo(() => visiblePending(props.cache.pending, props.cache.events));
+
   // `<For>` keys items by REFERENCE, not by some extracted id. If the
   // rows() memo returns a fresh `{ kind: 'msg', ev, ... }` object on
   // every recomputation, every existing message looks like a new item
@@ -2008,7 +2015,7 @@ export function RoomView(props: {
             <div class="mb-2 text-center text-[11px] text-fg-3">Loading older…</div>
           </Show>
           <Show
-            when={rows().length > 0 || props.cache.pending.length > 0}
+            when={rows().length > 0 || pendingRows().length > 0}
             fallback={
               <div class="flex h-full items-center justify-center text-xs text-fg-3">
                 No messages yet — say hi.
@@ -2060,7 +2067,7 @@ export function RoomView(props: {
                   )
                 }
               </For>
-              <For each={props.cache.pending}>
+              <For each={pendingRows()}>
                 {(p) => (
                   <PendingRow
                     pending={p}

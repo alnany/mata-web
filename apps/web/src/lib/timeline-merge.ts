@@ -134,6 +134,43 @@ export function reconcilePending<
 }
 
 /**
+ * Render-time defense against the double-bubble. `reconcilePending`
+ * prunes the pending array when the confirming event arrives in a sync
+ * delta — but that pruning races the sync delivery (the remote echo can
+ * land BEFORE the send RPC resolves and sets `expectedEventId`, and a
+ * given sync delta only reconciles against ITS OWN events). If pruning
+ * loses that race the entry lingers in `pending` while the confirmed
+ * event is already in `events`, and the user sees their message twice.
+ *
+ * This derives the pending entries that are NOT yet represented in the
+ * full `events` list (matched by the confirmed `expectedEventId`, or by
+ * a shared `txnId` carried on the synced event). Rendering THIS instead
+ * of the raw pending array makes the double structurally impossible: the
+ * instant the confirmed event exists, its optimistic twin stops drawing
+ * — independent of whether the array-level prune has caught up yet.
+ */
+export function visiblePending<
+  P extends { txnId: string; expectedEventId?: string },
+>(pending: readonly P[], events: readonly TimelineEvent[]): P[] {
+  if (pending.length === 0) return pending as P[];
+
+  const ids = new Set<string>();
+  const txns = new Set<string>();
+  for (const ev of events) {
+    ids.add(ev.eventId);
+    if (ev.txnId) txns.add(ev.txnId);
+  }
+
+  const kept = pending.filter(
+    (p) =>
+      !txns.has(p.txnId) &&
+      !(p.expectedEventId !== undefined && ids.has(p.expectedEventId)),
+  );
+
+  return kept.length === pending.length ? (pending as P[]) : kept;
+}
+
+/**
  * A send-confirmation event from the worker (`sendStatus`).
  */
 export interface SendStatusEvent {

@@ -28,6 +28,7 @@ import {
   mergeEvents,
   reconcilePending,
   summarizeThreads,
+  visiblePending,
   type SendStatusEvent,
 } from './timeline-merge.js';
 import type { ReactionAggregate } from '@mata/shared/matrix';
@@ -262,6 +263,56 @@ describe('sync simulator — message-state core regressions', () => {
     s = applySync(b.state, [msg('E1', 'hi', { sender: ME, txnId: 't1' })]);
     expect(s.pending).toHaveLength(0);
     expect(totalBubbles(s)).toBe(1);
+  });
+
+  // ---- render-time double-bubble guard (visiblePending) -----------------
+  // What the user ACTUALLY sees = events rows + visiblePending(pending).
+  // These lock the "sent message shows twice" regression at the render
+  // boundary, independent of whether the array-level reconcile pruned yet.
+  const renderedBubbles = (s: RoomState): number =>
+    s.events.length + visiblePending(s.pending, s.events).length;
+
+  it('SCENARIO: confirmed echo present but pending NOT yet pruned — renders ONCE (matched by txnId)', () => {
+    // The exact production race: the synced event lands in `events`
+    // carrying its txnId, but the pending entry is still in the array
+    // (prune lost the race). visiblePending must hide the optimistic twin.
+    const s: RoomState = {
+      events: [msg('E1', 'hi', { sender: ME, txnId: 't1' })],
+      pending: [{ txnId: 't1', body: 'hi' }],
+    };
+    expect(visiblePending(s.pending, s.events)).toHaveLength(0);
+    expect(renderedBubbles(s)).toBe(1); // not 2
+  });
+
+  it('SCENARIO: confirmed echo lacks txnId but pending has expectedEventId — still renders ONCE', () => {
+    // Homeserver/SDK delivered the echo WITHOUT unsigned.transaction_id;
+    // the 'sent' status had set expectedEventId, so we match by id.
+    const s: RoomState = {
+      events: [msg('E1', 'hi', { sender: ME, txnId: null })],
+      pending: [{ txnId: 't1', body: 'hi', expectedEventId: 'E1' }],
+    };
+    expect(visiblePending(s.pending, s.events)).toHaveLength(0);
+    expect(renderedBubbles(s)).toBe(1);
+  });
+
+  it('SCENARIO: echo NOT yet arrived — optimistic bubble still shows (single)', () => {
+    const s: RoomState = { events: [], pending: [{ txnId: 't1', body: 'hi' }] };
+    expect(visiblePending(s.pending, s.events)).toHaveLength(1);
+    expect(renderedBubbles(s)).toBe(1);
+  });
+
+  it('SCENARIO: two distinct in-flight sends both show until each is confirmed', () => {
+    const s: RoomState = {
+      events: [msg('E1', 'one', { sender: ME, txnId: 't1' })],
+      pending: [
+        { txnId: 't1', body: 'one' }, // confirmed → hidden
+        { txnId: 't2', body: 'two' }, // still in flight → shown
+      ],
+    };
+    const vis = visiblePending(s.pending, s.events);
+    expect(vis).toHaveLength(1);
+    expect(vis[0].txnId).toBe('t2');
+    expect(renderedBubbles(s)).toBe(2); // 1 confirmed + 1 in-flight, no dupes
   });
 
   it('SCENARIO: wrong-chat routing — a delta for room B never touches room A', () => {
