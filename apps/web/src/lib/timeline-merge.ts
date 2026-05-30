@@ -182,3 +182,62 @@ export function applySendStatus<
   next[idx] = { ...next[idx], status: 'failed', errorReason: reason };
   return { pending: next, failedReason: reason };
 }
+
+/**
+ * Pagination dedup. Given the events already in the cache and a page of
+ * OLDER events just fetched via backfill, return only the older events
+ * not already present, IN ORDER.
+ *
+ * The caller prepends the result with `events.unshift(...older)` — a
+ * deliberately MUTATING op. Reassigning (`c.events = [...older, ...c.events]`)
+ * trips Solid 1.9's proxy invariant by re-wrapping already-proxied
+ * elements, so the dedup is kept pure/testable here while the actual
+ * prepend stays an in-place unshift in the component. Deduping matters
+ * because a live event can land in the cache (tail) between the
+ * scroll-to-top trigger and the backfill response, and that same event
+ * can also appear in the fetched page — without this filter it would
+ * render twice.
+ */
+export function dedupeAgainst(
+  events: readonly TimelineEvent[],
+  candidates: readonly TimelineEvent[],
+): TimelineEvent[] {
+  if (candidates.length === 0) return [];
+  const known = new Set<string>();
+  for (const e of events) known.add(e.eventId);
+  return candidates.filter((c) => !known.has(c.eventId));
+}
+
+export interface ThreadSummary {
+  count: number;
+  lastTs: number;
+  lastSender: string | null;
+}
+
+/**
+ * Aggregate thread reply counts per root event in one pass. A message
+ * whose `threadRoot` is set is a reply in that thread; the root's pill
+ * shows "N replies · last reply …". Pure so the count/last-reply logic
+ * is unit-tested independently of the bubble rendering.
+ */
+export function summarizeThreads(
+  events: readonly TimelineEvent[],
+): Map<string, ThreadSummary> {
+  const map = new Map<string, ThreadSummary>();
+  for (const ev of events) {
+    if (ev.type !== 'm.room.message') continue;
+    const root = ev.threadRoot;
+    if (!root) continue;
+    const cur = map.get(root);
+    if (!cur) {
+      map.set(root, { count: 1, lastTs: ev.originServerTs, lastSender: ev.sender });
+    } else {
+      cur.count += 1;
+      if (ev.originServerTs > cur.lastTs) {
+        cur.lastTs = ev.originServerTs;
+        cur.lastSender = ev.sender;
+      }
+    }
+  }
+  return map;
+}

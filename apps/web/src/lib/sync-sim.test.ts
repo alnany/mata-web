@@ -24,10 +24,13 @@ import type {
 } from '@mata/shared/matrix';
 import {
   applySendStatus,
+  dedupeAgainst,
   mergeEvents,
   reconcilePending,
+  summarizeThreads,
   type SendStatusEvent,
 } from './timeline-merge.js';
+import type { ReactionAggregate } from '@mata/shared/matrix';
 
 // ---- builders ------------------------------------------------------------
 
@@ -50,6 +53,9 @@ function msg(
     ts?: number;
     txnId?: string | null;
     edits?: string[];
+    reactions?: ReactionAggregate[];
+    inReplyTo?: string | null;
+    threadRoot?: string | null;
   } = {},
 ): TimelineEvent {
   return {
@@ -60,12 +66,19 @@ function msg(
     originServerTs: opts.ts ?? nextTs(),
     txnId: opts.txnId ?? null,
     content: { msgtype: 'm.text', body, formattedBody: null },
-    reactions: [],
+    reactions: opts.reactions ?? [],
     edits: (opts.edits ?? []) as EventId[],
-    inReplyTo: null,
-    threadRoot: null,
+    inReplyTo: (opts.inReplyTo ?? null) as EventId | null,
+    threadRoot: (opts.threadRoot ?? null) as EventId | null,
   };
 }
+
+const react = (key: string, count: number, sender: UserId = ME): ReactionAggregate => ({
+  key,
+  count,
+  selfReacted: sender === ME,
+  senders: [sender],
+});
 
 function encryptedPending(eventId: string, opts: { roomId?: RoomId; ts?: number } = {}): TimelineEvent {
   return {
@@ -293,6 +306,89 @@ describe('sync simulator — message-state core regressions', () => {
     ]);
     expect(visibleBodies(world.get(ROOM_A)!)).toEqual(['A hello', 'A world']);
     expect(visibleBodies(world.get(ROOM_B)!)).toEqual(['B HELLO']);
+  });
+
+  // ---- reactions ---------------------------------------------------------
+
+  it('SCENARIO: reaction adds in place — target re-emitted with reactions, no new row', () => {
+    let s = applySync(empty(), [msg('E1', 'nice', { ts: 1000 })]);
+    expect(s.events).toHaveLength(1);
+    // worker aggregates the m.reaction and re-emits the TARGET with the
+    // updated reactions array (the reaction event is never its own row)
+    s = applySync(s, [msg('E1', 'nice', { ts: 1000, reactions: [react('👍', 1)] })]);
+    expect(s.events).toHaveLength(1);
+    const ev = s.events[0] as Extract<TimelineEvent, { type: 'm.room.message' }>;
+    expect(ev.reactions).toEqual([react('👍', 1)]);
+  });
+
+  it('SCENARIO: reaction count change repaints; identical re-emit is a no-op', () => {
+    let s = applySync(empty(), [msg('E1', 'nice', { ts: 1000, reactions: [react('👍', 1)] })]);
+    // count goes 1 → 2: content differs → replaced
+    s = applySync(s, [msg('E1', 'nice', { ts: 1000, reactions: [react('👍', 2)] })]);
+    expect((s.events[0] as Extract<TimelineEvent, { type: 'm.room.message' }>).reactions[0].count).toBe(2);
+    // identical re-emit (idle tail): SAME reference, no recompute
+    const ref = s.events;
+    s = applySync(s, [msg('E1', 'nice', { ts: 1000, reactions: [react('👍', 2)] })]);
+    expect(s.events).toBe(ref);
+  });
+
+  // ---- replies & threads -------------------------------------------------
+
+  it('SCENARIO: reply renders inline in the main timeline and points at its parent', () => {
+    let s = applySync(empty(), [msg('P1', 'question?', { ts: 1000 })]);
+    s = applySync(s, [msg('R1', 'answer', { ts: 2000, inReplyTo: 'P1' })]);
+    // a reply is a normal timeline message (NOT hidden) — both are visible
+    expect(visibleBodies(s)).toEqual(['question?', 'answer']);
+    const reply = s.events.find((e) => e.eventId === 'R1') as Extract<
+      TimelineEvent,
+      { type: 'm.room.message' }
+    >;
+    expect(reply.inReplyTo).toBe('P1'); // parent resolvable by eventId
+  });
+
+  it('SCENARIO: thread summary — count + last reply tracked per root', () => {
+    const events: TimelineEvent[] = [
+      msg('ROOT', 'thread start', { ts: 1000 }),
+      msg('T1', 'reply one', { ts: 2000, threadRoot: 'ROOT', sender: ALICE }),
+      msg('T2', 'reply two', { ts: 4000, threadRoot: 'ROOT', sender: ME }),
+      msg('T3', 'reply three', { ts: 3000, threadRoot: 'ROOT', sender: ALICE }),
+      msg('OTHER', 'unrelated', { ts: 5000 }),
+    ];
+    const summary = summarizeThreads(events);
+    const root = summary.get('ROOT');
+    expect(root?.count).toBe(3);
+    expect(root?.lastTs).toBe(4000); // latest by ts, not arrival order
+    expect(root?.lastSender).toBe(ME);
+    expect(summary.has('OTHER')).toBe(false); // non-thread message excluded
+  });
+
+  // ---- pagination (backfill older) ---------------------------------------
+
+  it('SCENARIO: pagination dedup — an older page never re-adds a live event already in cache', () => {
+    // live event E5 is already in the cache (landed during the scroll)
+    const cache = [msg('E5', 'live', { ts: 5000 })];
+    // backfill page overlaps: contains E3, E4 and ALSO E5
+    const page = [msg('E3', 'older a', { ts: 3000 }), msg('E4', 'older b', { ts: 4000 }), msg('E5', 'live', { ts: 5000 })];
+    const older = dedupeAgainst(cache, page);
+    expect(older.map((e) => e.eventId)).toEqual(['E3', 'E4']); // E5 dropped, order kept
+  });
+
+  it('SCENARIO: pagination prepend + render order is chronological', () => {
+    // simulate the component: unshift the deduped older page to the front
+    let s = applySync(empty(), [msg('E5', 'newest', { ts: 5000 })]);
+    const page = [msg('E3', 'old', { ts: 3000 }), msg('E4', 'mid', { ts: 4000 }), msg('E5', 'newest', { ts: 5000 })];
+    const older = dedupeAgainst(s.events, page);
+    s = { ...s, events: [...older, ...s.events] };
+    expect(renderOrder(s)).toEqual(['E3', 'E4', 'E5']);
+    expect(visibleBodies(s)).toEqual(['old', 'mid', 'newest']);
+    // no duplicate ids after prepend
+    const ids = s.events.map((e) => e.eventId);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('SCENARIO: empty older page is a no-op', () => {
+    const cache = [msg('E1', 'x', { ts: 1000 })];
+    expect(dedupeAgainst(cache, [])).toEqual([]);
   });
 
   it('PROPERTY: replaying any delta twice is idempotent (no eventId ever doubles)', () => {

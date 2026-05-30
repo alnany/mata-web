@@ -24,6 +24,7 @@ import type {
 } from '@mata/shared/matrix';
 import { dayLabel, isSameDay, shortTime } from '../lib/date-buckets.js';
 import { markdownToMatrixHtml } from '../lib/rich-text.js';
+import { dedupeAgainst, summarizeThreads } from '../lib/timeline-merge.js';
 import {
   AlbumRow,
   MessageBubble,
@@ -839,8 +840,7 @@ export function RoomView(props: {
         limit: PAGE_SIZE,
       });
       props.setCache(props.room.roomId, (c: RoomCache) => {
-        const known = new Set(c.events.map((ev) => ev.eventId));
-        const older = res.events.filter((ev) => !known.has(ev.eventId));
+        const older = dedupeAgainst(c.events, res.events);
         // unshift is a mutating array op that Solid's store proxy
         // intercepts cleanly. The previous `c.events = [...older, ...c.events]`
         // reassignment spread the already-proxied existing events into a
@@ -1519,26 +1519,7 @@ export function RoomView(props: {
    * up by its OWN eventId, not by position in the list, so we
    * need O(1) access. Recomputes on cache.events change.
    */
-  type ThreadSummary = { count: number; lastTs: number; lastSender: UserId | null };
-  const threadSummaries = createMemo(() => {
-    const map = new Map<EventId, ThreadSummary>();
-    for (const ev of props.cache.events) {
-      if (ev.type !== 'm.room.message') continue;
-      const root = ev.threadRoot;
-      if (!root) continue;
-      const cur = map.get(root);
-      if (!cur) {
-        map.set(root, { count: 1, lastTs: ev.originServerTs, lastSender: ev.sender });
-      } else {
-        cur.count += 1;
-        if (ev.originServerTs > cur.lastTs) {
-          cur.lastTs = ev.originServerTs;
-          cur.lastSender = ev.sender;
-        }
-      }
-    }
-    return map;
-  });
+  const threadSummaries = createMemo(() => summarizeThreads(props.cache.events));
 
   // `<For>` keys items by REFERENCE, not by some extracted id. If the
   // rows() memo returns a fresh `{ kind: 'msg', ev, ... }` object on
