@@ -231,6 +231,30 @@ export function Composer(props: {
     });
   };
 
+  /**
+   * Wrap the current textarea selection in `marker` (e.g. `**`, `_`,
+   * `` ` ``). With no selection, inserts the marker pair and parks the
+   * caret between them so the user can type the emphasized text.
+   */
+  const wrapSelection = (marker: string) => {
+    const el = textareaRef;
+    const current = props.draft();
+    if (!el) return;
+    const start = el.selectionStart ?? current.length;
+    const end = el.selectionEnd ?? current.length;
+    const sel = current.slice(start, end);
+    const next = `${current.slice(0, start)}${marker}${sel}${marker}${current.slice(end)}`;
+    props.setDraft(next);
+    queueMicrotask(() => {
+      if (!textareaRef) return;
+      textareaRef.focus();
+      const a = start + marker.length;
+      const b = a + sel.length;
+      textareaRef.setSelectionRange(a, b);
+      autosize();
+    });
+  };
+
   // ---- mention state ------------------------------------------------------
   // `mentionState` is null when no @ is active. When active it carries
   // the textarea offset where the `@` sits (so we can replace `@query`
@@ -390,6 +414,24 @@ export function Composer(props: {
       if (e.key === 'Escape') {
         e.preventDefault();
         setMentionState(null);
+        return;
+      }
+    }
+    // Markdown formatting shortcuts: wrap the selection in **/_ /`.
+    // Mirrors Telegram/Element — the surrounding markers are converted
+    // to org.matrix.custom.html on send.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+      const marker =
+        e.key === 'b' || e.key === 'B'
+          ? '**'
+          : e.key === 'i' || e.key === 'I'
+            ? '_'
+            : (e.key === 'e' || e.key === 'E') && e.shiftKey
+              ? '`'
+              : null;
+      if (marker) {
+        e.preventDefault();
+        wrapSelection(marker);
         return;
       }
     }

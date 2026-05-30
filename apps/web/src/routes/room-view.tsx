@@ -22,6 +22,7 @@ import type {
   RoomMember,
 } from '@mata/shared/matrix';
 import { dayLabel, isSameDay, shortTime } from '../lib/date-buckets.js';
+import { markdownToMatrixHtml } from '../lib/rich-text.js';
 import { MessageBubble, type MessageActions, encryptedReasonCopy } from '../components/message-bubble.js';
 import { ThreadPanel } from '../components/thread-panel.js';
 import { Composer } from '../components/composer.js';
@@ -1108,7 +1109,11 @@ export function RoomView(props: {
     if (editing()) {
       const target = editing();
       if (!target) return;
-      const newContent: MessageBody = { msgtype: 'm.text', body: text, formattedBody: null };
+      const newContent: MessageBody = {
+        msgtype: 'm.text',
+        body: text,
+        formattedBody: markdownToMatrixHtml(text),
+      };
       const txnId = mkTxn();
       void bridge
         .request({
@@ -1142,7 +1147,7 @@ export function RoomView(props: {
     const body: MessageBody = {
       msgtype: 'm.text',
       body: text,
-      formattedBody: null,
+      formattedBody: markdownToMatrixHtml(text),
       ...(stillReferenced.length > 0 ? { mentions: { userIds: stillReferenced } } : {}),
     };
     const txnId = mkTxn();

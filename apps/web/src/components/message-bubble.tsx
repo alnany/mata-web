@@ -1,4 +1,4 @@
-import { createEffect, createResource, createSignal, For, onCleanup, Show, type Resource } from 'solid-js';
+import { createEffect, createMemo, createResource, createSignal, For, onCleanup, Show, type Resource } from 'solid-js';
 import type {
   EventId,
   MediaMessageBody,
@@ -9,6 +9,7 @@ import type {
 } from '@mata/shared/matrix';
 import { shortTime } from '../lib/date-buckets.js';
 import { showToast } from '../stores/toast.js';
+import { sanitizeMatrixHtml } from '../lib/rich-text.js';
 import { normalizeWaveform, formatDuration } from '../lib/voice.js';
 import { useBridge } from '../bridge/context.js';
 import { LinkPreviewCard, extractFirstUrl, findUrlSpans } from './link-preview.js';
@@ -877,12 +878,38 @@ function ReactionPill(props: { r: ReactionAggregate; me: UserId | null; onToggle
 function Body(props: { msg: RoomMessageEvent; me: UserId | null; onOpenImage?: () => void }) {
   const c = props.msg.content;
   if (c.msgtype === 'm.text' || c.msgtype === 'm.notice' || c.msgtype === 'm.emote') {
+    // Rich text: when the event carries org.matrix.custom.html, render
+    // the sanitized HTML (bold/italic/code/quote/links/lists from any
+    // client). Plain bodies keep the @mention-pill renderer.
+    if (c.formattedBody) return <RichBody html={c.formattedBody} />;
     return <TextWithMentions text={c.body} mentions={c.mentions ?? null} me={props.me} />;
   }
   if (c.msgtype === 'm.image' || c.msgtype === 'm.video' || c.msgtype === 'm.audio' || c.msgtype === 'm.file') {
     return <MediaContent body={c} onOpenImage={props.onOpenImage} />;
   }
   return `[${c.msgtype}] ${c.body}`;
+}
+
+/**
+ * Render sanitized Matrix custom HTML. The sanitizer runs the
+ * untrusted string through an allowlist (see lib/rich-text), so the
+ * `innerHTML` assignment here only ever sees safe markup. Memoized so
+ * a re-render doesn't re-sanitize unchanged content.
+ */
+function RichBody(props: { html: string }) {
+  const safe = createMemo(() => sanitizeMatrixHtml(props.html));
+  // Spoilers render blacked-out until tapped. Delegate the reveal click
+  // from the container so it works for innerHTML-built spans.
+  const onClick = (e: MouseEvent) => {
+    const t = (e.target as HTMLElement | null)?.closest('[data-mx-spoiler]');
+    if (t && !t.classList.contains('mata-spoiler-shown')) {
+      e.preventDefault();
+      e.stopPropagation();
+      t.classList.add('mata-spoiler-shown');
+    }
+  };
+  // eslint-disable-next-line solid/no-innerhtml
+  return <span class="mata-rich" onClick={onClick} innerHTML={safe()} />;
 }
 
 /**

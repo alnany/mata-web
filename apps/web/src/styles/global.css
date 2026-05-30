@@ -351,3 +351,77 @@ select:-webkit-autofill {
   animation: mata-react-pop 240ms cubic-bezier(0.34, 1.56, 0.64, 1);
   display: inline-block;
 }
+
+/* ---------------------------------------------------------------------------
+ * Rich-text message bodies (org.matrix.custom.html → sanitized HTML).
+ * Backgrounds use currentColor mixes so code/quotes read correctly on
+ * both the elev bubble (incoming) and the accent bubble (own messages).
+ * ------------------------------------------------------------------------- */
+.mata-rich {
+  white-space: normal;
+  word-break: break-word;
+}
+.mata-rich a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.mata-rich strong { font-weight: 650; }
+.mata-rich em { font-style: italic; }
+.mata-rich del, .mata-rich s, .mata-rich strike { text-decoration: line-through; }
+.mata-rich code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  padding: 0.08em 0.34em;
+  border-radius: 5px;
+  background: color-mix(in oklab, currentColor 12%, transparent);
+}
+.mata-rich pre {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  margin: 0.4em 0;
+  padding: 0.55em 0.7em;
+  border-radius: 9px;
+  overflow-x: auto;
+  background: color-mix(in oklab, currentColor 10%, transparent);
+}
+.mata-rich pre code { background: none; padding: 0; border-radius: 0; }
+.mata-rich blockquote {
+  margin: 0.3em 0;
+  padding: 0.1em 0 0.1em 0.7em;
+  border-left: 2px solid color-mix(in oklab, currentColor 40%, transparent);
+  opacity: 0.92;
+}
+.mata-rich ul, .mata-rich ol { margin: 0.25em 0; padding-left: 1.4em; }
+.mata-rich ul { list-style: disc; }
+.mata-rich ol { list-style: decimal; }
+.mata-rich li { margin: 0.1em 0; }
+.mata-rich p { margin: 0.3em 0; }
+.mata-rich p:first-child { margin-top: 0; }
+.mata-rich p:last-child { margin-bottom: 0; }
+.mata-rich h1, .mata-rich h2, .mata-rich h3,
+.mata-rich h4, .mata-rich h5, .mata-rich h6 {
+  font-weight: 650;
+  margin: 0.35em 0 0.2em;
+  line-height: 1.25;
+}
+.mata-rich h1 { font-size: 1.3em; }
+.mata-rich h2 { font-size: 1.2em; }
+.mata-rich h3 { font-size: 1.1em; }
+.mata-rich hr {
+  border: none;
+  border-top: 1px solid color-mix(in oklab, currentColor 25%, transparent);
+  margin: 0.5em 0;
+}
+/* Spoiler: hidden until tapped/clicked. */
+.mata-rich span[data-mx-spoiler] {
+  background: currentColor;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+.mata-rich span[data-mx-spoiler]:not(.mata-spoiler-shown) {
+  color: transparent;
+}
+.mata-rich span[data-mx-spoiler]:not(.mata-spoiler-shown) * { visibility: hidden; }
