@@ -216,6 +216,17 @@ export class MatrixCore {
     return this.requireSession().fetchReadReceipts(roomId);
   }
 
+  async fetchEditHistory(
+    roomId: RoomId,
+    eventId: EventId,
+  ): Promise<{ body: string; ts: number; sender: UserId }[]> {
+    return this.requireSession().fetchEditHistory(roomId, eventId);
+  }
+
+  async jumpToTimestamp(roomId: RoomId, ts: number): Promise<EventId | null> {
+    return this.requireSession().jumpToTimestamp(roomId, ts);
+  }
+
   async forgetRoom(roomId: RoomId): Promise<void> {
     return this.requireSession().forgetRoom(roomId);
   }

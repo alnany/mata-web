@@ -162,6 +162,14 @@ const handlers: Handlers = {
     const receipts = await core.fetchReadReceipts(req.roomId);
     return { kind: 'fetchReadReceipts', receipts };
   },
+  fetchEditHistory: async (req, core) => {
+    const versions = await core.fetchEditHistory(req.roomId, req.eventId);
+    return { kind: 'fetchEditHistory', versions };
+  },
+  jumpToTimestamp: async (req, core) => {
+    const eventId = await core.jumpToTimestamp(req.roomId, req.ts);
+    return { kind: 'jumpToTimestamp', eventId };
+  },
   forgetRoom: async (req, core) => {
     await core.forgetRoom(req.roomId);
     return { kind: 'forgetRoom' };

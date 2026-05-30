@@ -27,6 +27,7 @@ import {
   EventType,
   MsgType,
   RelationType,
+  Direction,
   PendingEventOrdering,
   IndexedDBStore,
   type MatrixClient,
@@ -1031,6 +1032,82 @@ export class SdkSession {
   }
 
   /**
+   * Reconstruct a message's edit history: the original content plus
+   * every `m.replace` edit, chronological (oldest → newest). The SDK
+   * applies edits in-place, so `getOriginalContent()` recovers the
+   * pre-edit body and the Replace relations container holds each edit
+   * event. Returns [] when the event isn't resolvable or was never
+   * edited (caller treats a single-version result as "no history").
+   */
+  async fetchEditHistory(
+    roomId: RoomId,
+    eventId: EventId,
+  ): Promise<{ body: string; ts: number; sender: UserId }[]> {
+    const c = this.requireClient();
+    const room = c.getRoom(roomId);
+    if (!room) return [];
+    const ev = room.findEventById(eventId);
+    if (!ev) return [];
+
+    const bodyOf = (content: Record<string, unknown> | undefined): string => {
+      const b = content?.['body'];
+      return typeof b === 'string' ? b.replace(/^\*\s/, '') : '';
+    };
+
+    const versions: { body: string; ts: number; sender: UserId }[] = [
+      {
+        body: bodyOf(ev.getOriginalContent() as Record<string, unknown>),
+        ts: ev.getTs(),
+        sender: (ev.getSender() ?? '') as UserId,
+      },
+    ];
+
+    const edits =
+      room
+        .getUnfilteredTimelineSet()
+        .relations?.getChildEventsForEvent(eventId, RelationType.Replace, EventType.RoomMessage)
+        ?.getRelations() ?? [];
+    for (const e of edits) {
+      const content = e.getContent() as Record<string, unknown>;
+      const newContent = (content['m.new_content'] as Record<string, unknown>) ?? content;
+      versions.push({
+        body: bodyOf(newContent),
+        ts: e.getTs(),
+        sender: (e.getSender() ?? '') as UserId,
+      });
+    }
+
+    versions.sort((a, b) => a.ts - b.ts);
+    // Only one version → never edited; signal "no history" with [].
+    return versions.length > 1 ? versions : [];
+  }
+
+  /**
+   * Resolve the first event at or after a wall-clock timestamp (ms) for
+   * jump-to-date. Uses the homeserver's `timestamp_to_event` endpoint
+   * (MSC3030) when available, falling back to a scan of the loaded live
+   * timeline. Returns null when nothing matches.
+   */
+  async jumpToTimestamp(roomId: RoomId, ts: number): Promise<EventId | null> {
+    const c = this.requireClient();
+    try {
+      const res = await c.timestampToEvent(roomId, ts, Direction.Forward);
+      if (res?.event_id) return res.event_id as EventId;
+    } catch {
+      /* server lacks MSC3030 or no event after ts — fall through */
+    }
+    const room = c.getRoom(roomId);
+    if (!room) return null;
+    const evs = room.getLiveTimeline().getEvents();
+    for (const e of evs) {
+      if (e.getType() === EventType.RoomMessage && e.getTs() >= ts) {
+        return e.getId() as EventId;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Mark an entire room read from the room list — i.e. without ever
    * opening it. The UI has no event id to anchor on (the timeline was
    * never loaded into a RoomView), so we resolve the room's newest
@@ -1598,6 +1675,7 @@ export class SdkSession {
           sender: (ev.getSender() ?? '') as UserId,
           originServerTs: ev.getTs(),
           body: extractPreview(ev) ?? '',
+          msgtype: (ev.getContent()?.msgtype as string) ?? 'm.text',
           contextBefore: prev ? extractPreview(prev) : null,
           contextAfter: next ? extractPreview(next) : null,
         };
@@ -1698,6 +1776,7 @@ export class SdkSession {
         sender: (ev.getSender() ?? '') as UserId,
         originServerTs: ev.getTs(),
         body,
+        msgtype: (ev.getContent()?.msgtype as string) ?? 'm.text',
         contextBefore: prev ? extractPreview(prev) : null,
         contextAfter: next ? extractPreview(next) : null,
       });

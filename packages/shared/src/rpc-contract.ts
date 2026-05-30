@@ -172,6 +172,10 @@ export type MainToWorkerRequest =
   | { kind: 'sendTyping'; roomId: RoomId; timeoutMs: number }
   | { kind: 'sendReadReceipt'; roomId: RoomId; eventId: EventId }
   | { kind: 'fetchReadReceipts'; roomId: RoomId }
+  /** Full edit history (original + every m.replace) for one message. */
+  | { kind: 'fetchEditHistory'; roomId: RoomId; eventId: EventId }
+  /** Resolve the first event at/after a wall-clock ts (jump-to-date). */
+  | { kind: 'jumpToTimestamp'; roomId: RoomId; ts: number }
   | { kind: 'markRoomRead'; roomId: RoomId }
   | { kind: 'uploadMedia'; data: ArrayBuffer; mime: string; filename: string }
   | {
@@ -452,6 +456,16 @@ export type MainToWorkerResponse =
        */
       receipts: { userId: UserId; eventId: EventId; ts: number }[];
     }
+  | {
+      kind: 'fetchEditHistory';
+      /**
+       * Chronological (oldest → newest) message versions. The first
+       * entry is the original; each subsequent entry is an edit. Empty
+       * when the message was never edited or the event isn't resolvable.
+       */
+      versions: { body: string; ts: number; sender: UserId }[];
+    }
+  | { kind: 'jumpToTimestamp'; eventId: EventId | null }
   | { kind: 'markRoomRead' }
   | { kind: 'uploadMedia'; mxc: MxcUri }
   | { kind: 'sendFileMessage'; eventId: EventId }

@@ -27,7 +27,73 @@ type Phase =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
+  // Filters were typed with no free-text term — we can't query the index
+  // on filters alone, so prompt for a word to combine them with.
+  | { kind: 'needTerm' }
   | { kind: 'results'; hits: SearchHit[]; count: number; highlights: string[] };
+
+// `has:` filter → the msgtypes that satisfy it.
+const HAS_MSGTYPES: Record<string, string[]> = {
+  image: ['m.image'],
+  file: ['m.file'],
+  video: ['m.video'],
+  audio: ['m.audio'],
+  voice: ['m.audio'],
+};
+
+const URL_RE = /https?:\/\/|www\./i;
+
+type ParsedQuery = {
+  /** Free-text remainder sent to the search index. */
+  term: string;
+  /** `from:` value, lowercased — matched against sender id + display name. */
+  from: string | null;
+  /** `has:` tokens (link/image/file/video/audio). */
+  has: string[];
+};
+
+// Pull `from:` and `has:` operators out of the raw query, Gmail/Telegram
+// style. Everything that isn't an operator becomes the free-text term.
+//   "deploy from:alice has:link"  →  { term: "deploy", from: "alice", has: ["link"] }
+function parseQuery(raw: string): ParsedQuery {
+  const tokens = raw.trim().split(/\s+/).filter(Boolean);
+  const rest: string[] = [];
+  let from: string | null = null;
+  const has: string[] = [];
+  for (const tok of tokens) {
+    const low = tok.toLowerCase();
+    if (low.startsWith('from:') && tok.length > 5) {
+      from = low.slice(5);
+    } else if (low.startsWith('has:') && tok.length > 4) {
+      const v = low.slice(4);
+      if (v === 'link' || v in HAS_MSGTYPES) has.push(v);
+    } else {
+      rest.push(tok);
+    }
+  }
+  return { term: rest.join(' '), from, has };
+}
+
+// Apply parsed `from:`/`has:` filters to the index hits client-side. The
+// index only matches text, so operators refine the returned set.
+function applyFilters(hits: SearchHit[], q: ParsedQuery): SearchHit[] {
+  return hits.filter((h) => {
+    if (q.from) {
+      const sender = h.sender.toLowerCase();
+      const name = prettyName(h.sender).toLowerCase();
+      if (!sender.includes(q.from) && !name.includes(q.from)) return false;
+    }
+    for (const f of q.has) {
+      if (f === 'link') {
+        if (!URL_RE.test(h.body)) return false;
+      } else {
+        const types = HAS_MSGTYPES[f] ?? [];
+        if (!types.includes(h.msgtype)) return false;
+      }
+    }
+    return true;
+  });
+}
 
 export function SearchPanel(props: {
   room: RoomSummary;
@@ -50,6 +116,38 @@ export function SearchPanel(props: {
   let token = 0;
 
   let inputRef: HTMLInputElement | undefined;
+
+  // Jump-to-date: resolve the first message at/after the picked day in the
+  // CURRENT room (the homeserver's timestamp_to_event, or a live-timeline
+  // scan), then hand off to the room view's jump scroller. Always scoped to
+  // the open room — "jump" is inherently a single-conversation action.
+  const [jumpBusy, setJumpBusy] = createSignal(false);
+  const jumpToDate = async (value: string) => {
+    if (!value || jumpBusy()) return;
+    // <input type=date> gives YYYY-MM-DD; interpret as local midnight.
+    const ts = new Date(`${value}T00:00:00`).getTime();
+    if (Number.isNaN(ts)) return;
+    setJumpBusy(true);
+    try {
+      const res = await bridge.request({
+        kind: 'jumpToTimestamp',
+        roomId: props.room.roomId,
+        ts,
+      });
+      if (res.kind === 'jumpToTimestamp' && res.eventId) {
+        props.onSelect?.(props.room.roomId, res.eventId);
+      } else {
+        setPhase({ kind: 'error', message: 'No messages on or after that date.' });
+      }
+    } catch (err) {
+      setPhase({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Jump failed',
+      });
+    } finally {
+      setJumpBusy(false);
+    }
+  };
 
   // roomId -> display name, for labeling cross-room hits.
   const roomNames = createMemo(() => {
@@ -83,20 +181,28 @@ export function SearchPanel(props: {
         setPhase({ kind: 'idle' });
         return;
       }
+      const parsed = parseQuery(trimmed);
+      // Filters typed but no word to anchor them — the text index needs a
+      // term to run against, so ask for one instead of returning nothing.
+      if (!parsed.term && (parsed.from || parsed.has.length > 0)) {
+        setPhase({ kind: 'needTerm' });
+        return;
+      }
       const mine = ++token;
       setPhase({ kind: 'loading' });
       const handle = window.setTimeout(async () => {
         try {
           const res = await bridge.request({
             kind: 'searchMessages',
-            query: trimmed,
+            query: parsed.term,
             roomId: sc === 'all' ? null : props.room.roomId,
           });
           if (mine !== token) return;
+          const filtered = applyFilters(res.results, parsed);
           setPhase({
             kind: 'results',
-            hits: res.results,
-            count: res.count,
+            hits: filtered,
+            count: filtered.length,
             highlights: res.highlights,
           });
         } catch (err) {
@@ -170,6 +276,26 @@ export function SearchPanel(props: {
               load more history into the search window.
             </p>
           </Show>
+          {/* Filter syntax hint — Gmail/Telegram-style operators. */}
+          <p class="mt-1.5 text-[10px] leading-snug text-fg-4">
+            Filter with{' '}
+            <code class="rounded bg-input px-1 py-px font-mono text-[9.5px]">from:name</code>,{' '}
+            <code class="rounded bg-input px-1 py-px font-mono text-[9.5px]">has:link</code>,{' '}
+            <code class="rounded bg-input px-1 py-px font-mono text-[9.5px]">has:image</code>,{' '}
+            <code class="rounded bg-input px-1 py-px font-mono text-[9.5px]">has:file</code>
+          </p>
+        </div>
+
+        {/* Jump to date — scoped to the current room. */}
+        <div class="flex items-center gap-2 border-b border-line px-3 py-2">
+          <span class="text-[11px] font-medium text-fg-3">Jump to date</span>
+          <input
+            type="date"
+            disabled={jumpBusy()}
+            onChange={(e) => void jumpToDate(e.currentTarget.value)}
+            class="ml-auto rounded-md border border-line bg-elev px-2 py-1 text-[11px] text-fg-2 focus:border-mata-500 focus:outline-none focus:ring-2 focus:ring-mata-500/20 disabled:opacity-50 dark:focus:bg-neutral-900"
+            aria-label="Jump to date in this room"
+          />
         </div>
 
         <div class="flex-1 overflow-y-auto">
@@ -182,6 +308,9 @@ export function SearchPanel(props: {
                     : 'Type a word or phrase to search.'
                 }
               />
+            </Match>
+            <Match when={phase().kind === 'needTerm'}>
+              <EmptyState text="Add a word to combine with your filters." />
             </Match>
             <Match when={phase().kind === 'loading'}>
               <EmptyState text="Searching…" />

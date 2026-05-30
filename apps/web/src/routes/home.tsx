@@ -456,9 +456,17 @@ export function HomePage() {
         showToast('error', `Couldn't ${next ? 'mute' : 'unmute'}: ${msg}`);
       });
   };
-  const leaveRoomConfirmed = (room: RoomSummary) => {
-    const ok = window.confirm(`Leave "${room.name}"? You'll stop receiving messages from it.`);
-    if (!ok) return;
+  // Leave/delete flow uses a styled in-app confirm dialog (not the browser's
+  // window.confirm) so the destructive action reads on-brand and the spinner
+  // state is visible. `leaveTarget` drives the dialog; `leaving` guards the
+  // button against double-fire while the RPC is in flight.
+  const [leaveTarget, setLeaveTarget] = createSignal<RoomSummary | null>(null);
+  const [leaving, setLeaving] = createSignal(false);
+  const leaveRoomConfirmed = (room: RoomSummary) => setLeaveTarget(room);
+  const performLeave = () => {
+    const room = leaveTarget();
+    if (!room || leaving()) return;
+    setLeaving(true);
     void bridge
       .request({ kind: 'leaveRoom', roomId: room.roomId })
       .then(() => {
@@ -467,11 +475,13 @@ export function HomePage() {
           setActiveId(null);
           navigate('/');
         }
+        setLeaveTarget(null);
       })
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
         showToast('error', `Couldn't leave: ${msg}`);
-      });
+      })
+      .finally(() => setLeaving(false));
   };
 
   // Auto-select the top room on first paint. Two scenarios:
@@ -916,6 +926,47 @@ export function HomePage() {
         onToggleMute={toggleRoomMuted}
         onLeave={leaveRoomConfirmed}
       />
+      <Show when={leaveTarget()}>
+        {(room) => (
+          <div
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => !leaving() && setLeaveTarget(null)}
+            role="presentation"
+          >
+            <div
+              role="dialog"
+              aria-label="Leave room"
+              class="w-full max-w-sm rounded-xl border border-line bg-elev p-5 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 class="text-base font-semibold text-fg-1">Leave “{room().name}”?</h2>
+              <p class="mt-2 text-[13px] leading-relaxed text-fg-2">
+                You'll stop receiving messages from this conversation and it will be
+                removed from your chat list. You can rejoin later if you're invited or
+                the room is public.
+              </p>
+              <div class="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={leaving()}
+                  onClick={() => setLeaveTarget(null)}
+                  class="rounded-lg border border-line px-3.5 py-1.5 text-sm font-medium text-fg-2 transition-colors hover:bg-input disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={leaving()}
+                  onClick={performLeave}
+                  class="rounded-lg bg-red-600 px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+                >
+                  {leaving() ? 'Leaving…' : 'Leave room'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </Show>
     </div>
     </>
   );

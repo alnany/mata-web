@@ -100,6 +100,12 @@ export type MessageActions = {
    */
   onPin?: (eventId: EventId) => void;
   onUnpin?: (eventId: EventId) => void;
+  /**
+   * Open the message-info panel for this event (exact time, msgtype,
+   * full read-by list, and — when the message was edited — its edit
+   * history). Optional so the bubble still renders in the thread panel.
+   */
+  onInfo?: (ev: RoomMessageEvent) => void;
 };
 
 export function MessageBubble(props: {
@@ -441,14 +447,24 @@ export function MessageBubble(props: {
             }`}
           >
             <Show when={edited}>
-              <span
-                title={`Edited (${msg.edits.length}× revisions)`}
-                class={`rounded-full border px-1.5 py-px text-[9.5px] font-medium uppercase tracking-[0.04em] ${
+              <button
+                type="button"
+                title={
+                  props.actions.onInfo
+                    ? `Edited (${msg.edits.length}× revisions) — click for history`
+                    : `Edited (${msg.edits.length}× revisions)`
+                }
+                onClick={(e) => {
+                  if (!props.actions.onInfo) return;
+                  e.stopPropagation();
+                  props.actions.onInfo(msg);
+                }}
+                class={`rounded-full border px-1.5 py-px text-[9.5px] font-medium uppercase tracking-[0.04em] transition-colors ${
                   isMine() ? 'border-accent-ink/30 text-accent-ink/80' : 'border-line text-fg-3'
-                }`}
+                } ${props.actions.onInfo ? 'cursor-pointer hover:border-mata-500 hover:text-mata-500' : 'cursor-default'}`}
               >
                 edited
-              </span>
+              </button>
             </Show>
             <span>{shortTime(msg.originServerTs)}</span>
           </div>
@@ -606,6 +622,16 @@ export function MessageBubble(props: {
                 <MenuDivider />
                 <MenuItem onClick={copyText}>Copy text</MenuItem>
                 <MenuItem onClick={copyPermalink}>Copy link</MenuItem>
+                <Show when={props.actions.onInfo}>
+                  <MenuItem
+                    onClick={() => {
+                      props.actions.onInfo?.(msg);
+                      setShowMenu(false);
+                    }}
+                  >
+                    Info
+                  </MenuItem>
+                </Show>
                 <Show when={translatableText()}>
                   <MenuItem onClick={translate}>
                     {translation() ? (showOriginal() ? 'Show translation' : 'Show original') : 'Translate'}

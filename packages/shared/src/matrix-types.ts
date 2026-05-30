@@ -249,6 +249,8 @@ export interface SearchHit {
   originServerTs: number;
   /** The matching event's body (or a best-effort summary for media events). */
   body: string;
+  /** msgtype of the matching event (m.text/m.image/m.file/…), for has: filters. */
+  msgtype: string;
   contextBefore: string | null;
   contextAfter: string | null;
 }

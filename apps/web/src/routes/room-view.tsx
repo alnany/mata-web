@@ -32,6 +32,7 @@ import { ProfileDrawer } from '../components/profile-drawer.js';
 import { SearchPanel } from '../components/search-panel.js';
 import { ImageGallery, type GalleryImage } from '../components/image-gallery.js';
 import { ForwardModal } from '../components/forward-modal.js';
+import { MessageInfoModal } from '../components/message-info-modal.js';
 import { PinnedBar } from '../components/pinned-bar.js';
 import { readRoomTimeline, writeRoomTimeline } from '../lib/persistent-cache.js';
 
@@ -340,6 +341,7 @@ export function RoomView(props: {
   // Forward-target picker. Holds the source message until the user
   // either picks a target (modal closes via its own success path) or
   // dismisses (we clear via onClose).
+  const [infoTarget, setInfoTarget] = createSignal<RoomMessageEvent | null>(null);
   const [forwardSource, setForwardSource] = createSignal<RoomMessageEvent | null>(null);
   // Multi-forward: set when forwarding a multi-select batch.
   const [forwardSources, setForwardSources] = createSignal<RoomMessageEvent[] | null>(null);
@@ -1447,6 +1449,7 @@ export function RoomView(props: {
     onForward: (ev) => {
       setForwardSource(ev);
     },
+    onInfo: (ev) => setInfoTarget(ev),
     onOpenImage: (eventId) => setGalleryStart(eventId),
     onToggleSelect: (ev) => toggleSelect(ev),
     onPin: (eventId) => {
@@ -2215,6 +2218,20 @@ export function RoomView(props: {
         }}
         onDone={exitSelect}
       />
+      <Show when={infoTarget()}>
+        {(ev) => (
+          <MessageInfoModal
+            roomId={props.room.roomId}
+            event={ev()}
+            me={me()}
+            onClose={() => setInfoTarget(null)}
+            onOpenProfile={(userId) => {
+              setInfoTarget(null);
+              openProfile(userId);
+            }}
+          />
+        )}
+      </Show>
       <Show when={openThread()}>
         {(rootId) => (
           <ThreadPanel
