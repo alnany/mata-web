@@ -2022,7 +2022,7 @@ export function RoomView(props: {
               </div>
             }
           >
-            <ul class="flex flex-col">
+            <ul class="mx-auto flex w-full max-w-[var(--w-content,760px)] flex-col">
               <For each={rows()}>
                 {(row) =>
                   row.kind === 'day' ? (
