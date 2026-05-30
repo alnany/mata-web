@@ -13,6 +13,8 @@ import { activeCall } from '../stores/call.js';
 import { mountPresence } from '../stores/presence.js';
 import type { EventId, RoomId, RoomSummary, SearchHit, UserId } from '@mata/shared/matrix';
 import { RoomView, createRoomCache, type RoomCache } from './room-view.js';
+import { mergeEvents, reconcilePending } from '../lib/timeline-merge.js';
+import { showToast } from '../stores/toast.js';
 import { SettingsDrawer } from '../components/settings-drawer.js';
 import { dispatchSyncDeltas, setRoomCounts } from '../stores/notifications.js';
 import { NewRoomModal } from '../components/new-room-modal.js';
@@ -323,6 +325,27 @@ export function HomePage() {
   onCleanup(
     bridge.on('syncUpdate', (e) => {
       scheduleRefetch();
+      // ---- Room-correct live cache merge (data layer) ----------------
+      // Merge every delta into ITS OWN room cache, not just the room
+      // currently on screen. This is the fix for the "messages don't
+      // show until refresh / appear in the wrong chat / duplicate on
+      // send" class: events and send-echoes that arrive AFTER the user
+      // switches rooms used to be written against the active room
+      // (wrong cache) or dropped. We only touch caches that already
+      // exist — a room the user has never opened loads fresh on open,
+      // so there's nothing to keep live yet. The merge is idempotent
+      // (dedupe by eventId, content-equality guard), so the reconcile
+      // tail re-emitting the same events every tick is a no-op.
+      for (const d of e.deltas) {
+        if (d.newEvents.length === 0) continue;
+        if (!caches[d.roomId]) continue;
+        updateCache(d.roomId, (c) => {
+          const merged = mergeEvents(c.events, d.newEvents);
+          if (merged.mutated) c.events = merged.events;
+          const keptPending = reconcilePending(c.pending, d.newEvents);
+          if (keptPending !== c.pending) c.pending = keptPending;
+        });
+      }
       const me = (() => {
         const s = session();
         return s.phase === 'authenticated' ? s.userId : null;
@@ -338,6 +361,37 @@ export function HomePage() {
           const r = roomById.get(rid);
           if (r) openRoom(r);
         },
+      });
+    }),
+  );
+
+  // ---- Send-echo reconcile (data layer) --------------------------------
+  // sendStatus now carries the target roomId, so we resolve the pending
+  // bubble against the CORRECT room cache even when the user has
+  // switched rooms before the echo lands. 'sent' records the canonical
+  // eventId (the syncUpdate merge above then splices the pending entry
+  // the moment the real event arrives — single-frame swap, no flash).
+  // 'failed' flips the bubble to a retryable error state + toast.
+  onCleanup(
+    bridge.on('sendStatus', (e) => {
+      if (!caches[e.roomId]) return;
+      updateCache(e.roomId, (c) => {
+        const idx = c.pending.findIndex((p) => p.txnId === e.txnId);
+        if (idx < 0) return;
+        if (e.status === 'sent') {
+          const next = c.pending.slice();
+          next[idx] = { ...next[idx], expectedEventId: e.eventId };
+          c.pending = next;
+        } else if (e.status === 'failed') {
+          const next = c.pending.slice();
+          next[idx] = {
+            ...next[idx],
+            status: 'failed',
+            errorReason: e.error?.message ?? 'send failed',
+          };
+          c.pending = next;
+          showToast('error', `Send failed: ${next[idx].errorReason}`);
+        }
       });
     }),
   );

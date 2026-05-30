@@ -493,7 +493,7 @@ export class SdkSession {
       `roomKnown=${room !== null} encrypted=${isEncrypted} joinedMembers=${memberCount}`,
     );
 
-    this.emit({ kind: 'sendStatus', txnId, status: 'sending' });
+    this.emit({ kind: 'sendStatus', txnId, roomId, status: 'sending' });
     tag('emit-sending');
 
     try {
@@ -573,13 +573,14 @@ export class SdkSession {
         ),
       ]);
       tag('sdk-returned', `event_id=${(result.event_id as string).slice(0, 24)}`);
-      this.emit({ kind: 'sendStatus', txnId, status: 'sent', eventId: result.event_id as EventId });
+      this.emit({ kind: 'sendStatus', txnId, roomId, status: 'sent', eventId: result.event_id as EventId });
       tag('emit-sent');
     } catch (err) {
       tag('caught', describe(err).slice(0, 160));
       this.emit({
         kind: 'sendStatus',
         txnId,
+        roomId,
         status: 'failed',
         error: { category: 'network', message: describe(err), retryable: true },
       });
@@ -594,7 +595,7 @@ export class SdkSession {
     txnId: string,
   ): Promise<void> {
     const c = this.requireClient();
-    this.emit({ kind: 'sendStatus', txnId, status: 'sending' });
+    this.emit({ kind: 'sendStatus', txnId, roomId, status: 'sending' });
     const newBody = encodeMessageBody(content);
     const payload: IContent = {
       ...newBody,
@@ -607,11 +608,12 @@ export class SdkSession {
     };
     try {
       const result = await c.sendEvent(roomId, EventType.RoomMessage, payload, txnId);
-      this.emit({ kind: 'sendStatus', txnId, status: 'sent', eventId: result.event_id as EventId });
+      this.emit({ kind: 'sendStatus', txnId, roomId, status: 'sent', eventId: result.event_id as EventId });
     } catch (err) {
       this.emit({
         kind: 'sendStatus',
         txnId,
+        roomId,
         status: 'failed',
         error: { category: 'network', message: describe(err), retryable: true },
       });

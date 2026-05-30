@@ -586,6 +586,14 @@ export type WorkerEvent =
   | {
       kind: 'sendStatus';
       txnId: string;
+      /**
+       * Room the send targets. Required so the main-thread data layer
+       * can reconcile the optimistic pending bubble against the CORRECT
+       * room cache even if the user has since switched rooms — without
+       * it, an echo arriving after a room switch was applied to the
+       * wrong (active) room and the pending bubble lingered → duplicate.
+       */
+      roomId: RoomId;
       status: 'sending' | 'sent' | 'failed';
       eventId?: EventId;
       error?: SerializedError;
