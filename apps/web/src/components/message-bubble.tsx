@@ -28,6 +28,35 @@ import { EmojiPicker } from './emoji-picker.js';
 // else.
 const QUICK_REACTIONS = ['👍', '❤️', '😂'] as const;
 
+/**
+ * Telegram "jumbo emoji": a text message that is *only* emoji (up to a
+ * small count) renders big and bubble-less. Returns the emoji cluster
+ * count when the body qualifies, else 0.
+ *
+ * Detection: strip every emoji codepoint + joiners + whitespace; if
+ * anything remains the message has real text → not jumbo. Otherwise
+ * count grapheme clusters (Intl.Segmenter when available, regex
+ * fallback) so multi-codepoint emoji (👨‍👩‍👧, 🏳️‍🌈) count as one.
+ */
+const JUMBO_MAX = 6;
+const EMOJI_STRIP_RE = /[\p{Extended_Pictographic}\u200D\uFE0F\u20E3\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}]/gu;
+function jumboEmojiCount(text: string): number {
+  const t = text.trim();
+  if (!t) return 0;
+  const stripped = t.replace(EMOJI_STRIP_RE, '').replace(/\s+/g, '');
+  if (stripped.length > 0) return 0; // contains non-emoji characters
+  let count = 0;
+  const seg = (Intl as unknown as { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+  const compact = t.replace(/\s+/g, '');
+  if (seg) {
+    for (const _ of new seg(undefined, { granularity: 'grapheme' }).segment(compact)) count += 1;
+  } else {
+    count = (compact.match(/\p{Extended_Pictographic}(\u200D\p{Extended_Pictographic})*/gu) || [])
+      .length;
+  }
+  return count > 0 && count <= JUMBO_MAX ? count : 0;
+}
+
 export type MessageActions = {
   onReply: (ev: RoomMessageEvent) => void;
   onReact: (eventId: EventId, key: string) => void;
@@ -178,6 +207,15 @@ export function MessageBubble(props: {
   const msg = props.ev;
   const edited = msg.edits.length > 0;
 
+  // Jumbo-emoji: emoji-only text messages render big & bubble-less.
+  // Suppressed when a reply strip is attached (the quoted block needs a
+  // container) to keep layout sane.
+  const jumbo = (): number => {
+    if (msg.content.msgtype !== 'm.text') return 0;
+    if (msg.inReplyTo) return 0;
+    return jumboEmojiCount(msg.content.body);
+  };
+
   const copyText = async () => {
     try {
       await navigator.clipboard.writeText(msg.content.msgtype === 'm.text' ? msg.content.body : '');
@@ -305,10 +343,10 @@ export function MessageBubble(props: {
         </Show>
 
         <div
-          class={`mata-msg-text relative rounded-2xl px-3 py-2 ${
-            isMine()
-              ? 'bg-accent text-accent-ink'
-              : 'bg-elev text-fg'
+          class={`mata-msg-text relative ${
+            jumbo()
+              ? 'bg-transparent px-0 py-0.5 text-fg'
+              : `rounded-2xl px-3 py-2 ${isMine() ? 'bg-accent text-accent-ink' : 'bg-elev text-fg'}`
           }`}
           onContextMenu={onBubbleContextMenu}
           onTouchStart={onBubbleTouchStart}
@@ -338,7 +376,11 @@ export function MessageBubble(props: {
           <Show
             when={translation() && !showOriginal()}
             fallback={
-              <span class="whitespace-pre-wrap break-words">
+              <span
+                class={`whitespace-pre-wrap break-words ${
+                  jumbo() ? `block leading-tight ${jumbo() <= 3 ? 'text-5xl' : 'text-3xl'}` : ''
+                }`}
+              >
                 <Body
                   msg={msg}
                   me={props.me}
