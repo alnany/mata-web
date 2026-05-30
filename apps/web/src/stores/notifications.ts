@@ -17,6 +17,7 @@
 // =============================================================================
 
 import { createSignal } from 'solid-js';
+import { classifyNotification } from '../lib/notify-rules.js';
 import type {
   RoomDelta,
   RoomId,
@@ -181,75 +182,44 @@ export function dispatchSyncDeltas(input: NotifyDispatchInput): void {
   let needChime = false;
   const notifiedRooms = new Set<RoomId>();
 
+  const now = Date.now();
   for (const delta of input.deltas) {
     const room = input.roomById.get(delta.roomId);
-    // Muted rooms never make noise — even for mentions, matching
-    // Matrix push rule `notify:false` semantics.
-    if (room?.isMuted) continue;
     const roomIsActive = input.activeRoomId === delta.roomId && windowFocused();
     for (const ev of delta.newEvents) {
-      if (ev.type !== 'm.room.message') continue;
-      if (me && ev.sender === me) continue;
-      const msg = ev as RoomMessageEvent;
-
-      // Freshness gate — drop anything that isn't actually recent. This
-      // is what kills the reconcile-tail re-emits and the boot backlog:
-      // both carry past timestamps, so they never pass. A genuinely new
-      // message has originServerTs ≈ now.
-      const ts = msg.originServerTs ?? 0;
-      if (!ts || Date.now() - ts > FRESH_WINDOW_MS) continue;
+      const decision = classifyNotification(ev, {
+        me,
+        isMuted: !!room?.isMuted,
+        roomIsActive,
+        windowFocused: windowFocused(),
+        now,
+        freshWindowMs: FRESH_WINDOW_MS,
+      });
+      if (!decision.alert) continue;
 
       // Identity gate — a single new message is re-delivered several
-      // times (encrypted placeholder → decrypted re-emit → later tails
-      // within the freshness window). Decide exactly once per eventId.
-      // Mark BEFORE the active-room skip so a message seen live while
-      // focused is never re-notified when the tail re-emits it.
+      // times (encrypted placeholder → decrypted re-emit → reconcile
+      // tails). Decide exactly once per eventId, before any side effect.
       if (notifiedIds.has(ev.eventId)) continue;
       markNotified(ev.eventId);
 
-      const isMention = !!me && isMentionEvent(msg, me);
-      if (roomIsActive && !isMention) continue;
-
-      // Sound gating. When the window is focused and the event is
-      // not a mention, the user is already actively using the app —
-      // a chime is just noise. Tab badge + unread counter cover the
-      // visibility. We still play for mentions (highlight rule) and
-      // for any new traffic when the tab is in the background.
-      if (windowFocused() && !isMention) {
-        // still flow through to desktop notification gate below if
-        // somehow permitted, but skip the chime.
-      } else {
-        needChime = true;
-      }
+      if (decision.chime) needChime = true;
 
       if (
         enabled()
         && permission() === 'granted'
-        && (!windowFocused() || isMention)
+        && decision.desktopEligible
         && !notifiedRooms.has(delta.roomId)
       ) {
         notifiedRooms.add(delta.roomId);
-        showDesktopNotification(msg, room, () => input.onClickRoom(delta.roomId));
+        showDesktopNotification(ev as RoomMessageEvent, room, () =>
+          input.onClickRoom(delta.roomId),
+        );
       }
     }
   }
 
   if (needChime && enabled()) playChime();
-}
-
-function isMentionEvent(msg: RoomMessageEvent, me: UserId): boolean {
-  const c = msg.content;
-  if (c.msgtype !== 'm.text' && c.msgtype !== 'm.emote' && c.msgtype !== 'm.notice') return false;
-  if (c.mentions?.userIds.includes(me)) return true;
-  if (c.mentions?.room) return true;
-  const local = me.slice(1).split(':')[0];
-  if (!local) return false;
-  const re = new RegExp(`(^|[\\s,.;:!?\\n])@${escapeRe(local)}\\b`);
-  return re.test(c.body);
-}
-
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function showDesktopNotification(

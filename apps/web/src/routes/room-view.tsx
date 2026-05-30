@@ -25,6 +25,7 @@ import type {
 import { dayLabel, isSameDay, shortTime } from '../lib/date-buckets.js';
 import { markdownToMatrixHtml } from '../lib/rich-text.js';
 import { dedupeAgainst, summarizeThreads } from '../lib/timeline-merge.js';
+import { aggregateReadReceipts } from '../lib/notify-rules.js';
 import {
   AlbumRow,
   MessageBubble,
@@ -743,15 +744,7 @@ export function RoomView(props: {
 
   // Map of eventId → reader MXIDs (the message sender is filtered out at
   // render time so nobody appears to "read" their own message).
-  const readByMap = createMemo(() => {
-    const m = new Map<EventId, UserId[]>();
-    for (const r of readReceipts()) {
-      const arr = m.get(r.eventId);
-      if (arr) arr.push(r.userId);
-      else m.set(r.eventId, [r.userId]);
-    }
-    return m;
-  });
+  const readByMap = createMemo(() => aggregateReadReceipts(readReceipts()));
 
   // ---- Outgoing typing ---------------------------------------------------
   let typingTimeout: number | undefined;
